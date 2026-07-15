@@ -51,22 +51,6 @@ CREATE TABLE `room_moves` (
 --> statement-breakpoint
 CREATE INDEX `room_move_reservation_idx` ON `room_moves` (`property_id`,`reservation_id`,`created_at`);
 --> statement-breakpoint
-WITH RECURSIVE `type_dates`(`property_id`,`reservation_id`,`room_type_id`,`stay_date`,`departure_date`) AS (
-  SELECT `property_id`,`id`,`room_type_id`,`arrival_date`,`departure_date` FROM `reservations` WHERE `status` NOT IN ('CANCELLED','NO_SHOW')
-  UNION ALL
-  SELECT `property_id`,`reservation_id`,`room_type_id`,date(`stay_date`,'+1 day'),`departure_date` FROM `type_dates` WHERE date(`stay_date`,'+1 day') < `departure_date`
-)
-INSERT OR IGNORE INTO `reservation_type_nights`(`property_id`,`reservation_id`,`room_type_id`,`stay_date`)
-SELECT `property_id`,`reservation_id`,`room_type_id`,`stay_date` FROM `type_dates` WHERE `stay_date` < `departure_date`;
---> statement-breakpoint
-WITH RECURSIVE `room_dates`(`property_id`,`reservation_id`,`room_id`,`stay_date`,`departure_date`) AS (
-  SELECT `property_id`,`id`,`room_id`,`arrival_date`,`departure_date` FROM `reservations` WHERE `room_id` IS NOT NULL AND `status` NOT IN ('CANCELLED','NO_SHOW')
-  UNION ALL
-  SELECT `property_id`,`reservation_id`,`room_id`,date(`stay_date`,'+1 day'),`departure_date` FROM `room_dates` WHERE date(`stay_date`,'+1 day') < `departure_date`
-)
-INSERT OR IGNORE INTO `reservation_nights`(`property_id`,`reservation_id`,`room_id`,`stay_date`)
-SELECT `property_id`,`reservation_id`,`room_id`,`stay_date` FROM `room_dates` WHERE `stay_date` < `departure_date`;
---> statement-breakpoint
 CREATE TRIGGER `reservation_type_nights_capacity`
 BEFORE INSERT ON `reservation_type_nights`
 BEGIN
