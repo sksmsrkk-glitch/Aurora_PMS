@@ -30,3 +30,9 @@ export const housekeepingTasks = sqliteTable("housekeeping_tasks", {
 export const auditLogs = sqliteTable("audit_logs", {
   id: text("id").primaryKey(), propertyId: text("property_id").notNull(), actor: text("actor").notNull(), action: text("action").notNull(), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), beforeJson: text("before_json"), afterJson: text("after_json"), createdAt: text("created_at").notNull(),
 }, (t) => [index("audit_entity_idx").on(t.propertyId, t.entityType, t.entityId, t.createdAt)]);
+export const outboxEvents = sqliteTable("outbox_events", {
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), topic: text("topic").notNull(), aggregateType: text("aggregate_type").notNull(), aggregateId: text("aggregate_id").notNull(), payloadJson: text("payload_json").notNull(), status: text("status").notNull().default("PENDING"), attempts: integer("attempts").notNull().default(0), createdAt: text("created_at").notNull(), publishedAt: text("published_at"),
+}, (t) => [index("outbox_pending_idx").on(t.status, t.createdAt)]);
+export const idempotencyKeys = sqliteTable("idempotency_keys", {
+  key: text("key").primaryKey(), propertyId: text("property_id").notNull(), action: text("action").notNull(), actor: text("actor").notNull(), createdAt: text("created_at").notNull(),
+});
