@@ -64,6 +64,20 @@
       "when": 1784124880304,
       "tag": "0008_graceful_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1784128441944,
+      "tag": "0009_clear_living_mummy",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1784128815501,
+      "tag": "0010_simple_killmonger",
+      "breakpoints": true
     }
   ]
 }

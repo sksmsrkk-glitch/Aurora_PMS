@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { ReportRequestError, runReport } from "./reporting";
 
 export const dynamic = "force-dynamic";
 type D1 = typeof env.DB;
@@ -6,13 +7,13 @@ type Role = "PROPERTY_ADMIN" | "NIGHT_AUDITOR" | "FRONT_DESK" | "CASHIER" | "HOU
 type Principal = { email: string; displayName: string; role: Role; capabilities: string[] };
 
 const roleCapabilities: Record<Role, string[]> = {
-  PROPERTY_ADMIN: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "AR_WRITE", "HOUSEKEEPING_WRITE", "CASHIER_WRITE", "EOD_RUN", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "INTEGRATION_WRITE", "ADMIN"],
-  NIGHT_AUDITOR: ["READ", "FOLIO_WRITE", "AR_WRITE", "CASHIER_WRITE", "EOD_RUN"],
-  FRONT_DESK: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "CASHIER_WRITE", "GROUP_PICKUP"],
-  CASHIER: ["READ", "FOLIO_WRITE", "AR_WRITE", "CASHIER_WRITE"],
+  PROPERTY_ADMIN: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "AR_WRITE", "HOUSEKEEPING_WRITE", "CASHIER_WRITE", "EOD_RUN", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "INTEGRATION_WRITE", "REPORT_EXPORT", "ADMIN"],
+  NIGHT_AUDITOR: ["READ", "FOLIO_WRITE", "AR_WRITE", "CASHIER_WRITE", "EOD_RUN", "REPORT_EXPORT"],
+  FRONT_DESK: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "CASHIER_WRITE", "GROUP_PICKUP", "REPORT_EXPORT"],
+  CASHIER: ["READ", "FOLIO_WRITE", "AR_WRITE", "CASHIER_WRITE", "REPORT_EXPORT"],
   HOUSEKEEPING: ["READ", "HOUSEKEEPING_WRITE"],
-  REVENUE_MANAGER: ["READ", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "INTEGRATION_WRITE"],
-  SALES_MANAGER: ["READ", "RESERVATION_WRITE", "GROUP_WRITE", "GROUP_PICKUP"],
+  REVENUE_MANAGER: ["READ", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "INTEGRATION_WRITE", "REPORT_EXPORT"],
+  SALES_MANAGER: ["READ", "RESERVATION_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "REPORT_EXPORT"],
   VIEWER: ["READ"],
 };
 
@@ -26,14 +27,15 @@ const actionCapability: Record<string, string> = {
   transfer_to_ar: "AR_WRITE", post_ar_payment: "AR_WRITE", housekeeping: "HOUSEKEEPING_WRITE",
   create_channel_connection: "INTEGRATION_WRITE", create_channel_mapping: "INTEGRATION_WRITE", queue_ari_delta: "INTEGRATION_WRITE", dispatch_ari_update: "INTEGRATION_WRITE", ingest_channel_message: "INTEGRATION_WRITE", replay_channel_message: "INTEGRATION_WRITE", dispatch_outbox_event: "INTEGRATION_WRITE",
   open_cashier: "CASHIER_WRITE", close_cashier: "CASHIER_WRITE", run_night_audit: "EOD_RUN",
+  create_room_type: "ADMIN", update_room_type: "ADMIN", create_room: "ADMIN", update_room: "ADMIN", bulk_create_rooms: "ADMIN", export_report: "REPORT_EXPORT",
 };
 
 let initialization: Promise<void> | null = null;
 
 const schema = [
   `CREATE TABLE IF NOT EXISTS properties (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL, timezone TEXT NOT NULL, currency TEXT NOT NULL, business_date TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS room_types (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, base_rate REAL NOT NULL, capacity INTEGER NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, number TEXT NOT NULL, floor INTEGER NOT NULL, front_desk_status TEXT NOT NULL, housekeeping_status TEXT NOT NULL, features TEXT NOT NULL DEFAULT '[]', version INTEGER NOT NULL DEFAULT 1)`,
+  `CREATE TABLE IF NOT EXISTS room_types (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, base_rate REAL NOT NULL, capacity INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1)`,
+  `CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, number TEXT NOT NULL, floor INTEGER NOT NULL, front_desk_status TEXT NOT NULL, housekeeping_status TEXT NOT NULL, features TEXT NOT NULL DEFAULT '[]', active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1)`,
   `CREATE TABLE IF NOT EXISTS guests (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, first_name TEXT NOT NULL, last_name TEXT NOT NULL, email TEXT, phone TEXT, vip_level TEXT NOT NULL DEFAULT 'NONE', nationality TEXT, preferences TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, confirmation_no TEXT NOT NULL, property_id TEXT NOT NULL, guest_id TEXT NOT NULL, room_type_id TEXT NOT NULL, room_id TEXT, arrival_date TEXT NOT NULL, departure_date TEXT NOT NULL, status TEXT NOT NULL, adults INTEGER NOT NULL, children INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL, rate_plan TEXT NOT NULL, nightly_rate REAL NOT NULL, eta TEXT, notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS reservation_nights (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, room_id TEXT NOT NULL, stay_date TEXT NOT NULL)`,
@@ -68,6 +70,7 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS channel_reservation_links (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, external_reservation_id TEXT NOT NULL, reservation_id TEXT NOT NULL, last_revision INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS inbound_channel_messages (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, provider TEXT NOT NULL, message_id TEXT NOT NULL, event_type TEXT NOT NULL, external_reservation_id TEXT NOT NULL, revision INTEGER NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0, reservation_id TEXT, last_error TEXT, received_at TEXT NOT NULL, processed_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS integration_delivery_attempts (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, direction TEXT NOT NULL, provider TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, attempt_no INTEGER NOT NULL, status TEXT NOT NULL, http_status INTEGER, error_code TEXT, error_message TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS report_exports (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, report_key TEXT NOT NULL, format TEXT NOT NULL, filters_json TEXT NOT NULL, row_count INTEGER NOT NULL, status TEXT NOT NULL, requested_by TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS room_number_uq ON rooms(property_id, number)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS confirmation_uq ON reservations(property_id, confirmation_no)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS room_night_uq ON reservation_nights(property_id, room_id, stay_date)`,
@@ -121,19 +124,24 @@ const schema = [
   `CREATE INDEX IF NOT EXISTS inbound_channel_dlq_idx ON inbound_channel_messages(status,received_at)`,
   `CREATE INDEX IF NOT EXISTS integration_attempt_aggregate_idx ON integration_delivery_attempts(aggregate_type,aggregate_id,attempt_no)`,
   `CREATE INDEX IF NOT EXISTS integration_attempt_failure_idx ON integration_delivery_attempts(status,created_at)`,
+  `CREATE INDEX IF NOT EXISTS report_export_actor_idx ON report_exports(property_id,requested_by,created_at)`,
+  `CREATE INDEX IF NOT EXISTS report_export_status_idx ON report_exports(property_id,status,created_at)`,
+  `CREATE INDEX IF NOT EXISTS report_reservation_filter_idx ON reservations(property_id,status,source,room_type_id,arrival_date,departure_date)`,
+  `CREATE INDEX IF NOT EXISTS report_folio_business_idx ON folio_entries(property_id,business_date,kind,payment_method)`,
+  `CREATE INDEX IF NOT EXISTS report_audit_created_idx ON audit_logs(property_id,created_at,action,actor)`,
   `CREATE TRIGGER IF NOT EXISTS reservation_type_nights_capacity BEFORE INSERT ON reservation_type_nights BEGIN
     SELECT CASE
       WHEN COALESCE((SELECT closed FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),0)=1 THEN RAISE(ABORT, 'room type closed')
-      WHEN (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date) + COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0) >= COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date), (SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'room type sold out')
+      WHEN (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date) + COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0) >= COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date), (SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'room type sold out')
     END;
   END`,
   `CREATE TRIGGER IF NOT EXISTS block_inventory_capacity_insert BEFORE INSERT ON block_inventory BEGIN SELECT CASE
     WHEN NEW.original_rooms<0 OR NEW.current_rooms<0 OR NEW.picked_up<0 OR NEW.current_rooms<NEW.picked_up OR NEW.rate<0 THEN RAISE(ABORT, 'invalid block inventory')
-    WHEN (SELECT deduct_inventory FROM business_blocks WHERE id=NEW.block_id)=1 AND (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date)+COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0)+(NEW.current_rooms-NEW.picked_up)>COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),(SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'block inventory sold out')
+    WHEN (SELECT deduct_inventory FROM business_blocks WHERE id=NEW.block_id)=1 AND (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date)+COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0)+(NEW.current_rooms-NEW.picked_up)>COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),(SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'block inventory sold out')
   END; END`,
   `CREATE TRIGGER IF NOT EXISTS block_inventory_capacity_update BEFORE UPDATE ON block_inventory BEGIN SELECT CASE
     WHEN NEW.original_rooms<0 OR NEW.current_rooms<0 OR NEW.picked_up<0 OR NEW.current_rooms<NEW.picked_up OR NEW.rate<0 THEN RAISE(ABORT, 'invalid block inventory')
-    WHEN (SELECT deduct_inventory FROM business_blocks WHERE id=NEW.block_id)=1 AND (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date)+COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bi.id<>OLD.id AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0)+(NEW.current_rooms-NEW.picked_up)>COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),(SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'block inventory sold out')
+    WHEN (SELECT deduct_inventory FROM business_blocks WHERE id=NEW.block_id)=1 AND (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date)+COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bi.id<>OLD.id AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0)+(NEW.current_rooms-NEW.picked_up)>COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),(SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'block inventory sold out')
   END; END`,
   `CREATE TRIGGER IF NOT EXISTS block_pickup_validate BEFORE INSERT ON block_pickup_nights WHEN NOT EXISTS (SELECT 1 FROM block_inventory WHERE block_id=NEW.block_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date AND picked_up<current_rooms) BEGIN SELECT RAISE(ABORT, 'block allocation exhausted'); END`,
   `CREATE TRIGGER IF NOT EXISTS block_pickup_increment AFTER INSERT ON block_pickup_nights BEGIN UPDATE block_inventory SET picked_up=picked_up+1,version=version+1,updated_at=NEW.created_at WHERE block_id=NEW.block_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date; END`,
@@ -165,15 +173,15 @@ async function initialize(db: D1) {
   catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
   const now = new Date().toISOString();
   await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", now).run();
-  if (propertyExists) { await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await backfillLegacyNights(db,now); return; }
+  if (propertyExists) { await ensureReportingModel(db); await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await backfillLegacyNights(db,now); return; }
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
-    db.prepare("INSERT OR IGNORE INTO room_types VALUES (?, ?, ?, ?, ?, ?)").bind("rt-dlx", "prop-seoul", "DLX", "디럭스 킹", 198000, 2),
-    db.prepare("INSERT OR IGNORE INTO room_types VALUES (?, ?, ?, ?, ?, ?)").bind("rt-twn", "prop-seoul", "TWN", "프리미어 트윈", 228000, 3),
-    db.prepare("INSERT OR IGNORE INTO room_types VALUES (?, ?, ?, ?, ?, ?)").bind("rt-ste", "prop-seoul", "STE", "시티 스위트", 420000, 4),
+    db.prepare("INSERT OR IGNORE INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind("rt-dlx", "prop-seoul", "DLX", "디럭스 킹", 198000, 2, "킹 베드 기반의 대표 객실"),
+    db.prepare("INSERT OR IGNORE INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind("rt-twn", "prop-seoul", "TWN", "프리미어 트윈", 228000, 3, "가족 및 비즈니스 고객용 트윈"),
+    db.prepare("INSERT OR IGNORE INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind("rt-ste", "prop-seoul", "STE", "시티 스위트", 420000, 4, "거실과 침실이 분리된 스위트"),
   ]);
   const rooms = [["101","rt-dlx","CLEAN"],["102","rt-dlx","DIRTY"],["103","rt-twn","INSPECTED"],["201","rt-dlx","CLEAN"],["202","rt-twn","CLEAN"],["203","rt-twn","DIRTY"],["301","rt-ste","INSPECTED"],["302","rt-ste","OUT_OF_SERVICE"]];
-  await db.batch(rooms.map(([n,t,h], i) => db.prepare("INSERT OR IGNORE INTO rooms VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)").bind(`room-${n}`, "prop-seoul", t, n, Number(n[0]), i === 3 ? "OCCUPIED" : "VACANT", h, JSON.stringify(i > 5 ? ["한강 전망","고층"] : ["금연"]))));
+  await db.batch(rooms.map(([n,t,h], i) => db.prepare("INSERT OR IGNORE INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,active,version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)").bind(`room-${n}`, "prop-seoul", t, n, Number(n[0]), i === 3 ? "OCCUPIED" : "VACANT", h, JSON.stringify(i > 5 ? ["한강 전망","고층"] : ["금연"]))));
   const guests = [["g1","민준","김","GOLD"],["g2","Sofia","Martinez","NONE"],["g3","서연","박","PLATINUM"],["g4","David","Chen","SILVER"]];
   await db.batch(guests.map(([id,first,last,vip]) => db.prepare("INSERT OR IGNORE INTO guests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id,"prop-seoul",first,last,`${id}@example.com`,`010-20${id.charCodeAt(1)}-8800`,vip,"KR",JSON.stringify(vip !== "NONE" ? ["고층","조용한 객실"] : []),now)));
   const rs = [
@@ -204,6 +212,23 @@ async function initialize(db: D1) {
   ]);
   await ensureFinancialModel(db,now);
   await ensureIntegrationModel(db,now);
+  await ensureReportingModel(db);
+}
+
+async function ensureReportingModel(db:D1) {
+  const roomTypeColumns=await db.prepare("PRAGMA table_info(room_types)").all<{name:string}>();
+  if(!roomTypeColumns.results.some(column=>column.name==="description")) await db.prepare("ALTER TABLE room_types ADD COLUMN description TEXT NOT NULL DEFAULT ''").run();
+  if(!roomTypeColumns.results.some(column=>column.name==="active")) await db.prepare("ALTER TABLE room_types ADD COLUMN active INTEGER NOT NULL DEFAULT 1").run();
+  if(!roomTypeColumns.results.some(column=>column.name==="version")) await db.prepare("ALTER TABLE room_types ADD COLUMN version INTEGER NOT NULL DEFAULT 1").run();
+  const roomColumns=await db.prepare("PRAGMA table_info(rooms)").all<{name:string}>();
+  if(!roomColumns.results.some(column=>column.name==="active")) await db.prepare("ALTER TABLE rooms ADD COLUMN active INTEGER NOT NULL DEFAULT 1").run();
+  const statements=schema.filter(sql=>sql.includes("report_exports")||sql.includes("report_reservation_filter_idx")||sql.includes("report_folio_business_idx")||sql.includes("report_audit_created_idx"));
+  for(const statement of statements) await db.prepare(statement).run();
+  const capacitySql=schema.find(sql=>sql.includes("reservation_type_nights_capacity"));
+  const blockSql=schema.filter(sql=>sql.includes("block_inventory_capacity_"));
+  if(capacitySql){await db.prepare("DROP TRIGGER IF EXISTS reservation_type_nights_capacity").run();await db.prepare(capacitySql).run();}
+  for(const name of ["block_inventory_capacity_insert","block_inventory_capacity_update"]) await db.prepare(`DROP TRIGGER IF EXISTS ${name}`).run();
+  for(const statement of blockSql) await db.prepare(statement).run();
 }
 
 async function ensureInventoryTriggers(db:D1, now:string) {
@@ -384,7 +409,7 @@ async function snapshot(db: D1, principal?: Principal | null) {
     db.prepare("SELECT * FROM outbox_events WHERE property_id='prop-seoul' ORDER BY created_at DESC LIMIT 150"),
   ]);
   const property = propertyResult.results[0] as Record<string,unknown>; const reservations=reservationResult.results as Array<Record<string,unknown>>; const rooms=roomResult.results as Array<Record<string,unknown>>;
-  const metrics = { rooms:rooms.length, occupied:rooms.filter(x=>x.front_desk_status==='OCCUPIED').length, dirty:rooms.filter(x=>x.housekeeping_status==='DIRTY').length, ready:rooms.filter(x=>x.housekeeping_status==='CLEAN'||x.housekeeping_status==='INSPECTED').length };
+  const activeRooms=rooms.filter(x=>Number(x.active??1)===1); const metrics = { rooms:activeRooms.length, occupied:activeRooms.filter(x=>x.front_desk_status==='OCCUPIED').length, dirty:activeRooms.filter(x=>x.housekeeping_status==='DIRTY').length, ready:activeRooms.filter(x=>x.housekeeping_status==='CLEAN'||x.housekeeping_status==='INSPECTED').length };
   const arrivals=reservations.filter(x=>x.arrival_date===property.business_date&&x.status==='DUE_IN').length, cashiers=Number((openCashierResult.results[0] as {count?:number})?.count??0), failed=Number((failedResult.results[0] as {count?:number})?.count??0), oos=rooms.filter(x=>x.housekeeping_status==='OUT_OF_SERVICE').length;
   const blockers = [
     { code:"UNRESOLVED_ARRIVALS", label:"미처리 도착 예약", count:arrivals, blocking:true },
@@ -396,7 +421,7 @@ async function snapshot(db: D1, principal?: Principal | null) {
   const dates=Array.from({length:14},(_,index)=>{const day=new Date(`${String(property.business_date)}T00:00:00Z`);day.setUTCDate(day.getUTCDate()+index);return day.toISOString().slice(0,10)});
   const typeNights=typeNightsResult.results as Array<Record<string,unknown>>, controlRows=inventoryControlsResult.results as Array<Record<string,unknown>>, roomTypes=roomTypesResult.results as Array<Record<string,unknown>>;
   const booked=new Map(typeNights.map(row=>[`${row.room_type_id}:${row.stay_date}`,Number(row.booked)])); const inventoryControls=new Map(controlRows.map(row=>[`${row.room_type_id}:${row.stay_date}`,row]));
-  const inventory={dates,types:roomTypes.map(type=>{const physical=rooms.filter(room=>room.room_type_id===type.id&&room.housekeeping_status!=="OUT_OF_SERVICE").length;return {...type,physical,cells:dates.map(stayDate=>{const control=inventoryControls.get(`${type.id}:${stayDate}`);const sellLimit=control?.sell_limit==null?physical:Number(control.sell_limit),reserved=booked.get(`${type.id}:${stayDate}`)??0,closed=Boolean(control?.closed);return {stayDate,sellLimit,reserved,available:closed?0:Math.max(0,sellLimit-reserved),closed,minStay:Number(control?.min_stay??1),cta:Boolean(control?.close_to_arrival),ctd:Boolean(control?.close_to_departure),price:Number(control?.price_override??type.base_rate)};})}})};
+  const inventory={dates,types:roomTypes.map(type=>{const physical=rooms.filter(room=>room.room_type_id===type.id&&Number(room.active??1)===1&&room.housekeeping_status!=="OUT_OF_SERVICE").length;return {...type,physical,cells:dates.map(stayDate=>{const control=inventoryControls.get(`${type.id}:${stayDate}`);const sellLimit=control?.sell_limit==null?physical:Number(control.sell_limit),reserved=booked.get(`${type.id}:${stayDate}`)??0,closed=Boolean(control?.closed);return {stayDate,sellLimit,reserved,available:closed?0:Math.max(0,sellLimit-reserved),closed,minStay:Number(control?.min_stay??1),cta:Boolean(control?.close_to_arrival),ctd:Boolean(control?.close_to_departure),price:Number(control?.price_override??type.base_rate)};})}})};
   const groups={accounts:accountProfilesResult.results,blocks:blocksResult.results,inventory:blockInventoryResult.results,rooming:roomingResult.results};
   const finance={windows:folioWindowsResult.results,entries:folioEntriesResult.results,routing:routingRulesResult.results,transactionCodes:transactionCodesResult.results,arAccounts:arAccountsResult.results,arInvoices:arInvoicesResult.results,trialBalance:trialBalanceResult.results[0]??{guest_ledger:0,ar_ledger:0,gross_revenue:0,net_payments:0}};
   const integrations={connections:channelConnectionsResult.results,mappings:channelMappingsResult.results,ari:ariUpdatesResult.results,inbound:inboundMessagesResult.results,links:channelLinksResult.results,attempts:integrationAttemptsResult.results,outbox:outboxResult.results};
@@ -405,17 +430,25 @@ async function snapshot(db: D1, principal?: Principal | null) {
 
 type Snapshot = Awaited<ReturnType<typeof snapshot>>;
 const snapshotCache = new Map<string,{expires:number,value:Promise<Snapshot>}>();
-function invalidateSnapshots() { snapshotCache.clear(); }
+type ReportResult=Awaited<ReturnType<typeof runReport>>;
+const reportCache=new Map<string,{expires:number;value:Promise<ReportResult>}>();
+function invalidateSnapshots() { snapshotCache.clear(); reportCache.clear(); }
 async function cachedSnapshot(db:D1, principal:Principal) {
   const key=principal.email; const cached=snapshotCache.get(key); const now=Date.now();
   if (cached && cached.expires>now) return cached.value;
   const value=snapshot(db,principal); snapshotCache.set(key,{expires:now+3000,value});
   try { return await value; } catch (error) { snapshotCache.delete(key); throw error; }
 }
+async function cachedReport(db:D1,params:URLSearchParams,principal:Principal){const key=`${principal.email}:${params.toString()}`,now=Date.now(),cached=reportCache.get(key);if(cached&&cached.expires>now)return cached.value;if(reportCache.size>200){for(const [cacheKey,item] of reportCache)if(item.expires<=now)reportCache.delete(cacheKey);if(reportCache.size>200)reportCache.clear();}const value=runReport(db,params,principal);reportCache.set(key,{expires:now+5000,value});try{return await value;}catch(error){reportCache.delete(key);throw error;}}
 
 export async function GET(request: Request) {
   await ready(env.DB); const principal = await principalFor(request, env.DB);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
+  const url=new URL(request.url);
+  if(url.searchParams.get("view")==="report") {
+    try { return Response.json(await cachedReport(env.DB,url.searchParams,principal),{headers:{"Cache-Control":"private, no-store"}}); }
+    catch(error){if(error instanceof ReportRequestError)return Response.json({error:error.message},{status:error.status});throw error;}
+  }
   return Response.json(await cachedSnapshot(env.DB, principal), { headers: { "Cache-Control": "private, no-store" } });
 }
 
@@ -429,6 +462,21 @@ export async function POST(request: Request) {
   const requiredCapability = actionCapability[body.action];
   if (!requiredCapability || !principal.capabilities.includes(requiredCapability)) return Response.json({error:"이 작업을 수행할 권한이 없습니다."},{status:403});
   const idempotencyKey = request.headers.get("idempotency-key");
+  if(body.action==="export_report") {
+    try {
+      const params=new URLSearchParams();for(const key of ["report","q","from","to","status","source","roomTypeId"]){if(body[key])params.set(key,body[key]);}
+      const report=await runReport(env.DB,params,principal,{exportMode:true});
+      if(report.pagination.total>report.export.maxRows)return Response.json({error:`결과가 ${report.export.maxRows.toLocaleString()}행을 초과합니다. 기간 또는 필터를 좁혀 주세요.`},{status:413});
+      const exportId=crypto.randomUUID(),filters=JSON.stringify(report.filters),format=body.format==="CSV"?"CSV":"XLSX";
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO report_exports VALUES (?, 'prop-seoul', ?, ?, ?, ?, 'COMPLETED', ?, ?, ?)").bind(exportId,report.report.key,format,filters,report.rows.length,actor,now,now),
+        env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'EXPORT_REPORT', 'report_export', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,exportId,JSON.stringify({report:report.report.key,filters,rowCount:report.rows.length,format}),now),
+        ...(idempotencyKey?[env.DB.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[]),
+      ]);
+      invalidateSnapshots();
+      return Response.json({...report,exportId});
+    } catch(error){if(error instanceof ReportRequestError)return Response.json({error:error.message},{status:error.status});throw error;}
+  }
   if (idempotencyKey) {
     const duplicate = await env.DB.prepare("SELECT key FROM idempotency_keys WHERE key=?").bind(idempotencyKey).first();
     if (duplicate) return Response.json(await cachedSnapshot(env.DB, principal), {headers:{"X-Idempotent-Replay":"true"}});
@@ -436,13 +484,42 @@ export async function POST(request: Request) {
   const reservation = body.reservationId ? await env.DB.prepare("SELECT * FROM reservations WHERE id=?").bind(body.reservationId).first<Record<string, unknown>>() : null;
   const propertyState = await env.DB.prepare("SELECT business_date FROM properties WHERE id='prop-seoul'").first<{business_date:string}>(); const businessDate=String(propertyState?.business_date);
   try {
-    if (body.action === "create_reservation") {
+    if(body.action==="create_room_type") {
+      const code=(body.code||"").trim().toUpperCase(),name=(body.name||"").trim(),baseRate=Number(body.baseRate),capacity=Number(body.capacity),description=(body.description||"").trim().slice(0,300);
+      if(!/^[A-Z0-9_-]{2,12}$/.test(code)||name.length<2||name.length>80||!Number.isFinite(baseRate)||baseRate<0||!Number.isInteger(capacity)||capacity<1||capacity>20)return Response.json({error:"타입 코드는 영문·숫자 2~12자, 이름은 2~80자, 기준 인원은 1~20명으로 입력하세요."},{status:400});
+      const typeId=crypto.randomUUID();await env.DB.batch([
+        env.DB.prepare("INSERT INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 1)").bind(typeId,code,name,baseRate,capacity,description),
+        env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CREATE_ROOM_TYPE', 'room_type', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,typeId,JSON.stringify({code,name,baseRate,capacity,description,active:true}),now),
+        ...(idempotencyKey?[env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[]),
+      ]);
+    } else if(body.action==="update_room_type") {
+      const current=await env.DB.prepare("SELECT * FROM room_types WHERE id=? AND property_id='prop-seoul'").bind(body.roomTypeId).first<Record<string,unknown>>(),code=(body.code||"").trim().toUpperCase(),name=(body.name||"").trim(),baseRate=Number(body.baseRate),capacity=Number(body.capacity),description=(body.description||"").trim().slice(0,300),active=body.active!=="false";
+      if(!current)return Response.json({error:"객실 타입을 찾지 못했습니다."},{status:404});if(!/^[A-Z0-9_-]{2,12}$/.test(code)||name.length<2||name.length>80||!Number.isFinite(baseRate)||baseRate<0||!Number.isInteger(capacity)||capacity<1||capacity>20)return Response.json({error:"객실 타입 입력값을 확인하세요."},{status:400});
+      if(Number(body.expectedVersion)!==Number(current.version))return Response.json({error:"다른 사용자가 객실 타입을 먼저 변경했습니다. 화면을 새로고침한 뒤 다시 시도하세요."},{status:409});
+      if(!active){const future=await env.DB.prepare("SELECT COUNT(*) count FROM reservation_type_nights WHERE room_type_id=? AND stay_date>=?").bind(body.roomTypeId,businessDate).first<{count:number}>();if(Number(future?.count||0)>0)return Response.json({error:"미래 예약이 있는 객실 타입은 비활성화할 수 없습니다."},{status:409});}
+      await env.DB.batch([env.DB.prepare("UPDATE room_types SET code=?,name=?,base_rate=?,capacity=?,description=?,active=?,version=version+1 WHERE id=? AND version=?").bind(code,name,baseRate,capacity,description,active?1:0,body.roomTypeId,Number(current.version)),env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'UPDATE_ROOM_TYPE', 'room_type', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,body.roomTypeId,JSON.stringify(current),JSON.stringify({code,name,baseRate,capacity,description,active,version:Number(current.version)+1}),now),...(idempotencyKey?[env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[])]);
+    } else if(body.action==="create_room") {
+      const number=(body.number||"").trim().toUpperCase(),floor=Number(body.floor),type=await env.DB.prepare("SELECT id FROM room_types WHERE id=? AND property_id='prop-seoul' AND active=1").bind(body.roomTypeId).first(),features=(body.features||"").split(",").map(value=>value.trim()).filter(Boolean).slice(0,20);
+      if(!type||!number||number.length>16||!Number.isInteger(floor)||floor< -10||floor>250)return Response.json({error:"활성 객실 타입, 16자 이하 객실번호, -10~250층을 입력하세요."},{status:400});const roomId=crypto.randomUUID();
+      await env.DB.batch([env.DB.prepare("INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,active,version) VALUES (?, 'prop-seoul', ?, ?, ?, 'VACANT', 'CLEAN', ?, 1, 1)").bind(roomId,body.roomTypeId,number,floor,JSON.stringify(features)),env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CREATE_ROOM', 'room', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,roomId,JSON.stringify({number,floor,roomTypeId:body.roomTypeId,features}),now),...(idempotencyKey?[env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[])]);
+    } else if(body.action==="bulk_create_rooms") {
+      const start=Number(body.startNumber),count=Number(body.count),floor=Number(body.floor),padding=Math.min(8,Math.max(1,Number(body.padding)||String(body.startNumber||"").length)),prefix=(body.prefix||"").trim().toUpperCase().slice(0,8),type=await env.DB.prepare("SELECT id FROM room_types WHERE id=? AND property_id='prop-seoul' AND active=1").bind(body.roomTypeId).first(),features=(body.features||"").split(",").map(value=>value.trim()).filter(Boolean).slice(0,20);
+      if(!type||!Number.isInteger(start)||start<0||!Number.isInteger(count)||count<1||count>500||!Number.isInteger(floor)||floor< -10||floor>250)return Response.json({error:"시작 번호와 생성 수량(1~500), 층, 활성 객실 타입을 확인하세요."},{status:400});
+      const numbers=Array.from({length:count},(_,index)=>`${prefix}${String(start+index).padStart(padding,"0")}`);if(numbers.some(number=>number.length>16))return Response.json({error:"생성되는 객실번호는 16자를 초과할 수 없습니다."},{status:400});const existing=await env.DB.prepare("SELECT number FROM rooms WHERE property_id='prop-seoul'").all<{number:string}>(),known=new Set(existing.results.map(row=>row.number));const duplicate=numbers.find(number=>known.has(number));if(duplicate)return Response.json({error:`객실 ${duplicate}번이 이미 존재합니다.`},{status:409});
+      const created:string[]=[];for(let offset=0;offset<numbers.length;offset+=40){const slice=numbers.slice(offset,offset+40),statements=slice.map(number=>{const roomId=crypto.randomUUID();created.push(roomId);return env.DB.prepare("INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,active,version) VALUES (?, 'prop-seoul', ?, ?, ?, 'VACANT', 'CLEAN', ?, 1, 1)").bind(roomId,body.roomTypeId,number,floor,JSON.stringify(features));});await env.DB.batch(statements);}
+      await env.DB.batch([env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'BULK_CREATE_ROOMS', 'room_batch', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,crypto.randomUUID(),JSON.stringify({roomTypeId:body.roomTypeId,prefix,start,count,floor,numbers}),now),...(idempotencyKey?[env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[])]);
+    } else if(body.action==="update_room") {
+      const current=await env.DB.prepare("SELECT * FROM rooms WHERE id=? AND property_id='prop-seoul'").bind(body.roomId).first<Record<string,unknown>>(),number=(body.number||"").trim().toUpperCase(),floor=Number(body.floor),active=body.active!=="false",type=await env.DB.prepare("SELECT id FROM room_types WHERE id=? AND property_id='prop-seoul' AND active=1").bind(body.roomTypeId).first(),features=(body.features||"").split(",").map(value=>value.trim()).filter(Boolean).slice(0,20);
+      if(!current)return Response.json({error:"객실을 찾지 못했습니다."},{status:404});if(!type||!number||number.length>16||!Number.isInteger(floor)||floor< -10||floor>250)return Response.json({error:"객실 입력값을 확인하세요."},{status:400});const changingType=String(current.room_type_id)!==body.roomTypeId,future=await env.DB.prepare("SELECT COUNT(*) count FROM reservation_nights WHERE room_id=? AND stay_date>=?").bind(body.roomId,businessDate).first<{count:number}>();if((changingType||!active)&&Number(future?.count||0)>0)return Response.json({error:"미래 예약이 배정된 객실은 타입 변경 또는 비활성화할 수 없습니다."},{status:409});if(!active&&current.front_desk_status==="OCCUPIED")return Response.json({error:"투숙 중인 객실은 비활성화할 수 없습니다."},{status:409});const housekeeping=active?(current.housekeeping_status==="OUT_OF_SERVICE"?"CLEAN":String(current.housekeeping_status)):"OUT_OF_SERVICE";
+      if(Number(body.expectedVersion)!==Number(current.version))return Response.json({error:"다른 사용자가 객실을 먼저 변경했습니다. 화면을 새로고침한 뒤 다시 시도하세요."},{status:409});
+      await env.DB.batch([env.DB.prepare("UPDATE rooms SET room_type_id=?,number=?,floor=?,features=?,active=?,housekeeping_status=?,version=version+1 WHERE id=? AND version=?").bind(body.roomTypeId,number,floor,JSON.stringify(features),active?1:0,housekeeping,body.roomId,Number(current.version)),env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'UPDATE_ROOM', 'room', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,body.roomId,JSON.stringify(current),JSON.stringify({roomTypeId:body.roomTypeId,number,floor,features,active,housekeeping,version:Number(current.version)+1}),now),...(idempotencyKey?[env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[])]);
+    } else if (body.action === "create_reservation") {
       const arrival = new Date(`${body.arrivalDate}T00:00:00Z`), departure = new Date(`${body.departureDate}T00:00:00Z`);
       if (!body.firstName?.trim() || !body.lastName?.trim() || !Number.isFinite(arrival.valueOf()) || departure <= arrival) return Response.json({error:"고객명과 올바른 숙박 일정을 입력하세요."},{status:400});
-      const type = await env.DB.prepare("SELECT * FROM room_types WHERE id=? AND property_id='prop-seoul'").bind(body.roomTypeId).first<Record<string,unknown>>();
+      const type = await env.DB.prepare("SELECT * FROM room_types WHERE id=? AND property_id='prop-seoul' AND active=1").bind(body.roomTypeId).first<Record<string,unknown>>();
       if (!type) return Response.json({error:"객실 타입이 올바르지 않습니다."},{status:400});
       const controlError=await stayControlError(env.DB,body.roomTypeId,body.arrivalDate,body.departureDate); if(controlError) return Response.json({error:controlError},{status:409});
-      const room = body.roomId ? await env.DB.prepare("SELECT * FROM rooms WHERE id=? AND room_type_id=?").bind(body.roomId,body.roomTypeId).first<Record<string,unknown>>() : null;
+      const room = body.roomId ? await env.DB.prepare("SELECT * FROM rooms WHERE id=? AND room_type_id=? AND active=1").bind(body.roomId,body.roomTypeId).first<Record<string,unknown>>() : null;
       if (body.roomId && !room) return Response.json({error:"선택한 객실과 객실 타입이 일치하지 않습니다."},{status:409});
       const guestId=crypto.randomUUID(), reservationId=crypto.randomUUID(), confirmation=`SEL-${body.arrivalDate.replaceAll("-","").slice(2)}-${Math.floor(1000+Math.random()*9000)}`;
       const statements = [
@@ -462,7 +539,7 @@ export async function POST(request: Request) {
       if (reservation.status !== "DUE_IN") return Response.json({error:"도착 예정 예약만 수정할 수 있습니다."},{status:409});
       if(await env.DB.prepare("SELECT id FROM rooming_list_entries WHERE reservation_id=?").bind(body.reservationId).first()) return Response.json({error:"그룹 픽업 예약은 블록 rooming list에서 수정하세요."},{status:409});
       const expectedVersion=Number(body.expectedVersion); if(expectedVersion!==Number(reservation.version)) return Response.json({error:"다른 작업자가 예약을 변경했습니다. 화면을 새로고침하세요."},{status:409});
-      const type=await env.DB.prepare("SELECT * FROM room_types WHERE id=? AND property_id='prop-seoul'").bind(body.roomTypeId).first<Record<string,unknown>>(); if(!type) return Response.json({error:"객실 타입이 올바르지 않습니다."},{status:400});
+      const type=await env.DB.prepare("SELECT * FROM room_types WHERE id=? AND property_id='prop-seoul' AND active=1").bind(body.roomTypeId).first<Record<string,unknown>>(); if(!type) return Response.json({error:"객실 타입이 올바르지 않습니다."},{status:400});
       const stayDates=datesBetween(body.arrivalDate,body.departureDate); if(!stayDates.length) return Response.json({error:"올바른 숙박 일정을 입력하세요."},{status:400});
       const controlError=await stayControlError(env.DB,body.roomTypeId,body.arrivalDate,body.departureDate); if(controlError) return Response.json({error:controlError},{status:409});
       const retainedRoom=reservation.room_id && reservation.room_type_id===body.roomTypeId ? String(reservation.room_id) : null;
@@ -483,7 +560,7 @@ export async function POST(request: Request) {
     } else if (body.action === "assign_room" && reservation) {
       if(reservation.status!=="DUE_IN") return Response.json({error:"도착 예정 예약에만 객실을 배정할 수 있습니다."},{status:409});
       const expectedVersion=Number(body.expectedVersion); if(expectedVersion!==Number(reservation.version)) return Response.json({error:"다른 작업자가 예약을 변경했습니다. 화면을 새로고침하세요."},{status:409});
-      const room=await env.DB.prepare("SELECT * FROM rooms WHERE id=? AND property_id='prop-seoul'").bind(body.roomId).first<Record<string,unknown>>();
+      const room=await env.DB.prepare("SELECT * FROM rooms WHERE id=? AND property_id='prop-seoul' AND active=1").bind(body.roomId).first<Record<string,unknown>>();
       if(!room||room.room_type_id!==reservation.room_type_id) return Response.json({error:"예약 객실 타입과 배정 객실 타입이 일치하지 않습니다."},{status:409});
       if(room.housekeeping_status==="OUT_OF_SERVICE") return Response.json({error:"판매 중지 객실은 배정할 수 없습니다."},{status:409});
       const statements:D1PreparedStatement[]=[
@@ -501,7 +578,7 @@ export async function POST(request: Request) {
       const expectedVersion=Number(body.expectedVersion); if(expectedVersion!==Number(reservation.version)) return Response.json({error:"다른 작업자가 예약을 변경했습니다. 화면을 새로고침하세요."},{status:409});
       if(!body.reason?.trim()) return Response.json({error:"룸 무브 사유를 입력하세요."},{status:400});
       if(body.roomId===reservation.room_id) return Response.json({error:"현재 객실과 다른 객실을 선택하세요."},{status:400});
-      const room=await env.DB.prepare("SELECT * FROM rooms WHERE id=? AND property_id='prop-seoul'").bind(body.roomId).first<Record<string,unknown>>();
+      const room=await env.DB.prepare("SELECT * FROM rooms WHERE id=? AND property_id='prop-seoul' AND active=1").bind(body.roomId).first<Record<string,unknown>>();
       if(!room||room.front_desk_status!=="VACANT"||!["CLEAN","INSPECTED"].includes(String(room.housekeeping_status))) return Response.json({error:"공실이며 청소 또는 점검이 완료된 객실만 이동할 수 있습니다."},{status:409});
       const futureDates=datesBetween(businessDate,String(reservation.departure_date)); if(!futureDates.length) return Response.json({error:"남은 숙박일이 없습니다."},{status:409});
       const moveId=crypto.randomUUID(); const statements:D1PreparedStatement[]=[
@@ -536,7 +613,7 @@ export async function POST(request: Request) {
     } else if (body.action === "update_inventory_control") {
       const stayDate=String(body.stayDate), roomType=await env.DB.prepare("SELECT * FROM room_types WHERE id=? AND property_id='prop-seoul'").bind(body.roomTypeId).first<Record<string,unknown>>(); if(!roomType) return Response.json({error:"객실 타입이 올바르지 않습니다."},{status:400});
       const horizon=new Date(`${businessDate}T00:00:00Z`);horizon.setUTCDate(horizon.getUTCDate()+365); if(stayDate<businessDate||stayDate>horizon.toISOString().slice(0,10)) return Response.json({error:"영업일부터 365일 범위만 수정할 수 있습니다."},{status:400});
-      const capacity=await env.DB.prepare("SELECT COUNT(*) count FROM rooms WHERE property_id='prop-seoul' AND room_type_id=? AND housekeeping_status<>'OUT_OF_SERVICE'").bind(body.roomTypeId).first<{count:number}>(); const physical=Number(capacity?.count??0);
+      const capacity=await env.DB.prepare("SELECT COUNT(*) count FROM rooms WHERE property_id='prop-seoul' AND room_type_id=? AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE'").bind(body.roomTypeId).first<{count:number}>(); const physical=Number(capacity?.count??0);
       const sellLimit=body.sellLimit===""?physical:Number(body.sellLimit), minStay=Number(body.minStay||1), price=body.priceOverride===""?null:Number(body.priceOverride), closed=body.closed==="true"?1:0;
       if(!Number.isInteger(sellLimit)||sellLimit<0||sellLimit>physical||!Number.isInteger(minStay)||minStay<1||minStay>30||price!==null&&(!Number.isFinite(price)||price<0)) return Response.json({error:"판매 수량·최소 숙박·요금을 올바르게 입력하세요."},{status:400});
       const reserved=await env.DB.prepare("SELECT COUNT(*) count FROM reservation_type_nights WHERE property_id='prop-seoul' AND room_type_id=? AND stay_date=?").bind(body.roomTypeId,stayDate).first<{count:number}>(); if(!closed&&sellLimit<Number(reserved?.count??0)) return Response.json({error:"이미 확정된 예약 수보다 판매 한도를 낮출 수 없습니다."},{status:409});
@@ -593,7 +670,7 @@ export async function POST(request: Request) {
     } else if (body.action === "create_channel_mapping") {
       const connection=await env.DB.prepare("SELECT id FROM channel_connections WHERE id=? AND status='ACTIVE'").bind(body.connectionId).first(),roomType=await env.DB.prepare("SELECT id FROM room_types WHERE id=? AND property_id='prop-seoul'").bind(body.roomTypeId).first();if(!connection||!roomType||!body.externalRoomTypeId?.trim()||!body.externalRatePlanId?.trim())return Response.json({error:"활성 연결, 객실 타입, 외부 room/rate ID를 입력하세요."},{status:400});const mappingId=crypto.randomUUID();await env.DB.batch([env.DB.prepare("INSERT INTO channel_mappings VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 1, ?, ?)").bind(mappingId,body.connectionId,body.roomTypeId,body.externalRoomTypeId.trim(),body.ratePlan||"OTA",body.externalRatePlanId.trim(),now,now),env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CREATE_CHANNEL_MAPPING', 'channel_mapping', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,mappingId,JSON.stringify({connectionId:body.connectionId,roomTypeId:body.roomTypeId,externalRoomTypeId:body.externalRoomTypeId,externalRatePlanId:body.externalRatePlanId}),now)]);
     } else if (body.action === "queue_ari_delta") {
-      const mapping=await env.DB.prepare("SELECT m.*,c.provider FROM channel_mappings m JOIN channel_connections c ON c.id=m.connection_id WHERE m.id=? AND m.active=1 AND c.status='ACTIVE'").bind(body.mappingId).first<Record<string,unknown>>(),dates=datesBetween(body.startDate,(()=>{const end=new Date(`${body.endDate}T00:00:00Z`);end.setUTCDate(end.getUTCDate()+1);return end.toISOString().slice(0,10)})());if(!mapping||!dates.length)return Response.json({error:"활성 매핑과 올바른 ARI 일자 범위를 선택하세요."},{status:400});const physicalRow=await env.DB.prepare("SELECT COUNT(*) count,MAX(rt.base_rate) base_rate FROM rooms r JOIN room_types rt ON rt.id=r.room_type_id WHERE r.property_id='prop-seoul' AND r.room_type_id=? AND r.housekeeping_status<>'OUT_OF_SERVICE'").bind(mapping.room_type_id).first<{count:number;base_rate:number}>(),statements:D1PreparedStatement[]=[];
+      const mapping=await env.DB.prepare("SELECT m.*,c.provider FROM channel_mappings m JOIN channel_connections c ON c.id=m.connection_id WHERE m.id=? AND m.active=1 AND c.status='ACTIVE'").bind(body.mappingId).first<Record<string,unknown>>(),dates=datesBetween(body.startDate,(()=>{const end=new Date(`${body.endDate}T00:00:00Z`);end.setUTCDate(end.getUTCDate()+1);return end.toISOString().slice(0,10)})());if(!mapping||!dates.length)return Response.json({error:"활성 매핑과 올바른 ARI 일자 범위를 선택하세요."},{status:400});const physicalRow=await env.DB.prepare("SELECT COUNT(*) count,MAX(rt.base_rate) base_rate FROM rooms r JOIN room_types rt ON rt.id=r.room_type_id WHERE r.property_id='prop-seoul' AND r.room_type_id=? AND r.active=1 AND r.housekeeping_status<>'OUT_OF_SERVICE'").bind(mapping.room_type_id).first<{count:number;base_rate:number}>(),statements:D1PreparedStatement[]=[];
       for(const stayDate of dates){const [control,booked,held,prior]=await Promise.all([env.DB.prepare("SELECT * FROM inventory_controls WHERE property_id='prop-seoul' AND room_type_id=? AND stay_date=?").bind(mapping.room_type_id,stayDate).first<Record<string,unknown>>(),env.DB.prepare("SELECT COUNT(*) count FROM reservation_type_nights WHERE property_id='prop-seoul' AND room_type_id=? AND stay_date=?").bind(mapping.room_type_id,stayDate).first<{count:number}>(),env.DB.prepare("SELECT COALESCE(SUM(bi.current_rooms-bi.picked_up),0) count FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id='prop-seoul' AND bi.room_type_id=? AND bi.stay_date=? AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')").bind(mapping.room_type_id,stayDate).first<{count:number}>(),env.DB.prepare("SELECT COALESCE(MAX(revision),0)+1 revision FROM ari_updates WHERE mapping_id=? AND stay_date=?").bind(mapping.id,stayDate).first<{revision:number}>()]);const sellLimit=control?.sell_limit==null?Number(physicalRow?.count??0):Number(control.sell_limit),available=Boolean(control?.closed)?0:Math.max(0,sellLimit-Number(booked?.count??0)-Number(held?.count??0)),revision=Number(prior?.revision??1),payload={roomstosell:available,closed:Boolean(control?.closed),minimumstay:Number(control?.min_stay??1),closedonarrival:Boolean(control?.close_to_arrival),closedondeparture:Boolean(control?.close_to_departure),rate:Number(control?.price_override??physicalRow?.base_rate??0),currency:"KRW",date:stayDate};const ariId=crypto.randomUUID();statements.push(env.DB.prepare("INSERT INTO ari_updates VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'KRW', ?, 'PENDING', 0, ?, NULL, NULL)").bind(ariId,mapping.connection_id,mapping.id,stayDate,revision,available,payload.closed?1:0,payload.minimumstay,payload.closedonarrival?1:0,payload.closedondeparture?1:0,payload.rate,JSON.stringify(payload),now));statements.push(env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'channel.ari_delta', 'ari_update', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),ariId,JSON.stringify(payload),now));}
       await env.DB.batch(statements);
     } else if (body.action === "dispatch_ari_update") {

@@ -6,11 +6,11 @@ export const properties = sqliteTable("properties", {
   timezone: text("timezone").notNull(), currency: text("currency").notNull(), businessDate: text("business_date").notNull(),
 });
 export const roomTypes = sqliteTable("room_types", {
-  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), code: text("code").notNull(), name: text("name").notNull(), baseRate: real("base_rate").notNull(), capacity: integer("capacity").notNull(),
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), code: text("code").notNull(), name: text("name").notNull(), baseRate: real("base_rate").notNull(), capacity: integer("capacity").notNull(), description: text("description").notNull().default(""), active: integer("active", { mode:"boolean" }).notNull().default(true), version: integer("version").notNull().default(1),
 }, (t) => [uniqueIndex("room_type_code_uq").on(t.propertyId, t.code)]);
 export const rooms = sqliteTable("rooms", {
   id: text("id").primaryKey(), propertyId: text("property_id").notNull(), roomTypeId: text("room_type_id").notNull(), number: text("number").notNull(), floor: integer("floor").notNull(),
-  frontDeskStatus: text("front_desk_status").notNull(), housekeepingStatus: text("housekeeping_status").notNull(), features: text("features").notNull().default("[]"), version: integer("version").notNull().default(1),
+  frontDeskStatus: text("front_desk_status").notNull(), housekeepingStatus: text("housekeeping_status").notNull(), features: text("features").notNull().default("[]"), active: integer("active", { mode:"boolean" }).notNull().default(true), version: integer("version").notNull().default(1),
 }, (t) => [uniqueIndex("room_number_uq").on(t.propertyId, t.number), index("room_status_idx").on(t.propertyId, t.housekeepingStatus)]);
 export const guests = sqliteTable("guests", {
   id: text("id").primaryKey(), propertyId: text("property_id").notNull(), firstName: text("first_name").notNull(), lastName: text("last_name").notNull(), email: text("email"), phone: text("phone"), vipLevel: text("vip_level").notNull().default("NONE"), nationality: text("nationality"), preferences: text("preferences").notNull().default("[]"), createdAt: text("created_at").notNull(),
@@ -115,3 +115,6 @@ export const inboundChannelMessages = sqliteTable("inbound_channel_messages", {
 export const integrationDeliveryAttempts = sqliteTable("integration_delivery_attempts", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), direction:text("direction").notNull(), provider:text("provider").notNull(), aggregateType:text("aggregate_type").notNull(), aggregateId:text("aggregate_id").notNull(), attemptNo:integer("attempt_no").notNull(), status:text("status").notNull(), httpStatus:integer("http_status"), errorCode:text("error_code"), errorMessage:text("error_message"), payloadJson:text("payload_json").notNull(), createdAt:text("created_at").notNull(), createdBy:text("created_by").notNull(),
 },(t)=>[index("integration_attempt_aggregate_idx").on(t.aggregateType,t.aggregateId,t.attemptNo),index("integration_attempt_failure_idx").on(t.status,t.createdAt)]);
+export const reportExports = sqliteTable("report_exports", {
+  id:text("id").primaryKey(), propertyId:text("property_id").notNull(), reportKey:text("report_key").notNull(), format:text("format").notNull(), filtersJson:text("filters_json").notNull(), rowCount:integer("row_count").notNull(), status:text("status").notNull(), requestedBy:text("requested_by").notNull(), createdAt:text("created_at").notNull(), completedAt:text("completed_at"),
+},(t)=>[index("report_export_actor_idx").on(t.propertyId,t.requestedBy,t.createdAt),index("report_export_status_idx").on(t.propertyId,t.status,t.createdAt)]);

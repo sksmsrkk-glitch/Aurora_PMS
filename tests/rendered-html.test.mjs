@@ -4,9 +4,10 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 test("PMS product shell replaces the starter", async () => {
-  const [page, layout, css, route, hosting] = await Promise.all([
+  const [page, layout, css, route, hosting, reporting, workbook, roomMaster] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"), readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"), readFile(new URL("app/api/pms/route.ts", root), "utf8"), readFile(new URL(".openai/hosting.json", root), "utf8"),
+    readFile(new URL("app/api/pms/reporting.ts", root), "utf8"), readFile(new URL("app/xlsx-export.ts", root), "utf8"), readFile(new URL("app/room-master.tsx", root), "utf8"),
   ]);
   assert.match(layout, /Aurora PMS/); assert.match(layout, /lang="ko"/);
   assert.match(page, /오늘의 오퍼레이션/); assert.match(page, /체크인 완료/); assert.match(page, /야간 감사/); assert.match(page, /새 예약 만들기/);
@@ -22,5 +23,8 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(page, /폴리오 & AR/); assert.match(page, /전표 분할 이동/); assert.match(page, /AR 청구서/); assert.match(page, /반대전표 생성/);
   assert.match(route, /channel_connections/); assert.match(route, /ari_updates/); assert.match(route, /ingest_channel_message/); assert.match(route, /replay_channel_message/); assert.match(route, /integration_attempts_no_update/);
   assert.match(page, /채널 허브/); assert.match(page, /ARI 매핑 & Delta/); assert.match(page, /INBOUND DLQ/); assert.match(page, /Transactional Outbox/);
+  assert.match(page,/리포트 센터/);assert.match(page,/객실 마스터/);assert.match(route,/export_report/);assert.match(route,/bulk_create_rooms/);assert.match(route,/REPORT_EXPORT/);
+  assert.match(reporting,/점유율 · ADR · RevPAR/);assert.match(reporting,/최대 367일/);assert.match(reporting,/integration_delivery_attempts/);assert.match(roomMaster,/최대 500실/);
+  assert.match(workbook,/openxmlformats-officedocument\.spreadsheetml\.sheet/);assert.match(workbook,/Parameters/);assert.match(workbook,/autoFilter/);assert.doesNotMatch(workbook,/from "xlsx"/);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
 });
