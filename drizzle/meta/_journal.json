@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1784117966296,
+      "tag": "0000_brief_bill_hollister",
+      "breakpoints": true
+    }
+  ]
+}
