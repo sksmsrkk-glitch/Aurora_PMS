@@ -54,8 +54,10 @@ CREATE INDEX `room_move_reservation_idx` ON `room_moves` (`property_id`,`reserva
 CREATE TRIGGER `reservation_type_nights_capacity`
 BEFORE INSERT ON `reservation_type_nights`
 BEGIN
-  SELECT CASE WHEN COALESCE((SELECT `closed` FROM `inventory_controls` WHERE `property_id`=NEW.`property_id` AND `room_type_id`=NEW.`room_type_id` AND `stay_date`=NEW.`stay_date`),0)=1 THEN RAISE(ABORT, 'room type closed') END;
-  SELECT CASE WHEN (SELECT COUNT(*) FROM `reservation_type_nights` WHERE `property_id`=NEW.`property_id` AND `room_type_id`=NEW.`room_type_id` AND `stay_date`=NEW.`stay_date`) >= COALESCE((SELECT `sell_limit` FROM `inventory_controls` WHERE `property_id`=NEW.`property_id` AND `room_type_id`=NEW.`room_type_id` AND `stay_date`=NEW.`stay_date`), (SELECT COUNT(*) FROM `rooms` WHERE `property_id`=NEW.`property_id` AND `room_type_id`=NEW.`room_type_id` AND `housekeeping_status`<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'room type sold out') END;
+  SELECT CASE
+    WHEN COALESCE((SELECT `closed` FROM `inventory_controls` WHERE `property_id`=NEW.`property_id` AND `room_type_id`=NEW.`room_type_id` AND `stay_date`=NEW.`stay_date`),0)=1 THEN RAISE(ABORT, 'room type closed')
+    WHEN (SELECT COUNT(*) FROM `reservation_type_nights` WHERE `property_id`=NEW.`property_id` AND `room_type_id`=NEW.`room_type_id` AND `stay_date`=NEW.`stay_date`) >= COALESCE((SELECT `sell_limit` FROM `inventory_controls` WHERE `property_id`=NEW.`property_id` AND `room_type_id`=NEW.`room_type_id` AND `stay_date`=NEW.`stay_date`), (SELECT COUNT(*) FROM `rooms` WHERE `property_id`=NEW.`property_id` AND `room_type_id`=NEW.`room_type_id` AND `housekeeping_status`<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'room type sold out')
+  END;
 END;
 --> statement-breakpoint
 CREATE TRIGGER `inventory_controls_validate_insert`
