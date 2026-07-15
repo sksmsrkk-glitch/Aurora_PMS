@@ -62,11 +62,12 @@ async function ready(db: D1) {
 }
 
 async function initialize(db: D1) {
-  await db.batch(schema.map((sql) => db.prepare(sql)));
+  let propertyExists = false;
+  try { propertyExists = Boolean(await db.prepare("SELECT id FROM properties WHERE id='prop-seoul' LIMIT 1").first()); }
+  catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
   const now = new Date().toISOString();
   await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", now).run();
-  const found = await db.prepare("SELECT id FROM reservations LIMIT 1").first();
-  if (found) return;
+  if (propertyExists) return;
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
     db.prepare("INSERT OR IGNORE INTO room_types VALUES (?, ?, ?, ?, ?, ?)").bind("rt-dlx", "prop-seoul", "DLX", "디럭스 킹", 198000, 2),
@@ -161,7 +162,7 @@ function invalidateSnapshots() { snapshotCache.clear(); }
 async function cachedSnapshot(db:D1, principal:Principal) {
   const key=principal.email; const cached=snapshotCache.get(key); const now=Date.now();
   if (cached && cached.expires>now) return cached.value;
-  const value=snapshot(db,principal); snapshotCache.set(key,{expires:now+1000,value});
+  const value=snapshot(db,principal); snapshotCache.set(key,{expires:now+3000,value});
   try { return await value; } catch (error) { snapshotCache.delete(key); throw error; }
 }
 
