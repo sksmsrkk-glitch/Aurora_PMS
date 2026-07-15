@@ -2,16 +2,17 @@ import { env } from "cloudflare:workers";
 
 export const dynamic = "force-dynamic";
 type D1 = typeof env.DB;
-type Role = "PROPERTY_ADMIN" | "NIGHT_AUDITOR" | "FRONT_DESK" | "CASHIER" | "HOUSEKEEPING" | "REVENUE_MANAGER" | "VIEWER";
+type Role = "PROPERTY_ADMIN" | "NIGHT_AUDITOR" | "FRONT_DESK" | "CASHIER" | "HOUSEKEEPING" | "REVENUE_MANAGER" | "SALES_MANAGER" | "VIEWER";
 type Principal = { email: string; displayName: string; role: Role; capabilities: string[] };
 
 const roleCapabilities: Record<Role, string[]> = {
-  PROPERTY_ADMIN: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "HOUSEKEEPING_WRITE", "CASHIER_WRITE", "EOD_RUN", "INVENTORY_WRITE", "ADMIN"],
+  PROPERTY_ADMIN: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "HOUSEKEEPING_WRITE", "CASHIER_WRITE", "EOD_RUN", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "ADMIN"],
   NIGHT_AUDITOR: ["READ", "FOLIO_WRITE", "CASHIER_WRITE", "EOD_RUN"],
-  FRONT_DESK: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "CASHIER_WRITE"],
+  FRONT_DESK: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "CASHIER_WRITE", "GROUP_PICKUP"],
   CASHIER: ["READ", "FOLIO_WRITE", "CASHIER_WRITE"],
   HOUSEKEEPING: ["READ", "HOUSEKEEPING_WRITE"],
-  REVENUE_MANAGER: ["READ", "INVENTORY_WRITE"],
+  REVENUE_MANAGER: ["READ", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP"],
+  SALES_MANAGER: ["READ", "RESERVATION_WRITE", "GROUP_WRITE", "GROUP_PICKUP"],
   VIEWER: ["READ"],
 };
 
@@ -19,6 +20,8 @@ const actionCapability: Record<string, string> = {
   create_reservation: "RESERVATION_WRITE", mark_no_show: "STAY_WRITE", check_in: "STAY_WRITE", check_out: "STAY_WRITE",
   edit_reservation: "RESERVATION_WRITE", cancel_reservation: "RESERVATION_WRITE", assign_room: "RESERVATION_WRITE", move_room: "STAY_WRITE",
   update_inventory_control: "INVENTORY_WRITE",
+  create_account_profile: "GROUP_WRITE", create_business_block: "GROUP_WRITE", update_block_inventory: "GROUP_WRITE", add_rooming_entry: "GROUP_WRITE", cutoff_block: "GROUP_WRITE",
+  pickup_rooming_entry: "GROUP_PICKUP",
   post_payment: "FOLIO_WRITE", post_charge: "FOLIO_WRITE", housekeeping: "HOUSEKEEPING_WRITE",
   open_cashier: "CASHIER_WRITE", close_cashier: "CASHIER_WRITE", run_night_audit: "EOD_RUN",
 };
@@ -45,6 +48,11 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS reservation_mutations (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, expected_version INTEGER NOT NULL, kind TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS inventory_controls (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, sell_limit INTEGER, closed INTEGER NOT NULL DEFAULT 0, min_stay INTEGER NOT NULL DEFAULT 1, close_to_arrival INTEGER NOT NULL DEFAULT 0, close_to_departure INTEGER NOT NULL DEFAULT 0, price_override REAL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS room_moves (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, from_room_id TEXT, to_room_id TEXT NOT NULL, move_date TEXT NOT NULL, reason TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS account_profiles (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, type TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, email TEXT, phone TEXT, negotiated_rate_code TEXT, credit_status TEXT NOT NULL DEFAULT 'CASH', notes TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS business_blocks (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, account_profile_id TEXT, group_profile_id TEXT, arrival_date TEXT NOT NULL, departure_date TEXT NOT NULL, status TEXT NOT NULL, reservation_method TEXT NOT NULL, deduct_inventory INTEGER NOT NULL DEFAULT 1, cutoff_date TEXT, currency TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, cutoff_processed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS block_inventory (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, block_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, original_rooms INTEGER NOT NULL, current_rooms INTEGER NOT NULL, picked_up INTEGER NOT NULL DEFAULT 0, rate REAL NOT NULL, cutoff_date TEXT, version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS rooming_list_entries (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, block_id TEXT NOT NULL, first_name TEXT NOT NULL, last_name TEXT NOT NULL, email TEXT, phone TEXT, arrival_date TEXT NOT NULL, departure_date TEXT NOT NULL, room_type_id TEXT NOT NULL, status TEXT NOT NULL, reservation_id TEXT, rate REAL NOT NULL, notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS block_pickup_nights (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id TEXT NOT NULL, block_id TEXT NOT NULL, rooming_entry_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS room_number_uq ON rooms(property_id, number)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS confirmation_uq ON reservations(property_id, confirmation_no)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS room_night_uq ON reservation_nights(property_id, room_id, stay_date)`,
@@ -63,12 +71,33 @@ const schema = [
   `CREATE UNIQUE INDEX IF NOT EXISTS inventory_control_type_date_uq ON inventory_controls(property_id, room_type_id, stay_date)`,
   `CREATE INDEX IF NOT EXISTS inventory_control_calendar_idx ON inventory_controls(property_id, stay_date)`,
   `CREATE INDEX IF NOT EXISTS room_move_reservation_idx ON room_moves(property_id, reservation_id, created_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS account_profile_external_uq ON account_profiles(property_id, type, external_id)`,
+  `CREATE INDEX IF NOT EXISTS account_profile_search_idx ON account_profiles(property_id, type, name)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS business_block_code_uq ON business_blocks(property_id, code)`,
+  `CREATE INDEX IF NOT EXISTS business_block_dates_idx ON business_blocks(property_id, arrival_date, departure_date, status)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS block_inventory_type_date_uq ON block_inventory(block_id, room_type_id, stay_date)`,
+  `CREATE INDEX IF NOT EXISTS block_inventory_house_idx ON block_inventory(property_id, room_type_id, stay_date)`,
+  `CREATE INDEX IF NOT EXISTS rooming_list_block_idx ON rooming_list_entries(block_id, status, last_name)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS rooming_list_reservation_uq ON rooming_list_entries(reservation_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS block_pickup_entry_date_uq ON block_pickup_nights(rooming_entry_id, stay_date)`,
+  `CREATE INDEX IF NOT EXISTS block_pickup_block_date_idx ON block_pickup_nights(block_id, room_type_id, stay_date)`,
   `CREATE TRIGGER IF NOT EXISTS reservation_type_nights_capacity BEFORE INSERT ON reservation_type_nights BEGIN
     SELECT CASE
       WHEN COALESCE((SELECT closed FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),0)=1 THEN RAISE(ABORT, 'room type closed')
-      WHEN (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date) >= COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date), (SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'room type sold out')
+      WHEN (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date) + COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0) >= COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date), (SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'room type sold out')
     END;
   END`,
+  `CREATE TRIGGER IF NOT EXISTS block_inventory_capacity_insert BEFORE INSERT ON block_inventory BEGIN SELECT CASE
+    WHEN NEW.original_rooms<0 OR NEW.current_rooms<0 OR NEW.picked_up<0 OR NEW.current_rooms<NEW.picked_up OR NEW.rate<0 THEN RAISE(ABORT, 'invalid block inventory')
+    WHEN (SELECT deduct_inventory FROM business_blocks WHERE id=NEW.block_id)=1 AND (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date)+COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0)+(NEW.current_rooms-NEW.picked_up)>COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),(SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'block inventory sold out')
+  END; END`,
+  `CREATE TRIGGER IF NOT EXISTS block_inventory_capacity_update BEFORE UPDATE ON block_inventory BEGIN SELECT CASE
+    WHEN NEW.original_rooms<0 OR NEW.current_rooms<0 OR NEW.picked_up<0 OR NEW.current_rooms<NEW.picked_up OR NEW.rate<0 THEN RAISE(ABORT, 'invalid block inventory')
+    WHEN (SELECT deduct_inventory FROM business_blocks WHERE id=NEW.block_id)=1 AND (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date)+COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bi.id<>OLD.id AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0)+(NEW.current_rooms-NEW.picked_up)>COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),(SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'block inventory sold out')
+  END; END`,
+  `CREATE TRIGGER IF NOT EXISTS block_pickup_validate BEFORE INSERT ON block_pickup_nights WHEN NOT EXISTS (SELECT 1 FROM block_inventory WHERE block_id=NEW.block_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date AND picked_up<current_rooms) BEGIN SELECT RAISE(ABORT, 'block allocation exhausted'); END`,
+  `CREATE TRIGGER IF NOT EXISTS block_pickup_increment AFTER INSERT ON block_pickup_nights BEGIN UPDATE block_inventory SET picked_up=picked_up+1,version=version+1,updated_at=NEW.created_at WHERE block_id=NEW.block_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date; END`,
+  `CREATE TRIGGER IF NOT EXISTS block_pickup_decrement AFTER DELETE ON block_pickup_nights BEGIN UPDATE block_inventory SET picked_up=MAX(0,picked_up-1),version=version+1,updated_at=datetime('now') WHERE block_id=OLD.block_id AND room_type_id=OLD.room_type_id AND stay_date=OLD.stay_date; END`,
   `CREATE TRIGGER IF NOT EXISTS inventory_controls_validate_insert BEFORE INSERT ON inventory_controls WHEN NEW.sell_limit < 0 OR NEW.min_stay < 1 OR NEW.price_override < 0 BEGIN SELECT RAISE(ABORT, 'invalid inventory control'); END`,
   `CREATE TRIGGER IF NOT EXISTS inventory_controls_validate_update BEFORE UPDATE ON inventory_controls WHEN NEW.sell_limit < 0 OR NEW.min_stay < 1 OR NEW.price_override < 0 BEGIN SELECT RAISE(ABORT, 'invalid inventory control'); END`,
   `CREATE TRIGGER IF NOT EXISTS folio_entries_validate_insert BEFORE INSERT ON folio_entries WHEN NEW.amount <= 0 OR NEW.kind NOT IN ('CHARGE','PAYMENT') BEGIN SELECT RAISE(ABORT, 'invalid folio entry'); END`,
@@ -83,11 +112,11 @@ async function ready(db: D1) {
 
 async function initialize(db: D1) {
   let propertyExists = false;
-  try { propertyExists = Boolean(await db.prepare("SELECT id FROM properties WHERE id='prop-seoul' LIMIT 1").first()); await db.prepare("SELECT id FROM reservation_type_nights LIMIT 1").first(); }
+  try { propertyExists = Boolean(await db.prepare("SELECT id FROM properties WHERE id='prop-seoul' LIMIT 1").first()); await db.prepare("SELECT id FROM reservation_type_nights LIMIT 1").first(); await db.prepare("SELECT id FROM business_blocks LIMIT 1").first(); }
   catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
   const now = new Date().toISOString();
   await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", now).run();
-  if (propertyExists) { await ensureInventoryTriggers(db,now); await backfillLegacyNights(db,now); return; }
+  if (propertyExists) { await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await backfillLegacyNights(db,now); return; }
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
     db.prepare("INSERT OR IGNORE INTO room_types VALUES (?, ?, ?, ?, ?, ?)").bind("rt-dlx", "prop-seoul", "DLX", "디럭스 킹", 198000, 2),
@@ -117,6 +146,7 @@ async function initialize(db: D1) {
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-night-backfill-v1','prop-seoul','SYSTEM_BACKFILL','system',?)").bind(now),
     db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now),
+    db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:group-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now),
   ]);
   await db.batch([
     db.prepare("INSERT INTO folio_entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind("fe1","prop-seoul","r3","CHARGE","ROOM","객실료",198000,null,"2026-07-14",now,"night-audit",null),
@@ -129,6 +159,13 @@ async function ensureInventoryTriggers(db:D1, now:string) {
   const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:inventory-triggers-v1'").first(); if(marker) return;
   const triggerSql=schema.filter(sql=>sql.includes("reservation_type_nights_capacity")||sql.includes("inventory_controls_validate_"));
   await db.batch([...triggerSql.map(sql=>db.prepare(sql)),db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now)]);
+}
+
+async function ensureGroupTriggers(db:D1, now:string) {
+  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:group-triggers-v1'").first(); if(marker) return;
+  const capacitySql=schema.find(sql=>sql.includes("reservation_type_nights_capacity")); const groupSql=schema.filter(sql=>sql.includes("block_inventory_capacity_")||sql.includes("block_pickup_"));
+  if(!capacitySql) throw new Error("inventory capacity trigger is unavailable");
+  await db.batch([db.prepare("DROP TRIGGER IF EXISTS reservation_type_nights_capacity"),db.prepare(capacitySql),...groupSql.map(sql=>db.prepare(sql)),db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:group-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now)]);
 }
 
 async function backfillLegacyNights(db:D1, now:string) {
@@ -205,7 +242,7 @@ async function stayControlError(db:D1, roomTypeId:string, arrival:string, depart
 }
 
 async function snapshot(db: D1, principal?: Principal | null) {
-  const [propertyResult,reservationResult,roomResult,actorCashierResult,openCashierResult,failedResult,auditResult,postingsResult,roomTypesResult,typeNightsResult,inventoryControlsResult] = await db.batch([
+  const [propertyResult,reservationResult,roomResult,actorCashierResult,openCashierResult,failedResult,auditResult,postingsResult,roomTypesResult,typeNightsResult,inventoryControlsResult,accountProfilesResult,blocksResult,blockInventoryResult,roomingResult] = await db.batch([
     db.prepare("SELECT * FROM properties WHERE id='prop-seoul' LIMIT 1"),
     db.prepare(`SELECT r.*, g.first_name, g.last_name, g.vip_level, rm.number room_number, rt.code room_type_code, rt.name room_type_name, COALESCE(SUM(CASE WHEN f.kind='CHARGE' THEN f.amount WHEN f.kind='PAYMENT' THEN -f.amount ELSE 0 END),0) balance FROM reservations r JOIN guests g ON g.id=r.guest_id JOIN room_types rt ON rt.id=r.room_type_id LEFT JOIN rooms rm ON rm.id=r.room_id LEFT JOIN folio_entries f ON f.reservation_id=r.id WHERE r.property_id='prop-seoul' GROUP BY r.id ORDER BY CASE r.status WHEN 'DUE_IN' THEN 1 WHEN 'IN_HOUSE' THEN 2 ELSE 3 END, r.eta`),
     db.prepare(`SELECT rm.*, rt.code room_type_code, rt.name room_type_name, h.status task_status, h.assignee FROM rooms rm JOIN room_types rt ON rt.id=rm.room_type_id LEFT JOIN housekeeping_tasks h ON h.room_id=rm.id AND h.business_date=(SELECT business_date FROM properties WHERE id='prop-seoul') WHERE rm.property_id='prop-seoul' ORDER BY rm.number`),
@@ -217,6 +254,10 @@ async function snapshot(db: D1, principal?: Principal | null) {
     db.prepare("SELECT * FROM room_types WHERE property_id='prop-seoul' ORDER BY code"),
     db.prepare("SELECT room_type_id, stay_date, COUNT(*) booked FROM reservation_type_nights WHERE property_id='prop-seoul' AND stay_date BETWEEN (SELECT business_date FROM properties WHERE id='prop-seoul') AND date((SELECT business_date FROM properties WHERE id='prop-seoul'), '+13 day') GROUP BY room_type_id, stay_date"),
     db.prepare("SELECT * FROM inventory_controls WHERE property_id='prop-seoul' AND stay_date BETWEEN (SELECT business_date FROM properties WHERE id='prop-seoul') AND date((SELECT business_date FROM properties WHERE id='prop-seoul'), '+13 day')"),
+    db.prepare("SELECT * FROM account_profiles WHERE property_id='prop-seoul' AND active=1 ORDER BY type,name"),
+    db.prepare("SELECT bb.*,ap.name account_name,gp.name group_name,COALESCE(SUM(bi.original_rooms),0) original_room_nights,COALESCE(SUM(bi.current_rooms),0) current_room_nights,COALESCE(SUM(bi.picked_up),0) picked_up_room_nights FROM business_blocks bb LEFT JOIN account_profiles ap ON ap.id=bb.account_profile_id LEFT JOIN account_profiles gp ON gp.id=bb.group_profile_id LEFT JOIN block_inventory bi ON bi.block_id=bb.id WHERE bb.property_id='prop-seoul' GROUP BY bb.id ORDER BY bb.arrival_date,bb.code"),
+    db.prepare("SELECT bi.*,rt.code room_type_code,rt.name room_type_name FROM block_inventory bi JOIN room_types rt ON rt.id=bi.room_type_id WHERE bi.property_id='prop-seoul' ORDER BY bi.block_id,bi.stay_date,rt.code"),
+    db.prepare("SELECT rl.*,rt.code room_type_code,rt.name room_type_name FROM rooming_list_entries rl JOIN room_types rt ON rt.id=rl.room_type_id WHERE rl.property_id='prop-seoul' ORDER BY rl.block_id,rl.last_name,rl.first_name"),
   ]);
   const property = propertyResult.results[0] as Record<string,unknown>; const reservations=reservationResult.results as Array<Record<string,unknown>>; const rooms=roomResult.results as Array<Record<string,unknown>>;
   const metrics = { rooms:rooms.length, occupied:rooms.filter(x=>x.front_desk_status==='OCCUPIED').length, dirty:rooms.filter(x=>x.housekeeping_status==='DIRTY').length, ready:rooms.filter(x=>x.housekeeping_status==='CLEAN'||x.housekeeping_status==='INSPECTED').length };
@@ -232,7 +273,8 @@ async function snapshot(db: D1, principal?: Principal | null) {
   const typeNights=typeNightsResult.results as Array<Record<string,unknown>>, controlRows=inventoryControlsResult.results as Array<Record<string,unknown>>, roomTypes=roomTypesResult.results as Array<Record<string,unknown>>;
   const booked=new Map(typeNights.map(row=>[`${row.room_type_id}:${row.stay_date}`,Number(row.booked)])); const inventoryControls=new Map(controlRows.map(row=>[`${row.room_type_id}:${row.stay_date}`,row]));
   const inventory={dates,types:roomTypes.map(type=>{const physical=rooms.filter(room=>room.room_type_id===type.id&&room.housekeeping_status!=="OUT_OF_SERVICE").length;return {...type,physical,cells:dates.map(stayDate=>{const control=inventoryControls.get(`${type.id}:${stayDate}`);const sellLimit=control?.sell_limit==null?physical:Number(control.sell_limit),reserved=booked.get(`${type.id}:${stayDate}`)??0,closed=Boolean(control?.closed);return {stayDate,sellLimit,reserved,available:closed?0:Math.max(0,sellLimit-reserved),closed,minStay:Number(control?.min_stay??1),cta:Boolean(control?.close_to_arrival),ctd:Boolean(control?.close_to_departure),price:Number(control?.price_override??type.base_rate)};})}})};
-  return { property, reservations, rooms, metrics, principal, controls, inventory };
+  const groups={accounts:accountProfilesResult.results,blocks:blocksResult.results,inventory:blockInventoryResult.results,rooming:roomingResult.results};
+  return { property, reservations, rooms, metrics, principal, controls, inventory, groups };
 }
 
 type Snapshot = Awaited<ReturnType<typeof snapshot>>;
@@ -291,6 +333,7 @@ export async function POST(request: Request) {
       await env.DB.batch(statements);
     } else if (body.action === "edit_reservation" && reservation) {
       if (reservation.status !== "DUE_IN") return Response.json({error:"도착 예정 예약만 수정할 수 있습니다."},{status:409});
+      if(await env.DB.prepare("SELECT id FROM rooming_list_entries WHERE reservation_id=?").bind(body.reservationId).first()) return Response.json({error:"그룹 픽업 예약은 블록 rooming list에서 수정하세요."},{status:409});
       const expectedVersion=Number(body.expectedVersion); if(expectedVersion!==Number(reservation.version)) return Response.json({error:"다른 작업자가 예약을 변경했습니다. 화면을 새로고침하세요."},{status:409});
       const type=await env.DB.prepare("SELECT * FROM room_types WHERE id=? AND property_id='prop-seoul'").bind(body.roomTypeId).first<Record<string,unknown>>(); if(!type) return Response.json({error:"객실 타입이 올바르지 않습니다."},{status:400});
       const stayDates=datesBetween(body.arrivalDate,body.departureDate); if(!stayDates.length) return Response.json({error:"올바른 숙박 일정을 입력하세요."},{status:400});
@@ -351,6 +394,7 @@ export async function POST(request: Request) {
     } else if (body.action === "cancel_reservation" && reservation) {
       if(reservation.status!=="DUE_IN") return Response.json({error:"도착 예정 예약만 취소할 수 있습니다."},{status:409});
       if(!body.reason?.trim()) return Response.json({error:"예약 취소 사유를 입력하세요."},{status:400});
+      const groupEntry=await env.DB.prepare("SELECT * FROM rooming_list_entries WHERE reservation_id=?").bind(body.reservationId).first<Record<string,unknown>>();
       const statements:D1PreparedStatement[]=[
         env.DB.prepare("INSERT INTO reservation_transitions VALUES (?, 'prop-seoul', ?, 'DUE_IN', 'CANCELLED', ?, ?)").bind(crypto.randomUUID(),body.reservationId,actor,now),
         env.DB.prepare("UPDATE reservations SET status='CANCELLED', version=version+1, notes=notes || ?, updated_at=? WHERE id=? AND status='DUE_IN'").bind(`\n[취소] ${body.reason.trim()}`,now,body.reservationId),
@@ -359,6 +403,7 @@ export async function POST(request: Request) {
         env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CANCEL_RESERVATION', 'reservation', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,body.reservationId,JSON.stringify(reservation),JSON.stringify({status:"CANCELLED",reason:body.reason.trim()}),now),
         env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'reservation.cancelled', 'reservation', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),body.reservationId,JSON.stringify({reservationId:body.reservationId,reason:body.reason.trim()}),now),
       ];
+      if(groupEntry){statements.push(env.DB.prepare("DELETE FROM block_pickup_nights WHERE rooming_entry_id=?").bind(String(groupEntry.id)));statements.push(env.DB.prepare("UPDATE rooming_list_entries SET status='CANCELLED',version=version+1,updated_at=? WHERE id=?").bind(now,String(groupEntry.id)));}
       if(idempotencyKey) statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now));
       await env.DB.batch(statements);
     } else if (body.action === "update_inventory_control") {
@@ -376,6 +421,45 @@ export async function POST(request: Request) {
       ];
       if(idempotencyKey) statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now));
       await env.DB.batch(statements);
+    } else if (body.action === "create_account_profile") {
+      const type=String(body.type),name=body.name?.trim(); if(!["COMPANY","TRAVEL_AGENT","SOURCE","GROUP"].includes(type)||!name) return Response.json({error:"프로필 유형과 이름을 올바르게 입력하세요."},{status:400});
+      const profileId=crypto.randomUUID(); const statements:D1PreparedStatement[]=[
+        env.DB.prepare("INSERT INTO account_profiles VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)").bind(profileId,type,name,body.externalId?.trim()||null,body.email?.trim()||null,body.phone?.trim()||null,body.negotiatedRateCode?.trim()||null,body.creditStatus||"CASH",body.notes||"",now,now),
+        env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CREATE_ACCOUNT_PROFILE', 'account_profile', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,profileId,JSON.stringify({type,name,externalId:body.externalId||null}),now),
+        env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'profile.created', 'account_profile', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),profileId,JSON.stringify({profileId,type,name}),now),
+      ];
+      if(idempotencyKey) statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)); await env.DB.batch(statements);
+    } else if (body.action === "create_business_block") {
+      const stayDates=datesBetween(body.arrivalDate,body.departureDate); if(!body.name?.trim()||!stayDates.length) return Response.json({error:"블록 이름과 올바른 일정을 입력하세요."},{status:400});
+      let allocations:Array<{roomTypeId:string;rooms:number;rate:number}>; try{allocations=JSON.parse(body.allocations||"[]") as Array<{roomTypeId:string;rooms:number;rate:number}>}catch{return Response.json({error:"객실 할당 정보가 올바르지 않습니다."},{status:400})}
+      allocations=allocations.filter(item=>item.roomTypeId&&Number.isInteger(Number(item.rooms))&&Number(item.rooms)>0&&Number(item.rate)>=0).map(item=>({...item,rooms:Number(item.rooms),rate:Number(item.rate)})); if(!allocations.length) return Response.json({error:"한 개 이상의 객실 타입 할당을 입력하세요."},{status:400});
+      const types=await env.DB.prepare("SELECT id FROM room_types WHERE property_id='prop-seoul'").all<{id:string}>(); const validTypes=new Set(types.results.map(type=>type.id)); if(allocations.some(item=>!validTypes.has(item.roomTypeId))) return Response.json({error:"객실 타입이 올바르지 않습니다."},{status:400});
+      const accountId=body.accountProfileId||null,groupId=body.groupProfileId||null; if(accountId&&!await env.DB.prepare("SELECT id FROM account_profiles WHERE id=? AND type IN ('COMPANY','TRAVEL_AGENT','SOURCE') AND active=1").bind(accountId).first()) return Response.json({error:"유효한 회사·여행사·소스 프로필을 선택하세요."},{status:400}); if(groupId&&!await env.DB.prepare("SELECT id FROM account_profiles WHERE id=? AND type='GROUP' AND active=1").bind(groupId).first()) return Response.json({error:"유효한 그룹 프로필을 선택하세요."},{status:400});
+      const blockId=crypto.randomUUID(),code=body.code?.trim()||`BLK-${body.arrivalDate.replaceAll("-","").slice(2)}-${Math.floor(1000+Math.random()*9000)}`,status=["TENTATIVE","DEFINITE"].includes(body.status)?body.status:"TENTATIVE",cutoffDate=body.cutoffDate||body.arrivalDate,deduct=body.deductInventory==="false"?0:1;
+      const statements:D1PreparedStatement[]=[env.DB.prepare("INSERT INTO business_blocks VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'KRW', ?, 1, NULL, ?, ?)").bind(blockId,code,body.name.trim(),accountId,groupId,body.arrivalDate,body.departureDate,status,body.reservationMethod||"ROOMING_LIST",deduct,cutoffDate,body.notes||"",now,now)];
+      for(const allocation of allocations) for(const stayDate of stayDates) statements.push(env.DB.prepare("INSERT INTO block_inventory VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 0, ?, ?, 1, ?)").bind(crypto.randomUUID(),blockId,allocation.roomTypeId,stayDate,allocation.rooms,allocation.rooms,allocation.rate,cutoffDate,now));
+      statements.push(env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CREATE_BUSINESS_BLOCK', 'business_block', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,blockId,JSON.stringify({code,name:body.name,status,arrivalDate:body.arrivalDate,departureDate:body.departureDate,allocations}),now));
+      statements.push(env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'block.created', 'business_block', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),blockId,JSON.stringify({blockId,code,status}),now));
+      if(idempotencyKey) statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)); await env.DB.batch(statements);
+    } else if (body.action === "update_block_inventory") {
+      const row=await env.DB.prepare("SELECT bi.*,bb.status block_status FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.block_id=? AND bi.room_type_id=? AND bi.stay_date=?").bind(body.blockId,body.roomTypeId,body.stayDate).first<Record<string,unknown>>(); if(!row||!["TENTATIVE","DEFINITE"].includes(String(row.block_status))) return Response.json({error:"수정 가능한 블록 재고를 찾지 못했습니다."},{status:409});
+      const rooms=Number(body.rooms),rate=Number(body.rate); if(!Number.isInteger(rooms)||rooms<Number(row.picked_up)||!Number.isFinite(rate)||rate<0) return Response.json({error:"픽업 수보다 낮지 않은 객실 수와 올바른 요금을 입력하세요."},{status:400});
+      const statements:D1PreparedStatement[]=[env.DB.prepare("UPDATE block_inventory SET current_rooms=?,rate=?,version=version+1,updated_at=? WHERE id=? AND version=?").bind(rooms,rate,now,row.id,Number(row.version)),env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'UPDATE_BLOCK_INVENTORY', 'block_inventory', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(row.id),JSON.stringify(row),JSON.stringify({currentRooms:rooms,rate}),now),env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'block.inventory_updated', 'business_block', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),body.blockId,JSON.stringify({blockId:body.blockId,roomTypeId:body.roomTypeId,stayDate:body.stayDate,rooms,rate}),now)]; if(idempotencyKey)statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)); await env.DB.batch(statements);
+    } else if (body.action === "add_rooming_entry") {
+      const block=await env.DB.prepare("SELECT * FROM business_blocks WHERE id=? AND status IN ('TENTATIVE','DEFINITE')").bind(body.blockId).first<Record<string,unknown>>(); if(!block) return Response.json({error:"픽업 가능한 블록을 찾지 못했습니다."},{status:409});
+      const stayDates=datesBetween(body.arrivalDate,body.departureDate); if(!body.firstName?.trim()||!body.lastName?.trim()||!stayDates.length||body.arrivalDate<String(block.arrival_date)||body.departureDate>String(block.departure_date)) return Response.json({error:"고객명과 블록 범위 안의 일정을 입력하세요."},{status:400});
+      const grid=await env.DB.prepare("SELECT * FROM block_inventory WHERE block_id=? AND room_type_id=? AND stay_date>=? AND stay_date<? ORDER BY stay_date").bind(body.blockId,body.roomTypeId,body.arrivalDate,body.departureDate).all<Record<string,unknown>>(); if(grid.results.length!==stayDates.length) return Response.json({error:"선택한 객실 타입의 블록 할당이 일정 전체에 없습니다."},{status:409});
+      const entryId=crypto.randomUUID(),rate=Number(body.rate)||Number(grid.results[0]?.rate??0); const statements:D1PreparedStatement[]=[env.DB.prepare("INSERT INTO rooming_list_entries VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NULL, ?, ?, 1, ?, ?)").bind(entryId,body.blockId,body.firstName.trim(),body.lastName.trim(),body.email||null,body.phone||null,body.arrivalDate,body.departureDate,body.roomTypeId,rate,body.notes||"",now,now),env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'ADD_ROOMING_ENTRY', 'rooming_list_entry', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,entryId,JSON.stringify({blockId:body.blockId,firstName:body.firstName,lastName:body.lastName,roomTypeId:body.roomTypeId}),now)]; if(idempotencyKey)statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)); await env.DB.batch(statements);
+    } else if (body.action === "pickup_rooming_entry") {
+      const entry=await env.DB.prepare("SELECT rl.*,bb.code block_code,bb.status block_status FROM rooming_list_entries rl JOIN business_blocks bb ON bb.id=rl.block_id WHERE rl.id=?").bind(body.entryId).first<Record<string,unknown>>(); if(!entry||entry.status!=="PENDING"||!["TENTATIVE","DEFINITE"].includes(String(entry.block_status))) return Response.json({error:"이미 픽업됐거나 픽업할 수 없는 rooming list 항목입니다."},{status:409});
+      const reservationId=crypto.randomUUID(),guestId=crypto.randomUUID(),confirmation=`SEL-${String(entry.arrival_date).replaceAll("-","").slice(2)}-${Math.floor(1000+Math.random()*9000)}`,stayDates=datesBetween(String(entry.arrival_date),String(entry.departure_date)); const statements:D1PreparedStatement[]=[
+        env.DB.prepare("INSERT INTO guests VALUES (?, 'prop-seoul', ?, ?, ?, ?, 'NONE', 'KR', '[]', ?)").bind(guestId,String(entry.first_name),String(entry.last_name),entry.email??null,entry.phone??null,now),
+        env.DB.prepare("INSERT INTO reservations VALUES (?, ?, 'prop-seoul', ?, ?, NULL, ?, ?, 'DUE_IN', 1, 0, 'Group', ?, ?, NULL, ?, 1, ?, ?)").bind(reservationId,confirmation,guestId,String(entry.room_type_id),String(entry.arrival_date),String(entry.departure_date),String(entry.block_code),Number(entry.rate),`Block ${entry.block_code} · Rooming list`,now,now),
+      ];
+      for(const stayDate of stayDates){statements.push(env.DB.prepare("INSERT INTO block_pickup_nights(property_id,block_id,rooming_entry_id,room_type_id,stay_date,created_at) VALUES ('prop-seoul',?,?,?,?,?)").bind(String(entry.block_id),String(entry.id),String(entry.room_type_id),stayDate,now));statements.push(env.DB.prepare("INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES ('prop-seoul',?,?,?)").bind(reservationId,String(entry.room_type_id),stayDate));}
+      statements.push(env.DB.prepare("UPDATE rooming_list_entries SET status='PICKED_UP',reservation_id=?,version=version+1,updated_at=? WHERE id=? AND status='PENDING'").bind(reservationId,now,String(entry.id))); statements.push(env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'PICKUP_ROOMING_ENTRY', 'rooming_list_entry', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(entry.id),JSON.stringify(entry),JSON.stringify({status:"PICKED_UP",reservationId,confirmation}),now)); statements.push(env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'block.reservation_picked_up', 'business_block', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),String(entry.block_id),JSON.stringify({blockId:entry.block_id,entryId:entry.id,reservationId,confirmation}),now)); if(idempotencyKey)statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)); await env.DB.batch(statements);
+    } else if (body.action === "cutoff_block") {
+      const block=await env.DB.prepare("SELECT * FROM business_blocks WHERE id=? AND status IN ('TENTATIVE','DEFINITE')").bind(body.blockId).first<Record<string,unknown>>(); if(!block)return Response.json({error:"마감 가능한 블록을 찾지 못했습니다."},{status:409}); const statements:D1PreparedStatement[]=[env.DB.prepare("UPDATE block_inventory SET current_rooms=picked_up,version=version+1,updated_at=? WHERE block_id=?").bind(now,body.blockId),env.DB.prepare("UPDATE business_blocks SET status='CUTOFF',cutoff_processed_at=?,version=version+1,updated_at=? WHERE id=? AND status IN ('TENTATIVE','DEFINITE')").bind(now,now,body.blockId),env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CUTOFF_BLOCK', 'business_block', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,body.blockId,JSON.stringify(block),JSON.stringify({status:"CUTOFF"}),now),env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'block.cutoff', 'business_block', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),body.blockId,JSON.stringify({blockId:body.blockId}),now)];if(idempotencyKey)statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now));await env.DB.batch(statements);
     } else if (body.action === "open_cashier") {
       const property = await env.DB.prepare("SELECT business_date FROM properties WHERE id='prop-seoul'").first<{business_date:string}>();
       const openingAmount = Number(body.openingAmount || 0); if (!Number.isFinite(openingAmount) || openingAmount < 0) return Response.json({error:"시재금은 0원 이상이어야 합니다."},{status:400});
@@ -404,14 +488,16 @@ export async function POST(request: Request) {
       const controls = await operationalControls(env.DB,businessDate,actor);
       if (!controls.canClose) return Response.json({error:"영업일 마감 선행조건이 충족되지 않았습니다.",blockers:controls.blockers},{status:409});
       const stays = await env.DB.prepare("SELECT r.id, r.room_id, r.nightly_rate FROM reservations r WHERE r.property_id='prop-seoul' AND r.status='IN_HOUSE' AND r.arrival_date<=? AND r.departure_date>? AND NOT EXISTS (SELECT 1 FROM folio_entries f WHERE f.reservation_id=r.id AND f.business_date=? AND f.kind='CHARGE' AND f.code='ROOM')").bind(businessDate,businessDate,businessDate).all<{id:string;room_id:string;nightly_rate:number}>();
+      const cutoffBlocks=await env.DB.prepare("SELECT id FROM business_blocks WHERE property_id='prop-seoul' AND status IN ('TENTATIVE','DEFINITE') AND cutoff_date IS NOT NULL AND cutoff_date<=?").bind(businessDate).all<{id:string}>();
       const next = new Date(`${businessDate}T00:00:00Z`); next.setUTCDate(next.getUTCDate()+1); const nextDate=next.toISOString().slice(0,10); const auditId=crypto.randomUUID();
-      const statements = [env.DB.prepare("INSERT INTO night_audits VALUES (?, 'prop-seoul', ?, 'COMPLETED', '[]', ?, ?, ?, ?)").bind(auditId,businessDate,JSON.stringify({roomPostings:stays.results.length,nextBusinessDate:nextDate}),now,now,actor)];
+      const statements = [env.DB.prepare("INSERT INTO night_audits VALUES (?, 'prop-seoul', ?, 'COMPLETED', '[]', ?, ?, ?, ?)").bind(auditId,businessDate,JSON.stringify({roomPostings:stays.results.length,blockCutoffs:cutoffBlocks.results.length,nextBusinessDate:nextDate}),now,now,actor)];
       for (const stay of stays.results) {
         statements.push(env.DB.prepare("INSERT INTO folio_entries VALUES (?, 'prop-seoul', ?, 'CHARGE', 'ROOM', '객실료 자동 전기', ?, NULL, ?, ?, 'night-audit', NULL)").bind(crypto.randomUUID(),stay.id,stay.nightly_rate,businessDate,now));
         if (stay.room_id) statements.push(env.DB.prepare("INSERT INTO housekeeping_tasks VALUES (?, 'prop-seoul', ?, ?, 'PENDING', 2, NULL, '스테이오버 객실', ?)").bind(crypto.randomUUID(),stay.room_id,nextDate,now));
       }
+      for(const block of cutoffBlocks.results){statements.push(env.DB.prepare("UPDATE block_inventory SET current_rooms=picked_up,version=version+1,updated_at=? WHERE block_id=?").bind(now,block.id));statements.push(env.DB.prepare("UPDATE business_blocks SET status='CUTOFF',cutoff_processed_at=?,version=version+1,updated_at=? WHERE id=?").bind(now,now,block.id));statements.push(env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'block.cutoff', 'business_block', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),block.id,JSON.stringify({blockId:block.id,automatic:true,businessDate}),now));}
       statements.push(env.DB.prepare("UPDATE properties SET business_date=? WHERE id='prop-seoul' AND business_date=?").bind(nextDate,businessDate));
-      statements.push(env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CLOSE_BUSINESS_DATE', 'night_audit', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,auditId,JSON.stringify({businessDate}),JSON.stringify({nextDate,roomPostings:stays.results.length}),now));
+      statements.push(env.DB.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CLOSE_BUSINESS_DATE', 'night_audit', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,auditId,JSON.stringify({businessDate}),JSON.stringify({nextDate,roomPostings:stays.results.length,blockCutoffs:cutoffBlocks.results.length}),now));
       statements.push(env.DB.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'business_date.closed', 'night_audit', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),auditId,JSON.stringify({businessDate,nextDate}),now));
       if (idempotencyKey) statements.push(env.DB.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now));
       await env.DB.batch(statements);
@@ -496,6 +582,11 @@ export async function POST(request: Request) {
     if (message.includes("room type sold out")) return Response.json({error:"선택한 객실 타입은 해당 날짜에 판매 가능한 재고가 없습니다."},{status:409});
     if (message.includes("room type closed")) return Response.json({error:"선택한 객실 타입은 해당 날짜에 판매가 마감되었습니다."},{status:409});
     if (message.includes("reservation_type_night_uq")) return Response.json({error:"예약의 날짜별 재고가 이미 반영되어 있습니다."},{status:409});
+    if (message.includes("block inventory sold out")) return Response.json({error:"블록 할당이 하우스 가용 재고를 초과합니다."},{status:409});
+    if (message.includes("block allocation exhausted")) return Response.json({error:"선택한 날짜의 블록 가용 객실이 모두 픽업되었습니다."},{status:409});
+    if (message.includes("block_pickup_entry_date_uq") || message.includes("block_pickup_nights.rooming_entry_id")) return Response.json({error:"다른 작업자가 이미 이 rooming list 항목을 픽업했습니다."},{status:409});
+    if (message.includes("business_block_code_uq") || message.includes("business_blocks.property_id")) return Response.json({error:"이미 사용 중인 블록 코드입니다."},{status:409});
+    if (message.includes("account_profile_external_uq") || message.includes("account_profiles.property_id")) return Response.json({error:"같은 유형과 외부 ID의 프로필이 이미 있습니다."},{status:409});
     return Response.json({error:message},{status:500});
   }
 }

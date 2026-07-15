@@ -43,6 +43,13 @@
       "when": 1784121113008,
       "tag": "0005_normal_frightful_four",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1784122709390,
+      "tag": "0006_quiet_wasp",
+      "breakpoints": true
     }
   ]
 }

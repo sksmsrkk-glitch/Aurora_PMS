@@ -16,5 +16,7 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(page, /캐셔 개시/); assert.match(page, /객실료 전기 및 영업일 마감/);
   assert.match(route, /reservation_type_nights_capacity/); assert.match(route, /edit_reservation/); assert.match(route, /move_room/); assert.match(route, /update_inventory_control/);
   assert.match(page, /재고 & 요금/); assert.match(page, /예약 수정/); assert.match(page, /룸 무브/); assert.match(page, /판매 제어/);
+  assert.match(route, /business_blocks/); assert.match(route, /block_inventory_capacity_insert/); assert.match(route, /pickup_rooming_entry/); assert.match(route, /cutoff_block/);
+  assert.match(page, /그룹 & 세일즈/); assert.match(page, /비즈니스 블록/); assert.match(page, /Rooming List/); assert.match(page, /세일즈 프로필 생성/);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
 });
