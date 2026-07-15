@@ -22,6 +22,9 @@ export const reservations = sqliteTable("reservations", {
 export const reservationNights = sqliteTable("reservation_nights", {
   id: integer("id").primaryKey({ autoIncrement: true }), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), roomId: text("room_id").notNull(), stayDate: text("stay_date").notNull(),
 }, (t) => [uniqueIndex("room_night_uq").on(t.propertyId, t.roomId, t.stayDate)]);
+export const reservationTypeNights = sqliteTable("reservation_type_nights", {
+  id: integer("id").primaryKey({ autoIncrement: true }), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), roomTypeId: text("room_type_id").notNull(), stayDate: text("stay_date").notNull(),
+}, (t) => [uniqueIndex("reservation_type_night_uq").on(t.reservationId, t.stayDate), index("type_night_inventory_idx").on(t.propertyId, t.roomTypeId, t.stayDate)]);
 export const folioEntries = sqliteTable("folio_entries", {
   id: text("id").primaryKey(), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), kind: text("kind").notNull(), code: text("code").notNull(), description: text("description").notNull(), amount: real("amount").notNull(), paymentMethod: text("payment_method"), businessDate: text("business_date").notNull(), createdAt: text("created_at").notNull(), createdBy: text("created_by").notNull(), reversesEntryId: text("reverses_entry_id"),
 }, (t) => [index("folio_reservation_idx").on(t.reservationId, t.createdAt)]);
@@ -49,3 +52,12 @@ export const nightAudits = sqliteTable("night_audits", {
 export const reservationTransitions = sqliteTable("reservation_transitions", {
   id: text("id").primaryKey(), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), fromStatus: text("from_status").notNull(), toStatus: text("to_status").notNull(), actor: text("actor").notNull(), createdAt: text("created_at").notNull(),
 }, (t) => [uniqueIndex("reservation_transition_from_uq").on(t.propertyId, t.reservationId, t.fromStatus)]);
+export const reservationMutations = sqliteTable("reservation_mutations", {
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), expectedVersion: integer("expected_version").notNull(), kind: text("kind").notNull(), actor: text("actor").notNull(), createdAt: text("created_at").notNull(),
+}, (t) => [uniqueIndex("reservation_mutation_version_uq").on(t.propertyId, t.reservationId, t.expectedVersion)]);
+export const inventoryControls = sqliteTable("inventory_controls", {
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), roomTypeId: text("room_type_id").notNull(), stayDate: text("stay_date").notNull(), sellLimit: integer("sell_limit"), closed: integer("closed", { mode:"boolean" }).notNull().default(false), minStay: integer("min_stay").notNull().default(1), closeToArrival: integer("close_to_arrival", { mode:"boolean" }).notNull().default(false), closeToDeparture: integer("close_to_departure", { mode:"boolean" }).notNull().default(false), priceOverride: real("price_override"), updatedAt: text("updated_at").notNull(), updatedBy: text("updated_by").notNull(),
+}, (t) => [uniqueIndex("inventory_control_type_date_uq").on(t.propertyId, t.roomTypeId, t.stayDate), index("inventory_control_calendar_idx").on(t.propertyId, t.stayDate)]);
+export const roomMoves = sqliteTable("room_moves", {
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), fromRoomId: text("from_room_id"), toRoomId: text("to_room_id").notNull(), moveDate: text("move_date").notNull(), reason: text("reason").notNull(), notes: text("notes").notNull().default(""), actor: text("actor").notNull(), createdAt: text("created_at").notNull(),
+}, (t) => [index("room_move_reservation_idx").on(t.propertyId, t.reservationId, t.createdAt)]);

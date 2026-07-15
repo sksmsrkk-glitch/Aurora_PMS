@@ -6,7 +6,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 async function database() {
   const db = new DatabaseSync(":memory:");
-  for (const name of ["0000_brief_bill_hollister.sql", "0001_aspiring_sentry.sql", "0002_mixed_kang.sql", "0003_financial_integrity.sql", "0004_married_guardsmen.sql"]) {
+  for (const name of ["0000_brief_bill_hollister.sql", "0001_aspiring_sentry.sql", "0002_mixed_kang.sql", "0003_financial_integrity.sql", "0004_married_guardsmen.sql", "0005_normal_frightful_four.sql"]) {
     const sql = await readFile(new URL(`drizzle/${name}`, root), "utf8");
     for (const statement of sql.split("--> statement-breakpoint").map(x => x.trim()).filter(Boolean)) db.exec(statement);
   }
@@ -64,5 +64,29 @@ test("only one worker can consume a reservation state transition", async () => {
   insert.run("t1","p1","r1","DUE_IN","IN_HOUSE","frontdesk-a","2026-08-01T10:00:00Z");
   assert.throws(() => insert.run("t2","p1","r1","DUE_IN","NO_SHOW","frontdesk-b","2026-08-01T10:00:00Z"), /UNIQUE constraint failed/);
   insert.run("t3","p1","r1","IN_HOUSE","CHECKED_OUT","frontdesk-b","2026-08-02T10:00:00Z");
+  db.close();
+});
+
+test("room-type night inventory prevents overbooking and releases atomically", async () => {
+  const db = await database();
+  const room = db.prepare("INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,version) VALUES (?,?,?,?,?,?,?,?,?)");
+  room.run("room-1","p1","rt1","101",1,"VACANT","CLEAN","[]",1);
+  room.run("room-2","p1","rt1","102",1,"VACANT","CLEAN","[]",1);
+  const night = db.prepare("INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES (?,?,?,?)");
+  night.run("p1","r1","rt1","2026-08-01"); night.run("p1","r2","rt1","2026-08-01");
+  assert.throws(() => night.run("p1","r3","rt1","2026-08-01"), /room type sold out/);
+  db.prepare("DELETE FROM reservation_type_nights WHERE reservation_id='r1'").run();
+  night.run("p1","r3","rt1","2026-08-01");
+  db.close();
+});
+
+test("closed inventory rejects arrivals and stale reservation versions lose", async () => {
+  const db = await database();
+  db.prepare("INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,version) VALUES (?,?,?,?,?,?,?,?,?)").run("room-1","p1","rt1","101",1,"VACANT","CLEAN","[]",1);
+  db.prepare("INSERT INTO inventory_controls(id,property_id,room_type_id,stay_date,sell_limit,closed,min_stay,close_to_arrival,close_to_departure,price_override,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run("i1","p1","rt1","2026-08-01",1,1,1,0,0,220000,"2026-07-01","revenue");
+  assert.throws(() => db.prepare("INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES (?,?,?,?)").run("p1","r1","rt1","2026-08-01"), /room type closed/);
+  const mutation=db.prepare("INSERT INTO reservation_mutations(id,property_id,reservation_id,expected_version,kind,actor,created_at) VALUES (?,?,?,?,?,?,?)");
+  mutation.run("m1","p1","r1",4,"EDIT","agent-a","2026-08-01T00:00:00Z");
+  assert.throws(() => mutation.run("m2","p1","r1",4,"ASSIGN_ROOM","agent-b","2026-08-01T00:00:01Z"), /UNIQUE constraint failed/);
   db.close();
 });

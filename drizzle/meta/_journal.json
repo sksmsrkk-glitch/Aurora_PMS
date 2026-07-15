@@ -36,6 +36,13 @@
       "when": 1784120145749,
       "tag": "0004_married_guardsmen",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784121113008,
+      "tag": "0005_normal_frightful_four",
+      "breakpoints": true
     }
   ]
 }
