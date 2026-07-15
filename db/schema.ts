@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const properties = sqliteTable("properties", {
@@ -36,3 +37,15 @@ export const outboxEvents = sqliteTable("outbox_events", {
 export const idempotencyKeys = sqliteTable("idempotency_keys", {
   key: text("key").primaryKey(), propertyId: text("property_id").notNull(), action: text("action").notNull(), actor: text("actor").notNull(), createdAt: text("created_at").notNull(),
 });
+export const roleAssignments = sqliteTable("role_assignments", {
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), email: text("email").notNull(), role: text("role").notNull(), active: integer("active", { mode: "boolean" }).notNull().default(true), createdAt: text("created_at").notNull(),
+}, (t) => [uniqueIndex("role_property_email_uq").on(t.propertyId, t.email)]);
+export const cashierSessions = sqliteTable("cashier_sessions", {
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), actor: text("actor").notNull(), businessDate: text("business_date").notNull(), status: text("status").notNull(), openingAmount: real("opening_amount").notNull(), expectedAmount: real("expected_amount"), countedAmount: real("counted_amount"), variance: real("variance"), openedAt: text("opened_at").notNull(), closedAt: text("closed_at"),
+}, (t) => [index("cashier_open_idx").on(t.propertyId, t.status, t.actor), uniqueIndex("cashier_actor_open_uq").on(t.propertyId,t.actor).where(sql`${t.status} = 'OPEN'`)]);
+export const nightAudits = sqliteTable("night_audits", {
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), businessDate: text("business_date").notNull(), status: text("status").notNull(), blockersJson: text("blockers_json").notNull(), summaryJson: text("summary_json"), startedAt: text("started_at").notNull(), completedAt: text("completed_at"), completedBy: text("completed_by"),
+}, (t) => [uniqueIndex("night_audit_property_date_uq").on(t.propertyId, t.businessDate)]);
+export const reservationTransitions = sqliteTable("reservation_transitions", {
+  id: text("id").primaryKey(), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), fromStatus: text("from_status").notNull(), toStatus: text("to_status").notNull(), actor: text("actor").notNull(), createdAt: text("created_at").notNull(),
+}, (t) => [uniqueIndex("reservation_transition_from_uq").on(t.propertyId, t.reservationId, t.fromStatus)]);
