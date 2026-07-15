@@ -87,7 +87,7 @@ async function initialize(db: D1) {
   catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
   const now = new Date().toISOString();
   await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", now).run();
-  if (propertyExists) { await backfillLegacyNights(db,now); return; }
+  if (propertyExists) { await ensureInventoryTriggers(db,now); await backfillLegacyNights(db,now); return; }
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
     db.prepare("INSERT OR IGNORE INTO room_types VALUES (?, ?, ?, ?, ?, ?)").bind("rt-dlx", "prop-seoul", "DLX", "디럭스 킹", 198000, 2),
@@ -114,12 +114,21 @@ async function initialize(db: D1) {
     }
   }
   if (nightStatements.length) await db.batch(nightStatements);
-  await db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-night-backfill-v1','prop-seoul','SYSTEM_BACKFILL','system',?)").bind(now).run();
+  await db.batch([
+    db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-night-backfill-v1','prop-seoul','SYSTEM_BACKFILL','system',?)").bind(now),
+    db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now),
+  ]);
   await db.batch([
     db.prepare("INSERT INTO folio_entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind("fe1","prop-seoul","r3","CHARGE","ROOM","객실료",198000,null,"2026-07-14",now,"night-audit",null),
     db.prepare("INSERT INTO housekeeping_tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind("hk102","prop-seoul","room-102","2026-07-15","IN_PROGRESS",1,"이지은","우선 정비",now),
     db.prepare("INSERT INTO housekeeping_tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind("hk203","prop-seoul","room-203","2026-07-15","PENDING",2,null,"",now),
   ]);
+}
+
+async function ensureInventoryTriggers(db:D1, now:string) {
+  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:inventory-triggers-v1'").first(); if(marker) return;
+  const triggerSql=schema.filter(sql=>sql.includes("reservation_type_nights_capacity")||sql.includes("inventory_controls_validate_"));
+  await db.batch([...triggerSql.map(sql=>db.prepare(sql)),db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now)]);
 }
 
 async function backfillLegacyNights(db:D1, now:string) {
