@@ -6,7 +6,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 async function database() {
   const db = new DatabaseSync(":memory:");
-  for (const name of ["0000_brief_bill_hollister.sql", "0001_aspiring_sentry.sql", "0002_mixed_kang.sql", "0003_financial_integrity.sql", "0004_married_guardsmen.sql", "0005_normal_frightful_four.sql", "0006_quiet_wasp.sql"]) {
+  for (const name of ["0000_brief_bill_hollister.sql", "0001_aspiring_sentry.sql", "0002_mixed_kang.sql", "0003_financial_integrity.sql", "0004_married_guardsmen.sql", "0005_normal_frightful_four.sql", "0006_quiet_wasp.sql", "0007_overconfident_whizzer.sql"]) {
     const sql = await readFile(new URL(`drizzle/${name}`, root), "utf8");
     for (const statement of sql.split("--> statement-breakpoint").map(x => x.trim()).filter(Boolean)) db.exec(statement);
   }
@@ -29,6 +29,14 @@ async function database() {
   db.exec("CREATE TRIGGER block_pickup_validate BEFORE INSERT ON block_pickup_nights WHEN NOT EXISTS (SELECT 1 FROM block_inventory WHERE block_id=NEW.block_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date AND picked_up<current_rooms) BEGIN SELECT RAISE(ABORT, 'block allocation exhausted'); END");
   db.exec("CREATE TRIGGER block_pickup_increment AFTER INSERT ON block_pickup_nights BEGIN UPDATE block_inventory SET picked_up=picked_up+1 WHERE block_id=NEW.block_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date; END");
   db.exec("CREATE TRIGGER block_pickup_decrement AFTER DELETE ON block_pickup_nights BEGIN UPDATE block_inventory SET picked_up=MAX(0,picked_up-1) WHERE block_id=OLD.block_id AND room_type_id=OLD.room_type_id AND stay_date=OLD.stay_date; END");
+  db.exec("DROP TRIGGER IF EXISTS folio_entries_validate_insert");
+  db.exec("CREATE TRIGGER folio_entries_validate_insert BEFORE INSERT ON folio_entries WHEN NEW.amount<=0 OR NEW.kind NOT IN ('CHARGE','PAYMENT','CHARGE_REVERSAL','PAYMENT_REVERSAL','REFUND') BEGIN SELECT RAISE(ABORT,'invalid folio entry'); END");
+  db.exec("CREATE TRIGGER folio_details_validate_insert BEFORE INSERT ON folio_entry_details WHEN NEW.net_amount<0 OR NEW.tax_amount<0 OR NEW.service_amount<0 OR ABS((NEW.net_amount+NEW.tax_amount+NEW.service_amount)-(SELECT amount FROM folio_entries WHERE id=NEW.entry_id))>0.011 OR NOT EXISTS (SELECT 1 FROM folio_windows WHERE id=NEW.folio_window_id AND reservation_id=NEW.reservation_id AND status='OPEN') BEGIN SELECT RAISE(ABORT,'invalid folio detail'); END");
+  db.exec("CREATE TRIGGER folio_details_no_update BEFORE UPDATE ON folio_entry_details BEGIN SELECT RAISE(ABORT,'folio details are immutable'); END");
+  db.exec("CREATE TRIGGER folio_details_no_delete BEFORE DELETE ON folio_entry_details BEGIN SELECT RAISE(ABORT,'folio details are immutable'); END");
+  db.exec("CREATE TRIGGER ar_ledger_validate_insert BEFORE INSERT ON ar_ledger_entries WHEN NEW.debit<0 OR NEW.credit<0 OR (NEW.debit=0 AND NEW.credit=0) OR (NEW.debit>0 AND NEW.credit>0) BEGIN SELECT RAISE(ABORT,'invalid ar ledger entry'); END");
+  db.exec("CREATE TRIGGER ar_ledger_no_update BEFORE UPDATE ON ar_ledger_entries BEGIN SELECT RAISE(ABORT,'ar ledger entries are immutable'); END");
+  db.exec("CREATE TRIGGER ar_ledger_no_delete BEFORE DELETE ON ar_ledger_entries BEGIN SELECT RAISE(ABORT,'ar ledger entries are immutable'); END");
   return db;
 }
 
@@ -128,4 +136,25 @@ test("deduct blocks hold house inventory and pickup converts hold to reservation
   assert.equal(db.prepare("SELECT picked_up FROM block_inventory WHERE id='bi1'").get().picked_up,1);
   assert.throws(()=>reservationNight.run("p1","direct-3","rt1","2026-08-01"),/room type sold out/);
   db.close();
+});
+
+test("folio split uses append-only reversal and preserves tax totals", async () => {
+  const db=await database(),entry=db.prepare("INSERT INTO folio_entries(id,property_id,reservation_id,kind,code,description,amount,business_date,created_at,created_by,reverses_entry_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)"),detail=db.prepare("INSERT INTO folio_entry_details(entry_id,property_id,reservation_id,folio_window_id,net_amount,tax_amount,service_amount,currency,source_entry_id,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+  db.prepare("INSERT INTO folio_windows(id,property_id,reservation_id,window_no,name,payee_type,status,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?)").run("w1","p1","r1",1,"Guest","GUEST","OPEN","2026-08-01","cashier");
+  db.prepare("INSERT INTO folio_windows(id,property_id,reservation_id,window_no,name,payee_type,status,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?)").run("w2","p1","r1",2,"Company","COMPANY","OPEN","2026-08-01","cashier");
+  entry.run("f1","p1","r1","CHARGE","FNB","Dinner",120000,"2026-08-01","2026-08-01T10:00:00Z","cashier",null); detail.run("f1","p1","r1","w1",100000,10000,10000,"KRW",null,null,"2026-08-01T10:00:00Z");
+  entry.run("f2","p1","r1","CHARGE_REVERSAL","FNB","Split reversal",60000,"2026-08-01","2026-08-01T10:01:00Z","cashier","f1"); detail.run("f2","p1","r1","w1",50000,5000,5000,"KRW","f1","SPLIT","2026-08-01T10:01:00Z");
+  entry.run("f3","p1","r1","CHARGE","FNB","Split repost",60000,"2026-08-01","2026-08-01T10:01:00Z","cashier",null); detail.run("f3","p1","r1","w2",50000,5000,5000,"KRW","f1","SPLIT","2026-08-01T10:01:00Z");
+  const balance=db.prepare("SELECT SUM(CASE kind WHEN 'CHARGE' THEN amount WHEN 'CHARGE_REVERSAL' THEN -amount ELSE 0 END) balance FROM folio_entries WHERE reservation_id='r1'").get().balance,components=db.prepare("SELECT SUM(CASE f.kind WHEN 'CHARGE' THEN d.net_amount+d.tax_amount+d.service_amount WHEN 'CHARGE_REVERSAL' THEN -(d.net_amount+d.tax_amount+d.service_amount) ELSE 0 END) total FROM folio_entries f JOIN folio_entry_details d ON d.entry_id=f.id").get().total;
+  assert.equal(balance,120000);assert.equal(components,120000);assert.throws(()=>db.prepare("UPDATE folio_entry_details SET tax_amount=0 WHERE entry_id='f1'").run(),/folio details are immutable/);db.close();
+});
+
+test("AR transfer keeps guest plus receivable control total and ledger immutable", async () => {
+  const db=await database();
+  db.prepare("INSERT INTO folio_entries(id,property_id,reservation_id,kind,code,description,amount,business_date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)").run("c1","p1","r1","CHARGE","ROOM","Room",220000,"2026-08-01","2026-08-01","audit");
+  db.prepare("INSERT INTO folio_entries(id,property_id,reservation_id,kind,code,description,amount,payment_method,business_date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run("p1","p1","r1","PAYMENT","DIRECT_BILL","AR transfer",220000,"DIRECT_BILL","2026-08-01","2026-08-01","cashier");
+  db.prepare("INSERT INTO ar_accounts(id,property_id,account_profile_id,account_no,name,credit_limit,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").run("ar1","p1","ap1","CORP1","Company",0,"ACTIVE","2026-08-01","2026-08-01");
+  db.prepare("INSERT INTO ar_ledger_entries(id,property_id,ar_account_id,invoice_id,kind,debit,credit,business_date,memo,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run("l1","p1","ar1","i1","INVOICE",220000,0,"2026-08-01","invoice","2026-08-01","cashier");
+  const guest=db.prepare("SELECT SUM(CASE kind WHEN 'CHARGE' THEN amount WHEN 'PAYMENT' THEN -amount ELSE 0 END) balance FROM folio_entries").get().balance,ar=db.prepare("SELECT SUM(debit-credit) balance FROM ar_ledger_entries").get().balance;assert.equal(guest,0);assert.equal(ar,220000);assert.equal(guest+ar,220000);
+  assert.throws(()=>db.prepare("UPDATE ar_ledger_entries SET credit=1 WHERE id='l1'").run(),/ar ledger entries are immutable/);db.close();
 });
