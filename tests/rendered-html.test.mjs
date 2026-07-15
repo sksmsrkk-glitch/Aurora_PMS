@@ -20,5 +20,7 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(page, /그룹 & 세일즈/); assert.match(page, /비즈니스 블록/); assert.match(page, /Rooming List/); assert.match(page, /세일즈 프로필 생성/);
   assert.match(route, /folio_windows/); assert.match(route, /folio_entry_details/); assert.match(route, /split_folio_entry/); assert.match(route, /transfer_to_ar/); assert.match(route, /ar_ledger_no_update/);
   assert.match(page, /폴리오 & AR/); assert.match(page, /전표 분할 이동/); assert.match(page, /AR 청구서/); assert.match(page, /반대전표 생성/);
+  assert.match(route, /channel_connections/); assert.match(route, /ari_updates/); assert.match(route, /ingest_channel_message/); assert.match(route, /replay_channel_message/); assert.match(route, /integration_attempts_no_update/);
+  assert.match(page, /채널 허브/); assert.match(page, /ARI 매핑 & Delta/); assert.match(page, /INBOUND DLQ/); assert.match(page, /Transactional Outbox/);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
 });

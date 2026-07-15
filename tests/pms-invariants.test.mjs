@@ -6,7 +6,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 async function database() {
   const db = new DatabaseSync(":memory:");
-  for (const name of ["0000_brief_bill_hollister.sql", "0001_aspiring_sentry.sql", "0002_mixed_kang.sql", "0003_financial_integrity.sql", "0004_married_guardsmen.sql", "0005_normal_frightful_four.sql", "0006_quiet_wasp.sql", "0007_overconfident_whizzer.sql"]) {
+  for (const name of ["0000_brief_bill_hollister.sql", "0001_aspiring_sentry.sql", "0002_mixed_kang.sql", "0003_financial_integrity.sql", "0004_married_guardsmen.sql", "0005_normal_frightful_four.sql", "0006_quiet_wasp.sql", "0007_overconfident_whizzer.sql", "0008_graceful_bedlam.sql"]) {
     const sql = await readFile(new URL(`drizzle/${name}`, root), "utf8");
     for (const statement of sql.split("--> statement-breakpoint").map(x => x.trim()).filter(Boolean)) db.exec(statement);
   }
@@ -37,6 +37,9 @@ async function database() {
   db.exec("CREATE TRIGGER ar_ledger_validate_insert BEFORE INSERT ON ar_ledger_entries WHEN NEW.debit<0 OR NEW.credit<0 OR (NEW.debit=0 AND NEW.credit=0) OR (NEW.debit>0 AND NEW.credit>0) BEGIN SELECT RAISE(ABORT,'invalid ar ledger entry'); END");
   db.exec("CREATE TRIGGER ar_ledger_no_update BEFORE UPDATE ON ar_ledger_entries BEGIN SELECT RAISE(ABORT,'ar ledger entries are immutable'); END");
   db.exec("CREATE TRIGGER ar_ledger_no_delete BEFORE DELETE ON ar_ledger_entries BEGIN SELECT RAISE(ABORT,'ar ledger entries are immutable'); END");
+  db.exec("CREATE TRIGGER integration_attempts_validate_insert BEFORE INSERT ON integration_delivery_attempts WHEN NEW.attempt_no<1 OR NEW.direction NOT IN ('INBOUND','OUTBOUND') OR NEW.status NOT IN ('ACKED','FAILED') BEGIN SELECT RAISE(ABORT,'invalid integration attempt'); END");
+  db.exec("CREATE TRIGGER integration_attempts_no_update BEFORE UPDATE ON integration_delivery_attempts BEGIN SELECT RAISE(ABORT,'integration attempts are immutable'); END");
+  db.exec("CREATE TRIGGER integration_attempts_no_delete BEFORE DELETE ON integration_delivery_attempts BEGIN SELECT RAISE(ABORT,'integration attempts are immutable'); END");
   return db;
 }
 
@@ -157,4 +160,13 @@ test("AR transfer keeps guest plus receivable control total and ledger immutable
   db.prepare("INSERT INTO ar_ledger_entries(id,property_id,ar_account_id,invoice_id,kind,debit,credit,business_date,memo,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run("l1","p1","ar1","i1","INVOICE",220000,0,"2026-08-01","invoice","2026-08-01","cashier");
   const guest=db.prepare("SELECT SUM(CASE kind WHEN 'CHARGE' THEN amount WHEN 'PAYMENT' THEN -amount ELSE 0 END) balance FROM folio_entries").get().balance,ar=db.prepare("SELECT SUM(debit-credit) balance FROM ar_ledger_entries").get().balance;assert.equal(guest,0);assert.equal(ar,220000);assert.equal(guest+ar,220000);
   assert.throws(()=>db.prepare("UPDATE ar_ledger_entries SET credit=1 WHERE id='l1'").run(),/ar ledger entries are immutable/);db.close();
+});
+
+test("channel messages and ARI revisions are idempotent and delivery attempts immutable", async () => {
+  const db=await database();
+  db.prepare("INSERT INTO channel_connections(id,property_id,provider,external_property_id,name,environment,status,created_at,updated_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)").run("cc1","p1","BOOKING_COM","H1","Sandbox","SANDBOX","ACTIVE","2026-08-01","2026-08-01","admin");
+  db.prepare("INSERT INTO channel_mappings(id,property_id,connection_id,room_type_id,external_room_type_id,rate_plan,external_rate_plan_id,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run("cm1","p1","cc1","rt1","EXT-ROOM","OTA","EXT-BAR",1,"2026-08-01","2026-08-01");
+  const inbound=db.prepare("INSERT INTO inbound_channel_messages(id,property_id,connection_id,provider,message_id,event_type,external_reservation_id,revision,payload_json,status,attempts,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");inbound.run("im1","p1","cc1","BOOKING_COM","MSG-1","NEW","EXT-1",1,"{}","PROCESSED",1,"2026-08-01");assert.throws(()=>inbound.run("im2","p1","cc1","BOOKING_COM","MSG-1","NEW","EXT-1",1,"{}","PENDING",0,"2026-08-01"),/UNIQUE constraint failed/);
+  const ari=db.prepare("INSERT INTO ari_updates(id,property_id,connection_id,mapping_id,stay_date,revision,available,closed,min_stay,close_to_arrival,close_to_departure,rate,currency,payload_json,status,attempts,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");ari.run("a1","p1","cc1","cm1","2026-08-02",1,2,0,1,0,0,220000,"KRW","{}","PENDING",0,"2026-08-01");assert.throws(()=>ari.run("a2","p1","cc1","cm1","2026-08-02",1,1,0,1,0,0,220000,"KRW","{}","PENDING",0,"2026-08-01"),/UNIQUE constraint failed/);
+  db.prepare("INSERT INTO integration_delivery_attempts(id,property_id,direction,provider,aggregate_type,aggregate_id,attempt_no,status,http_status,payload_json,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run("ia1","p1","OUTBOUND","BOOKING_COM","ari_update","a1",1,"ACKED",200,"{}","2026-08-01","system");assert.throws(()=>db.prepare("UPDATE integration_delivery_attempts SET status='FAILED' WHERE id='ia1'").run(),/integration attempts are immutable/);db.close();
 });

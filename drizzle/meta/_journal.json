@@ -57,6 +57,13 @@
       "when": 1784124054140,
       "tag": "0007_overconfident_whizzer",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1784124880304,
+      "tag": "0008_graceful_bedlam",
+      "breakpoints": true
     }
   ]
 }
