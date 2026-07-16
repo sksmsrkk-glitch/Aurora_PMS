@@ -525,6 +525,7 @@ Idempotency-Key: <unique-key>
 - 쓰기 성공 시 snapshot/report cache 무효화
 - 예약, 날짜, 객실 타입, 상태, 채널, 원장 중심 복합 인덱스
 - HTTPS Data API를 통한 serverless Functions 친화적 연결
+- Vercel Functions를 Supabase `ap-south-1`과 가까운 Mumbai `bom1`에 배치해 DB 왕복 지연 최소화
 - `pms_batch` RPC로 다중 statement 원자 실행
 - 최대 200개 report cache entry 유지 및 만료 청소
 - Outbox와 외부 전달 분리
