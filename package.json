@@ -11,13 +11,17 @@
     "start": "vinext start",
     "test": "npm run build && node --test tests/*.test.mjs",
     "benchmark": "node tests/api-benchmark.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work",
+    "db:generate": "drizzle-kit generate",
+    "db:supabase:generate": "node scripts/generate-supabase-migration.mjs",
+    "db:supabase:migrate": "node scripts/migrate-supabase.mjs",
+    "db:supabase:smoke": "node scripts/smoke-supabase.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
     "fflate": "^0.8.2",
     "next": "^16.2.10",
+    "postgres": "^3.4.9",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },

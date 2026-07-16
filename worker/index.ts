@@ -5,6 +5,9 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  DATABASE_URL?: string;
+  SUPABASE_URL?: string;
+  SUPABASE_SECRET_KEY?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
