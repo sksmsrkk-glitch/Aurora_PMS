@@ -57,3 +57,30 @@ test("every rendered button has an action, submit contract, or intentional disab
     assert.deepEqual(inert, [], `inert buttons: ${inert.join(", ")}`);
   }
 });
+
+test("README is a complete architecture, development, and operations handoff", async () => {
+  const readme = await readFile(new URL("README.md", root), "utf8");
+  for (const section of [
+    "## 현재 릴리스 현황",
+    "## 전체 아키텍처",
+    "## 아키텍처 결정 기록",
+    "## 화면 및 기능 명세",
+    "## 마이그레이션 카탈로그",
+    "## API 상세 개발 명세",
+    "## 개발자 가이드",
+    "## 장애 대응 Runbook",
+    "## 프로덕션 전환 전 필수 작업",
+    "## 구현 변경 이력",
+  ]) assert.ok(readme.includes(section), `README section missing: ${section}`);
+  for (const contract of [
+    "bulk_update_inventory_controls",
+    "upsert_channel_contract",
+    "accrue_channel_settlement",
+    "post_accounting_entry",
+    "202607160005_settlement_contract_snapshot.sql",
+    "https://static.toss.im/tps/main.css",
+    "https://aurora-pms-gilt.vercel.app",
+    "PMS_DEMO_USER_EMAIL",
+  ]) assert.ok(readme.includes(contract), `README contract missing: ${contract}`);
+  assert.ok(readme.split("\n").length > 1_000, "README should remain a detailed handoff document");
+});
