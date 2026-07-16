@@ -607,6 +607,9 @@ function AccountingModal({
       }}
     >
       <form
+        role="dialog"
+        aria-modal="true"
+        aria-label={config.title}
         className="booking-modal accounting-modal"
         onSubmit={async (event) => {
           event.preventDefault();

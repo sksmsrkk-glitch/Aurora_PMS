@@ -397,6 +397,9 @@ function BulkInventoryModal({
       }}
     >
       <form
+        role="dialog"
+        aria-modal="true"
+        aria-label="요금 및 재고 편집"
         className="booking-modal inventory-bulk-modal"
         onSubmit={async (event) => {
           event.preventDefault();
