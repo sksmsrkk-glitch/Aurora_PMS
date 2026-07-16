@@ -912,6 +912,7 @@ Idempotency-Key: <unique-key>
 - 동일 사용자 동시 Snapshot 요청 Promise 병합 및 직렬화 결과 재사용
 - `Accept-Encoding: gzip` 클라이언트에는 core/full JSON 직렬화와 gzip 결과를 각각 재사용
 - Supabase asymmetric JWT의 JWKS local verification, access token identity·역할/property 할당 30초 short cache, 동일 검증 in-flight Promise 병합
+- Vercel cold instance의 9개 schema probe·property seed·role seed 확인을 단일 `pms_batch` 왕복으로 병합
 - Report 사용자·필터별 5초 short cache
 - 쓰기 성공 시 snapshot/report cache 무효화
 - 예약, 날짜, 객실 타입, 상태, 채널, 원장 중심 복합 인덱스

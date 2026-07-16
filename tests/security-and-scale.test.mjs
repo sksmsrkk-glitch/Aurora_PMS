@@ -15,6 +15,7 @@ test("Supabase Auth uses verified users and HttpOnly refreshable sessions",async
   assert.match(session,/sameSite:\s*"lax"/);
   assert.match(route,/authenticateSupabaseRequest/);
   assert.match(route,/principalInflight/);
+  assert.match(route,/const results = await db\.batch\(\[/);
   assert.match(route,/process\.env\.NODE_ENV\s*!==\s*"production"/);
   assert.doesNotMatch(route,/bootstrapRole/);
   assert.match(login,/count>=8/);

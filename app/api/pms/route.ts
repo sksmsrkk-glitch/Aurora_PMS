@@ -196,13 +196,14 @@ async function ready(db: D1) {
 }
 
 async function initializePostgres(db: D1) {
-  for (const table of ["properties", "reservation_type_nights", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries"]) {
-    await db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).first();
-  }
-  const property = await db.prepare("SELECT id FROM properties WHERE id='prop-seoul'").first();
+  const tables = ["properties", "reservation_type_nights", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries"];
+  const results = await db.batch([
+    ...tables.map((table)=>db.prepare(`SELECT 1 FROM ${table} LIMIT 1`)),
+    db.prepare("SELECT id FROM properties WHERE id='prop-seoul'"),
+    db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", new Date().toISOString()),
+  ]);
+  const property = results[tables.length]?.results[0];
   if (!property) throw new Error("Supabase PMS schema exists but the property seed is missing.");
-  await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)")
-    .bind("role-local-admin", new Date().toISOString()).run();
 }
 
 async function initialize(db: D1) {
