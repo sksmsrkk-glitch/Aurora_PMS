@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 
 const ACCESS_COOKIE = "aurora-pms-access";
@@ -19,6 +20,8 @@ type AuthSession = {
 };
 
 const identityCache = new Map<string, { expires: number; identity: SupabaseIdentity }>();
+const identityInflight = new Map<string, Promise<SupabaseIdentity | null>>();
+let remoteJwkSet: ReturnType<typeof createRemoteJWKSet> | null = null;
 
 function authConfiguration() {
   const url = process.env.SUPABASE_URL?.replace(/\/$/u, "");
@@ -36,24 +39,74 @@ function identityFromUser(user: Record<string, unknown>): SupabaseIdentity | nul
   return { id, email, displayName: typeof displayName === "string" ? displayName.trim() : email };
 }
 
+function projectJwks() {
+  if (remoteJwkSet) return remoteJwkSet;
+  const { url } = authConfiguration();
+  remoteJwkSet = createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`), {
+    cacheMaxAge: 10 * 60_000,
+    cooldownDuration: 30_000,
+    timeoutDuration: 5_000,
+  });
+  return remoteJwkSet;
+}
+
+async function locallyVerifiedIdentity(accessToken: string) {
+  const { url, secret } = authConfiguration();
+  try {
+    const header = decodeProtectedHeader(accessToken);
+    if (!["ES256", "RS256"].includes(String(header.alg))) return null;
+    const { payload } = await jwtVerify(accessToken, projectJwks(), {
+      issuer: `${url}/auth/v1`,
+      audience: "authenticated",
+      algorithms: ["ES256", "RS256"],
+      clockTolerance: 5,
+    });
+    if (payload.role !== "authenticated" || typeof payload.sub !== "string" || typeof payload.email !== "string") return null;
+    return identityFromUser({ id: payload.sub, email: payload.email, user_metadata: payload.user_metadata });
+  } catch {
+    // A network or key-rotation failure can fall back to Auth's authoritative user endpoint.
+    return remoteVerifiedIdentity(accessToken, url, secret);
+  }
+}
+
+async function remoteVerifiedIdentity(accessToken: string, configuredUrl?: string, configuredSecret?: string) {
+  const configuration = configuredUrl && configuredSecret ? { url: configuredUrl, secret: configuredSecret } : authConfiguration();
+  const response = await fetch(`${configuration.url}/auth/v1/user`, {
+    headers: { apikey: configuration.secret, authorization: `Bearer ${accessToken}`, "x-client-info": "aurora-pms/1.0" },
+    cache: "no-store",
+  });
+  if (!response.ok) return null;
+  return identityFromUser(await response.json() as Record<string, unknown>);
+}
+
+async function resolvedIdentity(accessToken: string) {
+  try {
+    const header = decodeProtectedHeader(accessToken);
+    if (["ES256", "RS256"].includes(String(header.alg))) return locallyVerifiedIdentity(accessToken);
+  } catch { return null; }
+  return remoteVerifiedIdentity(accessToken);
+}
+
 async function userForAccessToken(accessToken: string) {
   const cacheKey = createHash("sha256").update(accessToken).digest("base64url");
   const cached = identityCache.get(cacheKey);
   const now = Date.now();
   if (cached && cached.expires > now) return cached.identity;
+  const inflight = identityInflight.get(cacheKey);
+  if (inflight) return inflight;
   if (identityCache.size > 500) {
     for (const [key, value] of identityCache) if (value.expires <= now) identityCache.delete(key);
     if (identityCache.size > 500) identityCache.clear();
   }
-  const { url, secret } = authConfiguration();
-  const response = await fetch(`${url}/auth/v1/user`, {
-    headers: { apikey: secret, authorization: `Bearer ${accessToken}`, "x-client-info": "aurora-pms/1.0" },
-    cache: "no-store",
-  });
-  if (!response.ok) return null;
-  const identity = identityFromUser(await response.json() as Record<string, unknown>);
-  if (identity) identityCache.set(cacheKey, { expires: now + TOKEN_CACHE_TTL_MS, identity });
-  return identity;
+  const verification = resolvedIdentity(accessToken);
+  identityInflight.set(cacheKey, verification);
+  try {
+    const identity = await verification;
+    if (identity) identityCache.set(cacheKey, { expires: now + TOKEN_CACHE_TTL_MS, identity });
+    return identity;
+  } finally {
+    identityInflight.delete(cacheKey);
+  }
 }
 
 async function refreshSession(refreshToken: string) {

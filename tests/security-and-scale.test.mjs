@@ -7,10 +7,14 @@ const read=(path)=>readFile(new URL(`../${path}`,import.meta.url),"utf8");
 test("Supabase Auth uses verified users and HttpOnly refreshable sessions",async()=>{
   const [session,route,login]=await Promise.all([read("app/supabase-session.ts"),read("app/api/pms/route.ts"),read("app/api/auth/login/route.ts")]);
   assert.match(session,/\/auth\/v1\/user/);
+  assert.match(session,/createRemoteJWKSet/);
+  assert.match(session,/jwtVerify/);
+  assert.match(session,/identityInflight/);
   assert.match(session,/grant_type=refresh_token/);
   assert.match(session,/httpOnly:\s*true/);
   assert.match(session,/sameSite:\s*"lax"/);
   assert.match(route,/authenticateSupabaseRequest/);
+  assert.match(route,/principalInflight/);
   assert.match(route,/process\.env\.NODE_ENV\s*!==\s*"production"/);
   assert.doesNotMatch(route,/bootstrapRole/);
   assert.match(login,/count>=8/);

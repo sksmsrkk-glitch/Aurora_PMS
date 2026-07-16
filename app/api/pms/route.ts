@@ -336,6 +336,7 @@ function decodedDisplayName(request: Request, email: string) {
 }
 
 const principalCache = new Map<string,{expires:number;role:Role;propertyId:string}>();
+const principalInflight = new Map<string,Promise<{role:Role;propertyId:string}|null>>();
 
 async function principalFor(request: Request, db: D1): Promise<Principal | null> {
   const url = new URL(request.url), identity = await authenticateSupabaseRequest(request);
@@ -351,10 +352,18 @@ async function principalFor(request: Request, db: D1): Promise<Principal | null>
   const cacheKey = `${email}:${requestedProperty || "default"}`, cached=principalCache.get(cacheKey),now=Date.now();
   if(cached&&cached.expires>now)return {email,displayName:displayName||email,role:cached.role,capabilities:roleCapabilities[cached.role],propertyId:cached.propertyId};
   if(principalCache.size>500){for(const [key,item] of principalCache)if(item.expires<=now)principalCache.delete(key);if(principalCache.size>500)principalCache.clear();}
-  const assignments = await db.prepare("SELECT property_id,role FROM role_assignments WHERE email=? AND active=1 ORDER BY created_at").bind(email).all<{property_id:string;role:Role}>();
-  const assignment = requestedProperty ? assignments.results.find((item)=>item.property_id===requestedProperty) : assignments.results[0];
-  if (!assignment || !roleCapabilities[assignment.role]) return null;
-  const role = assignment.role, propertyId = assignment.property_id;
+  let assignmentPromise=principalInflight.get(cacheKey);
+  if(!assignmentPromise){
+    assignmentPromise=db.prepare("SELECT property_id,role FROM role_assignments WHERE email=? AND active=1 ORDER BY created_at").bind(email).all<{property_id:string;role:Role}>().then((assignments)=>{
+      const assignment=requestedProperty?assignments.results.find((item)=>item.property_id===requestedProperty):assignments.results[0];
+      return assignment&&roleCapabilities[assignment.role]?{role:assignment.role,propertyId:assignment.property_id}:null;
+    });
+    principalInflight.set(cacheKey,assignmentPromise);
+  }
+  let assignment:{role:Role;propertyId:string}|null;
+  try{assignment=await assignmentPromise;}finally{if(principalInflight.get(cacheKey)===assignmentPromise)principalInflight.delete(cacheKey);}
+  if (!assignment) return null;
+  const { role, propertyId } = assignment;
   principalCache.set(cacheKey,{expires:now+30_000,role,propertyId});
   return { email, displayName: displayName||decodedDisplayName(request, email), role, capabilities: roleCapabilities[role], propertyId };
 }
