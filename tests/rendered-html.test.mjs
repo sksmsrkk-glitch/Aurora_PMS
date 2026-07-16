@@ -5,11 +5,11 @@ import ts from "typescript";
 
 const root = new URL("../", import.meta.url);
 test("PMS product shell replaces the starter", async () => {
-  const [page, layout, css, route, hosting, reporting, workbook, roomMaster, inventory, accounting, contracts, extended, dialogController] = await Promise.all([
+  const [page, layout, css, route, hosting, reporting, workbook, roomMaster, inventory, accounting, contracts, extended, dialogController, brandMark] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"), readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"), readFile(new URL("app/api/pms/route.ts", root), "utf8"), readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("app/api/pms/reporting.ts", root), "utf8"), readFile(new URL("app/xlsx-export.ts", root), "utf8"), readFile(new URL("app/room-master.tsx", root), "utf8"),
-    readFile(new URL("app/inventory-calendar.tsx",root),"utf8"),readFile(new URL("app/accounting-center.tsx",root),"utf8"),readFile(new URL("app/channel-contracts.tsx",root),"utf8"),readFile(new URL("app/api/pms/extended.ts",root),"utf8"),readFile(new URL("app/dialog-controller.ts",root),"utf8"),
+    readFile(new URL("app/inventory-calendar.tsx",root),"utf8"),readFile(new URL("app/accounting-center.tsx",root),"utf8"),readFile(new URL("app/channel-contracts.tsx",root),"utf8"),readFile(new URL("app/api/pms/extended.ts",root),"utf8"),readFile(new URL("app/dialog-controller.ts",root),"utf8"),readFile(new URL("public/brand/aurora-mark-192.png",root)),
   ]);
   assert.match(layout, /Aurora PMS/); assert.match(layout, /lang="ko"/); assert.match(layout, /https:\/\/static\.toss\.im\/tps\/main\.css/);
   assert.match(page, /오늘의 오퍼레이션/); assert.match(page, /체크인 완료/); assert.match(page, /야간 감사/); assert.match(page, /새 예약 만들기/);
@@ -39,6 +39,7 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(dialogController,/MutationObserver/);assert.match(dialogController,/event\.key === "Escape"/);assert.match(dialogController,/focusableSelector/);assert.match(dialogController,/dialog-open/);
   assert.match(css,/\.dialog-open/);assert.match(css,/min-height:44px/);assert.match(css,/safe-area-inset-bottom/);assert.match(css,/\.modal-backdrop,\.drawer-backdrop\{align-items:flex-end/);assert.match(css,/\.app-shell\{grid-template-columns:minmax\(0,1fr\);min-width:0\}/);
   assert.match(roomMaster,/aria-modal="true"/);assert.match(inventory,/aria-label="요금 및 재고 편집"/);assert.match(accounting,/aria-label=\{config\.title\}/);assert.match(contracts,/aria-label="채널 계약 편집"/);
+  assert.match(page,/\/brand\/aurora-mark-192\.png/);assert.match(page,/mobile-brand/);assert.match(page,/AURORA PMS/);assert.match(layout,/aurora-mark-64\.png/);assert.match(css,/Aurora PMS generated brand mark/);assert.deepEqual([...brandMark.subarray(0,8)],[137,80,78,71,13,10,26,10]);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
 });
 
