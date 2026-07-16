@@ -11,7 +11,7 @@ test("PMS product shell replaces the starter", async () => {
     readFile(new URL("app/api/pms/reporting.ts", root), "utf8"), readFile(new URL("app/xlsx-export.ts", root), "utf8"), readFile(new URL("app/room-master.tsx", root), "utf8"),
     readFile(new URL("app/inventory-calendar.tsx",root),"utf8"),readFile(new URL("app/accounting-center.tsx",root),"utf8"),readFile(new URL("app/channel-contracts.tsx",root),"utf8"),readFile(new URL("app/api/pms/extended.ts",root),"utf8"),
   ]);
-  assert.match(layout, /Aurora PMS/); assert.match(layout, /lang="ko"/);
+  assert.match(layout, /Aurora PMS/); assert.match(layout, /lang="ko"/); assert.match(layout, /https:\/\/static\.toss\.im\/tps\/main\.css/);
   assert.match(page, /오늘의 오퍼레이션/); assert.match(page, /체크인 완료/); assert.match(page, /야간 감사/); assert.match(page, /새 예약 만들기/);
   assert.match(css, /\.room-grid/); assert.match(css, /@media\(max-width:760px\)/);
   assert.match(route, /room_night_uq/); assert.match(route, /audit_logs/); assert.match(route, /idempotency_keys/); assert.match(route, /outbox_events/); assert.match(hosting, /"d1": "DB"/);
@@ -29,7 +29,7 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(reporting,/점유율 · ADR · RevPAR/);assert.match(reporting,/최대 367일/);assert.match(reporting,/integration_delivery_attempts/);assert.match(roomMaster,/최대 500실/);
   assert.match(workbook,/openxmlformats-officedocument\.spreadsheetml\.sheet/);assert.match(workbook,/Parameters/);assert.match(workbook,/autoFilter/);assert.doesNotMatch(workbook,/from "xlsx"/);
   assert.match(page,/quickPanel/);assert.match(page,/frontdeskFilter/);assert.match(page,/Cmd\/Ctrl|metaKey\|\|event\.ctrlKey/);assert.match(page,/aria-pressed/);assert.match(page,/onReview/);
-  assert.match(css,/Aurora Flow UI/);assert.match(css,/#3182f6/i);assert.match(css,/Toss Product Sans/);assert.match(css,/prefers-reduced-motion/);assert.match(css,/focus-visible/);
+  assert.match(css,/Aurora Flow UI/);assert.match(css,/#3182f6/i);assert.match(css,/Toss Product Sans/);assert.match(css,/html,body,body \*\{font-family:var\(--aurora-font-product\)!important\}/);assert.match(css,/prefers-reduced-motion/);assert.match(css,/focus-visible/);
   assert.match(route,/PMS_DEMO_USER_EMAIL/);assert.match(route,/runtimeBindings/);assert.doesNotMatch(route,/cloudflare:workers/);
   assert.match(inventory,/최대 730일|730일까지/);assert.match(inventory,/기간 벌크 요금·재고/);assert.match(inventory,/호텔 입금가/);
   assert.match(accounting,/회계 & 손익/);assert.match(accounting,/복식부기 분개장/);assert.match(accounting,/채널 정산 원장/);
