@@ -21,6 +21,20 @@ export interface PmsDatabase {
   batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]): Promise<PmsResult<T>[]>;
 }
 
+export function scopePmsDatabase(database: PmsDatabase, propertyId: string): PmsDatabase {
+  if (!/^[A-Za-z0-9_-]{1,64}$/u.test(propertyId)) throw new Error("Invalid property scope");
+  const quotedPropertyId = `'${propertyId}'`;
+  return {
+    dialect: database.dialect,
+    prepare(query: string) {
+      return database.prepare(query.replaceAll("'prop-seoul'", quotedPropertyId));
+    },
+    batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]) {
+      return database.batch<T>(statements);
+    },
+  };
+}
+
 export type PmsRuntimeBindings = {
   DB?: D1Database;
   DATABASE_URL?: string;

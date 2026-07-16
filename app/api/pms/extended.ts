@@ -3,7 +3,7 @@ import type {
   PmsPreparedStatement,
 } from "../../../db/pms-database";
 
-type Principal = { email: string; capabilities: string[] };
+type Principal = { email: string; capabilities: string[]; propertyId: string };
 type Body = Record<string, string>;
 
 export class PmsExtendedError extends Error {
@@ -14,7 +14,6 @@ export class PmsExtendedError extends Error {
   }
 }
 
-const propertyId = "prop-seoul";
 const validDate = (value: string) =>
   /^\d{4}-\d{2}-\d{2}$/u.test(value) &&
   Number.isFinite(new Date(`${value}T00:00:00Z`).valueOf());
@@ -63,6 +62,7 @@ export async function loadInventoryCalendar(
   db: PmsDatabase,
   from: string,
   to: string,
+  propertyId: string,
 ) {
   validateRange(from, to, 730);
   const [
@@ -176,6 +176,7 @@ export async function loadAccountingCenter(
   db: PmsDatabase,
   from: string,
   to: string,
+  propertyId: string,
 ) {
   validateRange(from, to, 367);
   const [
@@ -270,6 +271,7 @@ async function commitBatches(
 }
 function audit(
   db: PmsDatabase,
+  propertyId: string,
   actor: string,
   action: string,
   entityType: string,
@@ -292,6 +294,7 @@ function audit(
 }
 function remember(
   db: PmsDatabase,
+  propertyId: string,
   key: string | undefined,
   action: string,
   actor: string,
@@ -306,7 +309,7 @@ function remember(
     : null;
 }
 
-async function nextJournalNo(db: PmsDatabase, businessDate: string) {
+async function nextJournalNo(db: PmsDatabase, propertyId: string, businessDate: string) {
   const row = await db
     .prepare(
       "SELECT COUNT(*) count FROM accounting_journal_entries WHERE property_id=? AND business_date=?",
@@ -316,7 +319,7 @@ async function nextJournalNo(db: PmsDatabase, businessDate: string) {
   return `JRN-${businessDate.replaceAll("-", "")}-${String(Number(row?.count || 0) + 1).padStart(4, "0")}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`;
 }
 
-async function accountByCode(db: PmsDatabase, code: string) {
+async function accountByCode(db: PmsDatabase, propertyId: string, code: string) {
   const row = await db
     .prepare(
       "SELECT * FROM accounting_accounts WHERE property_id=? AND code=? AND active=1",
@@ -332,6 +335,7 @@ async function buildJournal(
   db: PmsDatabase,
   input: {
     businessDate: string;
+    propertyId: string;
     entryType: string;
     sourceType: string;
     sourceId?: string;
@@ -356,7 +360,7 @@ async function buildJournal(
   if (!(debit > 0) || Math.abs(debit - credit) > 0.01)
     throw new PmsExtendedError("차변과 대변 합계가 일치해야 합니다.");
   const id = crypto.randomUUID(),
-    entryNo = await nextJournalNo(db, input.businessDate);
+    entryNo = await nextJournalNo(db, input.propertyId, input.businessDate);
   const statements: PmsPreparedStatement[] = [
     db
       .prepare(
@@ -364,7 +368,7 @@ async function buildJournal(
       )
       .bind(
         id,
-        propertyId,
+        input.propertyId,
         entryNo,
         input.businessDate,
         input.entryType,
@@ -385,7 +389,7 @@ async function buildJournal(
         )
         .bind(
           crypto.randomUUID(),
-          propertyId,
+          input.propertyId,
           id,
           line.accountId,
           line.debit,
@@ -409,6 +413,7 @@ export async function handleExtendedAction(
   idempotencyKey?: string | null,
 ) {
   const actor = principal.email;
+  const propertyId = principal.propertyId;
   if (body.action === "bulk_update_inventory_controls") {
     const from = body.from,
       to = body.to;
@@ -545,9 +550,9 @@ export async function handleExtendedAction(
         );
       const contract = await db
         .prepare(
-          "SELECT * FROM channel_contracts WHERE connection_id=? AND status='ACTIVE'",
+          "SELECT * FROM channel_contracts WHERE connection_id=? AND property_id=? AND status='ACTIVE'",
         )
-        .bind(mapping.connection_id)
+        .bind(mapping.connection_id, propertyId)
         .first<Record<string, unknown>>();
       if (!contract)
         throw new PmsExtendedError("먼저 채널 계약 조건을 설정하세요.", 409);
@@ -585,6 +590,7 @@ export async function handleExtendedAction(
     statements.push(
       audit(
         db,
+        propertyId,
         actor,
         "BULK_UPDATE_INVENTORY",
         "inventory_calendar",
@@ -601,6 +607,7 @@ export async function handleExtendedAction(
     );
     const idem = remember(
       db,
+      propertyId,
       idempotencyKey || undefined,
       body.action,
       actor,
@@ -636,8 +643,8 @@ export async function handleExtendedAction(
     )
       throw new PmsExtendedError("계약 유효 기간을 확인하세요.");
     const current = await db
-        .prepare("SELECT * FROM channel_contracts WHERE connection_id=?")
-        .bind(body.connectionId)
+        .prepare("SELECT * FROM channel_contracts WHERE connection_id=? AND property_id=?")
+        .bind(body.connectionId, propertyId)
         .first<Record<string, unknown>>(),
       id = String(current?.id || crypto.randomUUID());
     const statements = [
@@ -663,6 +670,7 @@ export async function handleExtendedAction(
         ),
       audit(
         db,
+        propertyId,
         actor,
         "UPSERT_CHANNEL_CONTRACT",
         "channel_contract",
@@ -681,6 +689,7 @@ export async function handleExtendedAction(
     ];
     const idem = remember(
       db,
+      propertyId,
       idempotencyKey || undefined,
       body.action,
       actor,
@@ -712,6 +721,7 @@ export async function handleExtendedAction(
     if (description.length < 2)
       throw new PmsExtendedError("전표 적요를 두 글자 이상 입력하세요.");
     const journal = await buildJournal(db, {
+      propertyId,
       businessDate: body.businessDate || businessDate,
       entryType: ["REVENUE", "EXPENSE", "ADJUSTMENT"].includes(body.entryType)
         ? body.entryType
@@ -742,6 +752,7 @@ export async function handleExtendedAction(
       ...journal.statements,
       audit(
         db,
+        propertyId,
         actor,
         "POST_ACCOUNTING_ENTRY",
         "accounting_journal",
@@ -752,6 +763,7 @@ export async function handleExtendedAction(
     ];
     const idem = remember(
       db,
+      propertyId,
       idempotencyKey || undefined,
       body.action,
       actor,
@@ -777,12 +789,13 @@ export async function handleExtendedAction(
     const lines = (
       await db
         .prepare(
-          "SELECT * FROM accounting_journal_lines WHERE journal_entry_id=?",
+          "SELECT * FROM accounting_journal_lines WHERE journal_entry_id=? AND property_id=?",
         )
-        .bind(entry.id)
+        .bind(entry.id, propertyId)
         .all<Record<string, unknown>>()
     ).results;
     const reversal = await buildJournal(db, {
+      propertyId,
       businessDate: businessDate,
       entryType: "REVERSAL",
       sourceType: "JOURNAL_REVERSAL",
@@ -805,11 +818,12 @@ export async function handleExtendedAction(
       ...reversal.statements,
       db
         .prepare(
-          "UPDATE accounting_journal_entries SET status='REVERSED' WHERE id=? AND status='POSTED'",
+          "UPDATE accounting_journal_entries SET status='REVERSED' WHERE id=? AND property_id=? AND status='POSTED'",
         )
-        .bind(entry.id),
+        .bind(entry.id, propertyId),
       audit(
         db,
+        propertyId,
         actor,
         "REVERSE_ACCOUNTING_ENTRY",
         "accounting_journal",
@@ -820,6 +834,7 @@ export async function handleExtendedAction(
     ];
     const idem = remember(
       db,
+      propertyId,
       idempotencyKey || undefined,
       body.action,
       actor,
@@ -851,11 +866,12 @@ export async function handleExtendedAction(
       );
     const rateSummary = await db
       .prepare(
-        "SELECT o.mapping_id,m.rate_plan,SUM(o.sell_rate) gross,SUM(COALESCE(o.net_rate,0)) net,COUNT(*) nights,SUM(CASE WHEN o.net_rate IS NOT NULL THEN 1 ELSE 0 END) net_nights FROM channel_rate_overrides o JOIN channel_mappings m ON m.id=o.mapping_id WHERE o.connection_id=? AND o.room_type_id=? AND o.stay_date>=? AND o.stay_date<? GROUP BY o.mapping_id,m.rate_plan HAVING COUNT(*)=? ORDER BY CASE WHEN m.rate_plan=? THEN 0 ELSE 1 END,o.mapping_id LIMIT 1",
+        "SELECT o.mapping_id,m.rate_plan,SUM(o.sell_rate) gross,SUM(COALESCE(o.net_rate,0)) net,COUNT(*) nights,SUM(CASE WHEN o.net_rate IS NOT NULL THEN 1 ELSE 0 END) net_nights FROM channel_rate_overrides o JOIN channel_mappings m ON m.id=o.mapping_id AND m.property_id=o.property_id WHERE o.connection_id=? AND o.room_type_id=? AND o.property_id=? AND o.stay_date>=? AND o.stay_date<? GROUP BY o.mapping_id,m.rate_plan HAVING COUNT(*)=? ORDER BY CASE WHEN m.rate_plan=? THEN 0 ELSE 1 END,o.mapping_id LIMIT 1",
       )
       .bind(
         body.connectionId,
         reservation.room_type_id,
+        propertyId,
         reservation.arrival_date,
         reservation.departure_date,
         nights,
@@ -883,12 +899,12 @@ export async function handleExtendedAction(
       throw new PmsExtendedError("채널 비용 계산값이 올바르지 않습니다.");
     const settlementId = crypto.randomUUID(),
       dueDate = datePlus(businessDate, Number(contract.payment_terms_days));
-    const receivable = await accountByCode(db, "1200"),
-      revenue = await accountByCode(db, "4100"),
-      expense = await accountByCode(db, "5100"),
+    const receivable = await accountByCode(db, propertyId, "1200"),
+      revenue = await accountByCode(db, propertyId, "4100"),
+      expense = await accountByCode(db, propertyId, "5100"),
       payable =
         contract.contract_type === "COMMISSION"
-          ? await accountByCode(db, "2200")
+          ? await accountByCode(db, propertyId, "2200")
           : null;
     const lines =
       contract.contract_type === "COMMISSION"
@@ -946,6 +962,7 @@ export async function handleExtendedAction(
             },
           ];
     const journal = await buildJournal(db, {
+      propertyId,
       businessDate,
       entryType: "CHANNEL_SETTLEMENT",
       sourceType: "CHANNEL_ACCRUAL",
@@ -979,6 +996,7 @@ export async function handleExtendedAction(
       ...journal.statements,
       audit(
         db,
+        propertyId,
         actor,
         "ACCRUE_CHANNEL_SETTLEMENT",
         "channel_settlement",
@@ -989,6 +1007,7 @@ export async function handleExtendedAction(
     ];
     const idem = remember(
       db,
+      propertyId,
       idempotencyKey || undefined,
       body.action,
       actor,
@@ -1012,8 +1031,8 @@ export async function handleExtendedAction(
         "발생 상태의 정산만 지급 완료할 수 있습니다.",
         409,
       );
-    const cash = await accountByCode(db, "1100"),
-      receivable = await accountByCode(db, "1200"),
+    const cash = await accountByCode(db, propertyId, "1100"),
+      receivable = await accountByCode(db, propertyId, "1200"),
       lines = [
         {
           accountId: String(cash.id),
@@ -1034,7 +1053,7 @@ export async function handleExtendedAction(
       settlement.contract_type === "COMMISSION" &&
       Number(settlement.channel_cost_amount) > 0
     ) {
-      const payable = await accountByCode(db, "2200");
+      const payable = await accountByCode(db, propertyId, "2200");
       lines.push(
         {
           accountId: String(payable.id),
@@ -1053,6 +1072,7 @@ export async function handleExtendedAction(
       );
     }
     const journal = await buildJournal(db, {
+      propertyId,
       businessDate,
       entryType: "CHANNEL_SETTLEMENT",
       sourceType: "CHANNEL_PAYMENT",
@@ -1066,11 +1086,12 @@ export async function handleExtendedAction(
       ...journal.statements,
       db
         .prepare(
-          "UPDATE channel_settlements SET status='PAID',paid_at=?,updated_at=?,updated_by=? WHERE id=? AND status='ACCRUED'",
+          "UPDATE channel_settlements SET status='PAID',paid_at=?,updated_at=?,updated_by=? WHERE id=? AND property_id=? AND status='ACCRUED'",
         )
-        .bind(now, now, actor, settlement.id),
+        .bind(now, now, actor, settlement.id, propertyId),
       audit(
         db,
+        propertyId,
         actor,
         "PAY_CHANNEL_SETTLEMENT",
         "channel_settlement",
@@ -1081,6 +1102,7 @@ export async function handleExtendedAction(
     ];
     const idem = remember(
       db,
+      propertyId,
       idempotencyKey || undefined,
       body.action,
       actor,
