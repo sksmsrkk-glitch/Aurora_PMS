@@ -72,6 +72,13 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
   .room-card,.pulse-grid article,.type-master-grid article,.quick-panel button,.table-row,.flow-row{transition:transform .18s ease,box-shadow .18s ease,background-color .18s ease,border-color .18s ease}
 }
 
+.login-shell{min-height:100dvh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 18% 10%,rgba(49,130,246,.18),transparent 32%),radial-gradient(circle at 82% 88%,rgba(85,212,172,.16),transparent 34%),#f4f7fb}
+.login-card{width:min(440px,100%);padding:36px;border:1px solid rgba(224,230,237,.9);border-radius:28px;background:rgba(255,255,255,.94);box-shadow:0 28px 90px rgba(0,27,55,.13);backdrop-filter:blur(18px)}
+.login-brand{display:flex;align-items:center;gap:13px}.login-brand img{filter:drop-shadow(0 8px 16px rgba(49,130,246,.2))}.login-brand b,.login-brand small{display:block}.login-brand b{font-size:15px;letter-spacing:.2px}.login-brand small{margin-top:3px;color:#8b95a1;font-size:9px;letter-spacing:1.4px}
+.login-copy{margin:34px 0 26px}.login-copy p{margin:0 0 8px;color:#3182f6;font-size:10px;font-weight:800;letter-spacing:1px}.login-copy h1{margin:0;color:#191f28;font-size:28px;letter-spacing:-.9px}.login-copy span{display:block;margin-top:11px;color:#6b7684;font-size:13px;line-height:1.6}
+.login-card form{display:grid;gap:16px}.login-card label{display:grid;gap:7px}.login-card label span{color:#4e5968;font-size:11px;font-weight:700}.login-card input{width:100%;min-height:50px;padding:0 15px;border:1px solid #d9e0e8;border-radius:14px;background:#fff;color:#191f28;font-size:16px;outline:none}.login-card input:focus{border-color:#3182f6;box-shadow:0 0 0 4px rgba(49,130,246,.13)}.login-card form>.primary{min-height:52px;margin-top:5px;border-radius:14px;background:#3182f6;font-size:14px}.login-card form>.primary:hover{background:#1b64da}.login-error{margin:0;padding:11px 13px;border-radius:11px;background:#fff1f0;color:#b42318;font-size:12px}.login-security{margin:22px 0 0;color:#8b95a1;font-size:10px;text-align:center}
+@media(max-width:600px){.login-shell{align-items:end;padding:0}.login-card{padding:28px 20px calc(24px + env(safe-area-inset-bottom));border-radius:28px 28px 0 0}.login-copy{margin:28px 0 22px}.login-copy h1{font-size:25px}}
+
 @media(max-width:1100px){
   .workspace>header{flex-wrap:wrap}
   .header-actions{flex-wrap:wrap;justify-content:flex-end}

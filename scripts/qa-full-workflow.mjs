@@ -5,6 +5,7 @@ const runId = `${Date.now().toString(36).slice(-6)}${Math.random().toString(36).
 const qaCode = `Q${runId}`.slice(0, 12);
 const roomPrefix = `Q${runId.slice(-5)}`;
 const results = [];
+let sessionCookie = "";
 
 const addDays = (date, days) => {
   const value = new Date(`${date}T00:00:00Z`);
@@ -19,12 +20,29 @@ const record = (name, detail = "OK") => {
 
 async function request(path, options = {}) {
   const started = performance.now();
-  const response = await fetch(`${baseUrl}${path}`, options);
+  const headers = new Headers(options.headers);
+  if (sessionCookie) headers.set("Cookie", sessionCookie);
+  const response = await fetch(`${baseUrl}${path}`, { ...options, headers });
   const text = await response.text();
   let json;
   try { json = text ? JSON.parse(text) : null; }
   catch { throw new Error(`${options.method || "GET"} ${path} returned invalid JSON (${response.status}): ${text.slice(0, 240)}`); }
   return { response, json, elapsed: Math.round(performance.now() - started) };
+}
+
+async function authenticateIfConfigured() {
+  const email=process.env.PMS_TEST_EMAIL;
+  const password=process.env.PMS_TEST_PASSWORD;
+  if (!email && !password) return;
+  if (!email || !password) throw new Error("PMS_TEST_EMAIL and PMS_TEST_PASSWORD must be provided together");
+  const response=await fetch(`${baseUrl}/api/auth/login`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({email,password}),
+  });
+  if (!response.ok) throw new Error(`QA authentication failed (${response.status})`);
+  sessionCookie=response.headers.getSetCookie().map(value=>value.split(";")[0]).join("; ");
+  if (!sessionCookie) throw new Error("QA authentication did not return session cookies");
 }
 
 async function snapshot() {
@@ -58,7 +76,8 @@ async function createReservation(lastName, roomTypeId, arrivalDate, departureDat
 }
 
 async function main() {
-  const page = await fetch(`${baseUrl}/`);
+  await authenticateIfConfigured();
+  const page = await fetch(`${baseUrl}/`,{headers:sessionCookie?{Cookie:sessionCookie}:undefined});
   assert.equal(page.status, 200, "dashboard route failed");
   record("대시보드 페이지 로드", `${page.status}`);
 
