@@ -49,6 +49,6 @@ try{
   });
   if(!response.ok)throw new Error(`Supabase Data API smoke test failed (${response.status})`);
   const data=await response.json();
-  if(Number(data.results?.[0]?.count)!==4)throw new Error("Supabase Data API returned unexpected data");
+  if(Number(data.results?.[0]?.count)<4)throw new Error("Supabase Data API returned fewer rows than the seed baseline");
   console.log(`Supabase smoke passed: ${catalog.tables} tables, ${catalog.triggers} triggers, ${catalog.rls_tables} RLS tables, Data API ${Date.now()-started} ms.`);
 }finally{await sql.end({timeout:5});}

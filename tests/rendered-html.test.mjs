@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import ts from "typescript";
 
 const root = new URL("../", import.meta.url);
 test("PMS product shell replaces the starter", async () => {
@@ -26,5 +27,27 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(page,/리포트 센터/);assert.match(page,/객실 마스터/);assert.match(route,/export_report/);assert.match(route,/bulk_create_rooms/);assert.match(route,/REPORT_EXPORT/);
   assert.match(reporting,/점유율 · ADR · RevPAR/);assert.match(reporting,/최대 367일/);assert.match(reporting,/integration_delivery_attempts/);assert.match(roomMaster,/최대 500실/);
   assert.match(workbook,/openxmlformats-officedocument\.spreadsheetml\.sheet/);assert.match(workbook,/Parameters/);assert.match(workbook,/autoFilter/);assert.doesNotMatch(workbook,/from "xlsx"/);
+  assert.match(page,/quickPanel/);assert.match(page,/frontdeskFilter/);assert.match(page,/Cmd\/Ctrl|metaKey\|\|event\.ctrlKey/);assert.match(page,/aria-pressed/);assert.match(page,/onReview/);
+  assert.match(css,/Aurora Flow UI/);assert.match(css,/#3182f6/i);assert.match(css,/Toss Product Sans/);assert.match(css,/prefers-reduced-motion/);assert.match(css,/focus-visible/);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
+});
+
+test("every rendered button has an action, submit contract, or intentional disabled state", async () => {
+  for (const file of ["app/page.tsx", "app/room-master.tsx", "app/reports-center.tsx"]) {
+    const sourceText = await readFile(new URL(file, root), "utf8");
+    const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const inert = [];
+    const visit = (node) => {
+      if (ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === "button") {
+        const names = node.openingElement.attributes.properties.filter(ts.isJsxAttribute).map((attribute) => attribute.name.getText(source));
+        if (!names.includes("onClick") && !names.includes("type") && !names.includes("disabled")) {
+          const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+          inert.push(`${file}:${line + 1}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    assert.deepEqual(inert, [], `inert buttons: ${inert.join(", ")}`);
+  }
 });

@@ -299,10 +299,15 @@ function decodedDisplayName(request: Request, email: string) {
   try { return decodeURIComponent(encoded); } catch { return email; }
 }
 
+const principalCache = new Map<string,{expires:number;role:Role}>();
+
 async function principalFor(request: Request, db: D1): Promise<Principal | null> {
   const url = new URL(request.url); let email = request.headers.get("oai-authenticated-user-email");
   if (!email && ["localhost", "127.0.0.1"].includes(url.hostname)) email = "frontdesk@aurora.hotel";
   if (!email) return null;
+  const cached=principalCache.get(email),now=Date.now();
+  if(cached&&cached.expires>now)return {email,displayName:decodedDisplayName(request,email),role:cached.role,capabilities:roleCapabilities[cached.role]};
+  if(principalCache.size>500){for(const [key,item] of principalCache)if(item.expires<=now)principalCache.delete(key);if(principalCache.size>500)principalCache.clear();}
   let assignment = await db.prepare("SELECT role FROM role_assignments WHERE property_id='prop-seoul' AND email=? AND active=1").bind(email).first<{role: Role}>();
   if (!assignment && request.headers.get("oai-authenticated-user-email")) {
     const configured = await db.prepare("SELECT COUNT(*) count FROM role_assignments WHERE property_id='prop-seoul' AND active=1 AND email<>'frontdesk@aurora.hotel'").first<{count:number}>();
@@ -311,6 +316,7 @@ async function principalFor(request: Request, db: D1): Promise<Principal | null>
     assignment = { role: bootstrapRole };
   }
   const role: Role = (assignment?.role as Role | undefined) ?? "VIEWER";
+  principalCache.set(email,{expires:now+30_000,role});
   return { email, displayName: decodedDisplayName(request, email), role, capabilities: roleCapabilities[role] };
 }
 
@@ -442,14 +448,20 @@ async function snapshot(db: D1, principal?: Principal | null) {
 
 type Snapshot = Awaited<ReturnType<typeof snapshot>>;
 const snapshotCache = new Map<string,{expires:number,value:Promise<Snapshot>}>();
+const snapshotRepresentationCache = new Map<string,{expires:number,json:Promise<string>}>();
 type ReportResult=Awaited<ReturnType<typeof runReport>>;
 const reportCache=new Map<string,{expires:number;value:Promise<ReportResult>}>();
-function invalidateSnapshots() { snapshotCache.clear(); reportCache.clear(); }
+function invalidateSnapshots() { snapshotCache.clear(); snapshotRepresentationCache.clear(); reportCache.clear(); }
 async function cachedSnapshot(db:D1, principal:Principal) {
   const key=principal.email; const cached=snapshotCache.get(key); const now=Date.now();
   if (cached && cached.expires>now) return cached.value;
   const value=snapshot(db,principal); snapshotCache.set(key,{expires:now+3000,value});
   try { return await value; } catch (error) { snapshotCache.delete(key); throw error; }
+}
+async function cachedSnapshotResponse(db:D1,principal:Principal) {
+  const key=principal.email,now=Date.now();let cached=snapshotRepresentationCache.get(key);
+  if(!cached||cached.expires<=now){const json=cachedSnapshot(db,principal).then(value=>JSON.stringify(value));cached={expires:now+3000,json};snapshotRepresentationCache.set(key,cached);}
+  return new Response(await cached.json,{headers:{"Cache-Control":"private, no-store","Content-Type":"application/json; charset=utf-8"}});
 }
 async function cachedReport(db:D1,params:URLSearchParams,principal:Principal){const key=`${principal.email}:${params.toString()}`,now=Date.now(),cached=reportCache.get(key);if(cached&&cached.expires>now)return cached.value;if(reportCache.size>200){for(const [cacheKey,item] of reportCache)if(item.expires<=now)reportCache.delete(cacheKey);if(reportCache.size>200)reportCache.clear();}const value=runReport(db,params,principal);reportCache.set(key,{expires:now+5000,value});try{return await value;}catch(error){reportCache.delete(key);throw error;}}
 
@@ -462,7 +474,7 @@ export async function GET(request: Request) {
     try { return Response.json(await cachedReport(db,url.searchParams,principal),{headers:{"Cache-Control":"private, no-store"}}); }
     catch(error){if(error instanceof ReportRequestError)return Response.json({error:error.message},{status:error.status});throw error;}
   }
-  return Response.json(await cachedSnapshot(db, principal), { headers: { "Cache-Control": "private, no-store" } });
+  return cachedSnapshotResponse(db,principal);
 }
 
 export async function POST(request: Request) {
