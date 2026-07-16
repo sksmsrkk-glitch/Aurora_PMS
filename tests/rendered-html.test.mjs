@@ -29,6 +29,7 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(workbook,/openxmlformats-officedocument\.spreadsheetml\.sheet/);assert.match(workbook,/Parameters/);assert.match(workbook,/autoFilter/);assert.doesNotMatch(workbook,/from "xlsx"/);
   assert.match(page,/quickPanel/);assert.match(page,/frontdeskFilter/);assert.match(page,/Cmd\/Ctrl|metaKey\|\|event\.ctrlKey/);assert.match(page,/aria-pressed/);assert.match(page,/onReview/);
   assert.match(css,/Aurora Flow UI/);assert.match(css,/#3182f6/i);assert.match(css,/Toss Product Sans/);assert.match(css,/prefers-reduced-motion/);assert.match(css,/focus-visible/);
+  assert.match(route,/PMS_DEMO_USER_EMAIL/);assert.match(route,/runtimeBindings/);assert.doesNotMatch(route,/cloudflare:workers/);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
 });
 

@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": "24.x"
   },
   "scripts": {
-    "dev": "vinext dev",
-    "build": "vinext build",
-    "start": "vinext start",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "dev:sites": "vinext dev",
+    "build:sites": "vinext build",
     "test": "npm run build && node --test tests/*.test.mjs",
     "qa:workflow": "node scripts/qa-full-workflow.mjs",
     "benchmark": "node tests/api-benchmark.mjs",

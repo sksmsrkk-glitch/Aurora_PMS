@@ -1,12 +1,18 @@
-import { env } from "cloudflare:workers";
-import { getPmsDatabase, type PmsDatabase, type PmsPreparedStatement } from "../../../db/pms-database";
+import { getPmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRuntimeBindings } from "../../../db/pms-database";
 import { ReportRequestError, runReport } from "./reporting";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 type D1 = PmsDatabase;
 type D1PreparedStatement = PmsPreparedStatement;
 type Role = "PROPERTY_ADMIN" | "NIGHT_AUDITOR" | "FRONT_DESK" | "CASHIER" | "HOUSEKEEPING" | "REVENUE_MANAGER" | "SALES_MANAGER" | "VIEWER";
 type Principal = { email: string; displayName: string; role: Role; capabilities: string[] };
+
+const runtimeBindings:PmsRuntimeBindings={
+  SUPABASE_URL:process.env.SUPABASE_URL,
+  SUPABASE_SECRET_KEY:process.env.SUPABASE_SECRET_KEY,
+  DATABASE_URL:process.env.DATABASE_URL,
+};
 
 const roleCapabilities: Record<Role, string[]> = {
   PROPERTY_ADMIN: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "AR_WRITE", "HOUSEKEEPING_WRITE", "CASHIER_WRITE", "EOD_RUN", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "INTEGRATION_WRITE", "REPORT_EXPORT", "ADMIN"],
@@ -304,6 +310,7 @@ const principalCache = new Map<string,{expires:number;role:Role}>();
 async function principalFor(request: Request, db: D1): Promise<Principal | null> {
   const url = new URL(request.url); let email = request.headers.get("oai-authenticated-user-email");
   if (!email && ["localhost", "127.0.0.1"].includes(url.hostname)) email = "frontdesk@aurora.hotel";
+  if (!email) email = process.env.PMS_DEMO_USER_EMAIL?.trim() || null;
   if (!email) return null;
   const cached=principalCache.get(email),now=Date.now();
   if(cached&&cached.expires>now)return {email,displayName:decodedDisplayName(request,email),role:cached.role,capabilities:roleCapabilities[cached.role]};
@@ -466,7 +473,7 @@ async function cachedSnapshotResponse(db:D1,principal:Principal) {
 async function cachedReport(db:D1,params:URLSearchParams,principal:Principal){const key=`${principal.email}:${params.toString()}`,now=Date.now(),cached=reportCache.get(key);if(cached&&cached.expires>now)return cached.value;if(reportCache.size>200){for(const [cacheKey,item] of reportCache)if(item.expires<=now)reportCache.delete(cacheKey);if(reportCache.size>200)reportCache.clear();}const value=runReport(db,params,principal);reportCache.set(key,{expires:now+5000,value});try{return await value;}catch(error){reportCache.delete(key);throw error;}}
 
 export async function GET(request: Request) {
-  const db = getPmsDatabase(env);
+  const db = getPmsDatabase(runtimeBindings);
   await ready(db); const principal = await principalFor(request, db);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
   const url=new URL(request.url);
@@ -478,7 +485,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const db = getPmsDatabase(env);
+  const db = getPmsDatabase(runtimeBindings);
   await ready(db); const principal = await principalFor(request, db);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
   let body: Record<string, string>;
