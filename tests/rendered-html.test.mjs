@@ -5,10 +5,11 @@ import ts from "typescript";
 
 const root = new URL("../", import.meta.url);
 test("PMS product shell replaces the starter", async () => {
-  const [page, layout, css, route, hosting, reporting, workbook, roomMaster] = await Promise.all([
+  const [page, layout, css, route, hosting, reporting, workbook, roomMaster, inventory, accounting, contracts, extended] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"), readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"), readFile(new URL("app/api/pms/route.ts", root), "utf8"), readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("app/api/pms/reporting.ts", root), "utf8"), readFile(new URL("app/xlsx-export.ts", root), "utf8"), readFile(new URL("app/room-master.tsx", root), "utf8"),
+    readFile(new URL("app/inventory-calendar.tsx",root),"utf8"),readFile(new URL("app/accounting-center.tsx",root),"utf8"),readFile(new URL("app/channel-contracts.tsx",root),"utf8"),readFile(new URL("app/api/pms/extended.ts",root),"utf8"),
   ]);
   assert.match(layout, /Aurora PMS/); assert.match(layout, /lang="ko"/);
   assert.match(page, /오늘의 오퍼레이션/); assert.match(page, /체크인 완료/); assert.match(page, /야간 감사/); assert.match(page, /새 예약 만들기/);
@@ -30,11 +31,15 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(page,/quickPanel/);assert.match(page,/frontdeskFilter/);assert.match(page,/Cmd\/Ctrl|metaKey\|\|event\.ctrlKey/);assert.match(page,/aria-pressed/);assert.match(page,/onReview/);
   assert.match(css,/Aurora Flow UI/);assert.match(css,/#3182f6/i);assert.match(css,/Toss Product Sans/);assert.match(css,/prefers-reduced-motion/);assert.match(css,/focus-visible/);
   assert.match(route,/PMS_DEMO_USER_EMAIL/);assert.match(route,/runtimeBindings/);assert.doesNotMatch(route,/cloudflare:workers/);
+  assert.match(inventory,/최대 730일|730일까지/);assert.match(inventory,/기간 벌크 요금·재고/);assert.match(inventory,/호텔 입금가/);
+  assert.match(accounting,/회계 & 손익/);assert.match(accounting,/복식부기 분개장/);assert.match(accounting,/채널 정산 원장/);
+  assert.match(contracts,/수수료 계약/);assert.match(contracts,/입금가 계약/);assert.match(extended,/bulk_update_inventory_controls/);assert.match(extended,/reverse_accounting_entry/);
+  assert.match(reporting,/accounting_journal/);assert.match(reporting,/channel_settlements/);assert.match(css,/master-modal>\.modal-actions/);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
 });
 
 test("every rendered button has an action, submit contract, or intentional disabled state", async () => {
-  for (const file of ["app/page.tsx", "app/room-master.tsx", "app/reports-center.tsx"]) {
+  for (const file of ["app/page.tsx", "app/room-master.tsx", "app/reports-center.tsx", "app/inventory-calendar.tsx", "app/accounting-center.tsx", "app/channel-contracts.tsx"]) {
     const sourceText = await readFile(new URL(file, root), "utf8");
     const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const inert = [];

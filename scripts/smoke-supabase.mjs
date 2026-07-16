@@ -26,7 +26,7 @@ try{
       (SELECT COUNT(*)::int FROM pg_trigger WHERE NOT tgisinternal) triggers,
       (SELECT COUNT(*)::int FROM pms_schema_migrations) migrations
   `;
-  if(catalog.tables<39||catalog.rls_tables<39||catalog.triggers<25||catalog.migrations<3)throw new Error("Supabase catalog verification failed");
+  if(catalog.tables<45||catalog.rls_tables<45||catalog.triggers<32||catalog.migrations<5)throw new Error("Supabase catalog verification failed");
 
   let capacityGuard=false;
   try{
@@ -40,6 +40,14 @@ try{
   let immutableGuard=false;
   try{await sql`UPDATE folio_entries SET description='smoke' WHERE id='fe1'`;}catch(error){immutableGuard=error instanceof Error&&error.message.includes("immutable");}
   if(!immutableGuard)throw new Error("Immutable folio trigger verification failed");
+
+  const [journal]=await sql`SELECT e.id,COALESCE(SUM(l.debit),0) debit,COALESCE(SUM(l.credit),0) credit FROM accounting_journal_entries e JOIN accounting_journal_lines l ON l.journal_entry_id=e.id GROUP BY e.id LIMIT 1`;
+  if(!journal||Math.abs(Number(journal.debit)-Number(journal.credit))>0.01)throw new Error("Balanced accounting journal verification failed");
+  let accountingImmutable=false;
+  try{await sql`UPDATE accounting_journal_lines SET memo='smoke' WHERE journal_entry_id=${journal.id}`;}catch(error){accountingImmutable=error instanceof Error&&error.message.includes("immutable");}
+  if(!accountingImmutable)throw new Error("Immutable accounting journal verification failed");
+  const [settlementMismatch]=await sql`SELECT COUNT(*)::int count FROM channel_settlements WHERE abs((gross_sell_amount-channel_cost_amount)-hotel_net_amount)>0.01 OR contract_type NOT IN ('COMMISSION','NET_RATE')`;
+  if(Number(settlementMismatch.count)!==0)throw new Error("Channel settlement equation verification failed");
 
   const started=Date.now();
   const response=await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/pms_execute`,{

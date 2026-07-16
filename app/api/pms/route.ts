@@ -1,11 +1,12 @@
 import { getPmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRuntimeBindings } from "../../../db/pms-database";
 import { ReportRequestError, runReport } from "./reporting";
+import { handleExtendedAction, loadAccountingCenter, loadInventoryCalendar, PmsExtendedError } from "./extended";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 type D1 = PmsDatabase;
 type D1PreparedStatement = PmsPreparedStatement;
-type Role = "PROPERTY_ADMIN" | "NIGHT_AUDITOR" | "FRONT_DESK" | "CASHIER" | "HOUSEKEEPING" | "REVENUE_MANAGER" | "SALES_MANAGER" | "VIEWER";
+type Role = "PROPERTY_ADMIN" | "NIGHT_AUDITOR" | "FRONT_DESK" | "CASHIER" | "HOUSEKEEPING" | "REVENUE_MANAGER" | "SALES_MANAGER" | "ACCOUNTANT" | "VIEWER";
 type Principal = { email: string; displayName: string; role: Role; capabilities: string[] };
 
 const runtimeBindings:PmsRuntimeBindings={
@@ -15,25 +16,27 @@ const runtimeBindings:PmsRuntimeBindings={
 };
 
 const roleCapabilities: Record<Role, string[]> = {
-  PROPERTY_ADMIN: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "AR_WRITE", "HOUSEKEEPING_WRITE", "CASHIER_WRITE", "EOD_RUN", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "INTEGRATION_WRITE", "REPORT_EXPORT", "ADMIN"],
+  PROPERTY_ADMIN: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "AR_WRITE", "HOUSEKEEPING_WRITE", "CASHIER_WRITE", "EOD_RUN", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "INTEGRATION_WRITE", "ACCOUNTING_WRITE", "REPORT_EXPORT", "ADMIN"],
   NIGHT_AUDITOR: ["READ", "FOLIO_WRITE", "AR_WRITE", "CASHIER_WRITE", "EOD_RUN", "REPORT_EXPORT"],
   FRONT_DESK: ["READ", "RESERVATION_WRITE", "STAY_WRITE", "FOLIO_WRITE", "CASHIER_WRITE", "GROUP_PICKUP", "REPORT_EXPORT"],
   CASHIER: ["READ", "FOLIO_WRITE", "AR_WRITE", "CASHIER_WRITE", "REPORT_EXPORT"],
   HOUSEKEEPING: ["READ", "HOUSEKEEPING_WRITE"],
   REVENUE_MANAGER: ["READ", "INVENTORY_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "INTEGRATION_WRITE", "REPORT_EXPORT"],
   SALES_MANAGER: ["READ", "RESERVATION_WRITE", "GROUP_WRITE", "GROUP_PICKUP", "REPORT_EXPORT"],
+  ACCOUNTANT: ["READ", "FOLIO_WRITE", "AR_WRITE", "ACCOUNTING_WRITE", "REPORT_EXPORT"],
   VIEWER: ["READ"],
 };
 
 const actionCapability: Record<string, string> = {
   create_reservation: "RESERVATION_WRITE", mark_no_show: "STAY_WRITE", check_in: "STAY_WRITE", check_out: "STAY_WRITE",
   edit_reservation: "RESERVATION_WRITE", cancel_reservation: "RESERVATION_WRITE", assign_room: "RESERVATION_WRITE", move_room: "STAY_WRITE",
-  update_inventory_control: "INVENTORY_WRITE",
+  update_inventory_control: "INVENTORY_WRITE", bulk_update_inventory_controls: "INVENTORY_WRITE",
   create_account_profile: "GROUP_WRITE", create_business_block: "GROUP_WRITE", update_block_inventory: "GROUP_WRITE", add_rooming_entry: "GROUP_WRITE", cutoff_block: "GROUP_WRITE",
   pickup_rooming_entry: "GROUP_PICKUP",
   post_payment: "FOLIO_WRITE", post_charge: "FOLIO_WRITE", create_folio_window: "FOLIO_WRITE", create_routing_rule: "FOLIO_WRITE", split_folio_entry: "FOLIO_WRITE", reverse_folio_entry: "FOLIO_WRITE", refund_payment: "FOLIO_WRITE",
   transfer_to_ar: "AR_WRITE", post_ar_payment: "AR_WRITE", housekeeping: "HOUSEKEEPING_WRITE",
-  create_channel_connection: "INTEGRATION_WRITE", create_channel_mapping: "INTEGRATION_WRITE", queue_ari_delta: "INTEGRATION_WRITE", dispatch_ari_update: "INTEGRATION_WRITE", ingest_channel_message: "INTEGRATION_WRITE", replay_channel_message: "INTEGRATION_WRITE", dispatch_outbox_event: "INTEGRATION_WRITE",
+  create_channel_connection: "INTEGRATION_WRITE", create_channel_mapping: "INTEGRATION_WRITE", upsert_channel_contract: "INTEGRATION_WRITE", queue_ari_delta: "INTEGRATION_WRITE", dispatch_ari_update: "INTEGRATION_WRITE", ingest_channel_message: "INTEGRATION_WRITE", replay_channel_message: "INTEGRATION_WRITE", dispatch_outbox_event: "INTEGRATION_WRITE",
+  post_accounting_entry: "ACCOUNTING_WRITE", reverse_accounting_entry: "ACCOUNTING_WRITE", accrue_channel_settlement: "ACCOUNTING_WRITE", mark_channel_settlement_paid: "ACCOUNTING_WRITE",
   open_cashier: "CASHIER_WRITE", close_cashier: "CASHIER_WRITE", run_night_audit: "EOD_RUN",
   create_room_type: "ADMIN", update_room_type: "ADMIN", create_room: "ADMIN", update_room: "ADMIN", bulk_create_rooms: "ADMIN", export_report: "REPORT_EXPORT",
 };
@@ -79,6 +82,12 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS inbound_channel_messages (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, provider TEXT NOT NULL, message_id TEXT NOT NULL, event_type TEXT NOT NULL, external_reservation_id TEXT NOT NULL, revision INTEGER NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0, reservation_id TEXT, last_error TEXT, received_at TEXT NOT NULL, processed_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS integration_delivery_attempts (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, direction TEXT NOT NULL, provider TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, attempt_no INTEGER NOT NULL, status TEXT NOT NULL, http_status INTEGER, error_code TEXT, error_message TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS report_exports (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, report_key TEXT NOT NULL, format TEXT NOT NULL, filters_json TEXT NOT NULL, row_count INTEGER NOT NULL, status TEXT NOT NULL, requested_by TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS channel_contracts (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, contract_type TEXT NOT NULL, commission_percent REAL NOT NULL DEFAULT 0, settlement_cycle TEXT NOT NULL DEFAULT 'PER_STAY', payment_terms_days INTEGER NOT NULL DEFAULT 30, currency TEXT NOT NULL DEFAULT 'KRW', valid_from TEXT NOT NULL, valid_to TEXT, status TEXT NOT NULL DEFAULT 'ACTIVE', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS channel_rate_overrides (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, mapping_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, sell_rate REAL NOT NULL, net_rate REAL, currency TEXT NOT NULL DEFAULT 'KRW', version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS channel_settlements (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, contract_id TEXT NOT NULL, connection_id TEXT NOT NULL, reservation_id TEXT, business_date TEXT NOT NULL, contract_type TEXT NOT NULL, commission_percent REAL NOT NULL DEFAULT 0, gross_sell_amount REAL NOT NULL, channel_cost_amount REAL NOT NULL, hotel_net_amount REAL NOT NULL, currency TEXT NOT NULL DEFAULT 'KRW', due_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ACCRUED', paid_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS accounting_accounts (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, account_type TEXT NOT NULL, category TEXT NOT NULL, department TEXT, external_code TEXT, active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS accounting_journal_entries (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, entry_no TEXT NOT NULL, business_date TEXT NOT NULL, entry_type TEXT NOT NULL, source_type TEXT NOT NULL, source_id TEXT, description TEXT NOT NULL, vendor TEXT, status TEXT NOT NULL DEFAULT 'POSTED', reversal_of_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS accounting_journal_lines (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, journal_entry_id TEXT NOT NULL, account_id TEXT NOT NULL, debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0, department TEXT, channel_connection_id TEXT, reservation_id TEXT, memo TEXT, created_at TEXT NOT NULL)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS room_number_uq ON rooms(property_id, number)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS confirmation_uq ON reservations(property_id, confirmation_no)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS room_night_uq ON reservation_nights(property_id, room_id, stay_date)`,
@@ -134,6 +143,12 @@ const schema = [
   `CREATE INDEX IF NOT EXISTS integration_attempt_failure_idx ON integration_delivery_attempts(status,created_at)`,
   `CREATE INDEX IF NOT EXISTS report_export_actor_idx ON report_exports(property_id,requested_by,created_at)`,
   `CREATE INDEX IF NOT EXISTS report_export_status_idx ON report_exports(property_id,status,created_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS channel_contract_connection_uq ON channel_contracts(connection_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS channel_rate_mapping_date_uq ON channel_rate_overrides(mapping_id,stay_date)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS channel_settlement_reservation_uq ON channel_settlements(connection_id,reservation_id) WHERE reservation_id IS NOT NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS accounting_account_code_uq ON accounting_accounts(property_id,code)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS accounting_journal_no_uq ON accounting_journal_entries(property_id,entry_no)`,
+  `CREATE INDEX IF NOT EXISTS accounting_journal_line_entry_idx ON accounting_journal_lines(journal_entry_id)`,
   `CREATE INDEX IF NOT EXISTS report_reservation_filter_idx ON reservations(property_id,status,source,room_type_id,arrival_date,departure_date)`,
   `CREATE INDEX IF NOT EXISTS report_folio_business_idx ON folio_entries(property_id,business_date,kind,payment_method)`,
   `CREATE INDEX IF NOT EXISTS report_audit_created_idx ON audit_logs(property_id,created_at,action,actor)`,
@@ -168,6 +183,10 @@ const schema = [
   `CREATE TRIGGER IF NOT EXISTS integration_attempts_validate_insert BEFORE INSERT ON integration_delivery_attempts WHEN NEW.attempt_no<1 OR NEW.direction NOT IN ('INBOUND','OUTBOUND') OR NEW.status NOT IN ('ACKED','FAILED') BEGIN SELECT RAISE(ABORT, 'invalid integration attempt'); END`,
   `CREATE TRIGGER IF NOT EXISTS integration_attempts_no_update BEFORE UPDATE ON integration_delivery_attempts BEGIN SELECT RAISE(ABORT, 'integration attempts are immutable'); END`,
   `CREATE TRIGGER IF NOT EXISTS integration_attempts_no_delete BEFORE DELETE ON integration_delivery_attempts BEGIN SELECT RAISE(ABORT, 'integration attempts are immutable'); END`,
+  `CREATE TRIGGER IF NOT EXISTS accounting_journal_lines_validate_insert BEFORE INSERT ON accounting_journal_lines WHEN NEW.debit<0 OR NEW.credit<0 OR (NEW.debit=0 AND NEW.credit=0) OR (NEW.debit>0 AND NEW.credit>0) OR NOT EXISTS (SELECT 1 FROM accounting_accounts WHERE id=NEW.account_id AND property_id=NEW.property_id AND active=1) BEGIN SELECT RAISE(ABORT, 'invalid accounting journal line'); END`,
+  `CREATE TRIGGER IF NOT EXISTS accounting_journal_lines_no_update BEFORE UPDATE ON accounting_journal_lines BEGIN SELECT RAISE(ABORT, 'accounting journal lines are immutable'); END`,
+  `CREATE TRIGGER IF NOT EXISTS accounting_journal_lines_no_delete BEFORE DELETE ON accounting_journal_lines BEGIN SELECT RAISE(ABORT, 'accounting journal lines are immutable'); END`,
+  `CREATE TRIGGER IF NOT EXISTS accounting_journal_entries_no_delete BEFORE DELETE ON accounting_journal_entries BEGIN SELECT RAISE(ABORT, 'accounting journal entries are immutable'); END`,
 ];
 
 async function ready(db: D1) {
@@ -176,7 +195,7 @@ async function ready(db: D1) {
 }
 
 async function initializePostgres(db: D1) {
-  for (const table of ["properties", "reservation_type_nights", "business_blocks", "folio_windows", "channel_connections", "report_exports"]) {
+  for (const table of ["properties", "reservation_type_nights", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries"]) {
     await db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).first();
   }
   const property = await db.prepare("SELECT id FROM properties WHERE id='prop-seoul'").first();
@@ -191,7 +210,7 @@ async function initialize(db: D1) {
   catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
   const now = new Date().toISOString();
   await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", now).run();
-  if (propertyExists) { await ensureReportingModel(db); await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await backfillLegacyNights(db,now); return; }
+  if (propertyExists) { await ensureReportingModel(db); await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await ensureExtendedModel(db,now); await backfillLegacyNights(db,now); return; }
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
     db.prepare("INSERT OR IGNORE INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind("rt-dlx", "prop-seoul", "DLX", "디럭스 킹", 198000, 2, "킹 베드 기반의 대표 객실"),
@@ -231,6 +250,16 @@ async function initialize(db: D1) {
   await ensureFinancialModel(db,now);
   await ensureIntegrationModel(db,now);
   await ensureReportingModel(db);
+  await ensureExtendedModel(db,now);
+}
+
+async function ensureExtendedModel(db:D1,now:string){
+  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:extended-revenue-accounting-v1'").first();if(marker)return;
+  const names=["channel_contracts","channel_rate_overrides","channel_settlements","accounting_accounts","accounting_journal_entries","accounting_journal_lines","channel_contract_connection_uq","channel_rate_mapping_date_uq","channel_settlement_reservation_uq","accounting_account_code_uq","accounting_journal_no_uq","accounting_journal_line_entry_idx","accounting_journal_lines_validate_insert","accounting_journal_lines_no_update","accounting_journal_lines_no_delete","accounting_journal_entries_no_delete"];
+  const statements=schema.filter(sql=>names.some(name=>sql.includes(name))).map(sql=>db.prepare(sql));
+  const accounts=[["1100","현금 및 예금","ASSET","CASH","FINANCE"],["1200","채널 미수금","ASSET","CHANNEL_RECEIVABLE","FINANCE"],["1300","매출채권","ASSET","ACCOUNTS_RECEIVABLE","FINANCE"],["2100","매입채무","LIABILITY","ACCOUNTS_PAYABLE","FINANCE"],["2200","채널 수수료 미지급금","LIABILITY","CHANNEL_COMMISSION_PAYABLE","FINANCE"],["2300","부가세 예수금","LIABILITY","TAX_PAYABLE","FINANCE"],["4100","객실 매출","REVENUE","ROOM_REVENUE","ROOMS"],["4200","기타 영업 매출","REVENUE","OTHER_REVENUE","OPERATIONS"],["5100","채널 유통 비용","EXPENSE","CHANNEL_DISTRIBUTION","SALES"],["5200","호텔 운영 비용","EXPENSE","OPERATING_EXPENSE","OPERATIONS"],["5990","조정 손익","EXPENSE","ADJUSTMENT","FINANCE"]];
+  statements.push(...accounts.map(([code,name,type,category,department])=>db.prepare("INSERT OR IGNORE INTO accounting_accounts(id,property_id,code,name,account_type,category,department,active,version,created_at,updated_at) VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 1, 1, ?, ?)").bind(`acct-prop-seoul-${code}`,code,name,type,category,department,now,now)),db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:extended-revenue-accounting-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now));
+  await db.batch(statements);
 }
 
 async function ensureReportingModel(db:D1) {
@@ -402,7 +431,7 @@ async function stayControlError(db:D1, roomTypeId:string, arrival:string, depart
 }
 
 async function snapshot(db: D1, principal?: Principal | null) {
-  const [propertyResult,reservationResult,roomResult,actorCashierResult,openCashierResult,failedResult,auditResult,postingsResult,roomTypesResult,typeNightsResult,inventoryControlsResult,accountProfilesResult,blocksResult,blockInventoryResult,roomingResult,folioWindowsResult,folioEntriesResult,routingRulesResult,transactionCodesResult,arAccountsResult,arInvoicesResult,trialBalanceResult,channelConnectionsResult,channelMappingsResult,ariUpdatesResult,inboundMessagesResult,channelLinksResult,integrationAttemptsResult,outboxResult] = await db.batch([
+  const [propertyResult,reservationResult,roomResult,actorCashierResult,openCashierResult,failedResult,auditResult,postingsResult,roomTypesResult,typeNightsResult,inventoryControlsResult,accountProfilesResult,blocksResult,blockInventoryResult,roomingResult,folioWindowsResult,folioEntriesResult,routingRulesResult,transactionCodesResult,arAccountsResult,arInvoicesResult,trialBalanceResult,channelConnectionsResult,channelContractsResult,channelMappingsResult,ariUpdatesResult,inboundMessagesResult,channelLinksResult,integrationAttemptsResult,outboxResult] = await db.batch([
     db.prepare("SELECT * FROM properties WHERE id='prop-seoul' LIMIT 1"),
     db.prepare(`SELECT r.*, g.first_name, g.last_name, g.vip_level, rm.number room_number, rt.code room_type_code, rt.name room_type_name, COALESCE(SUM(CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'PAYMENT' THEN -f.amount WHEN 'CHARGE_REVERSAL' THEN -f.amount WHEN 'PAYMENT_REVERSAL' THEN f.amount WHEN 'REFUND' THEN f.amount ELSE 0 END),0) balance FROM reservations r JOIN guests g ON g.id=r.guest_id JOIN room_types rt ON rt.id=r.room_type_id LEFT JOIN rooms rm ON rm.id=r.room_id LEFT JOIN folio_entries f ON f.reservation_id=r.id WHERE r.property_id='prop-seoul' GROUP BY r.id,g.id,rt.id,rm.id ORDER BY CASE r.status WHEN 'DUE_IN' THEN 1 WHEN 'IN_HOUSE' THEN 2 ELSE 3 END, r.eta`),
     db.prepare(`SELECT rm.*, rt.code room_type_code, rt.name room_type_name, h.status task_status, h.assignee FROM rooms rm JOIN room_types rt ON rt.id=rm.room_type_id LEFT JOIN housekeeping_tasks h ON h.room_id=rm.id AND h.business_date=(SELECT business_date FROM properties WHERE id='prop-seoul') WHERE rm.property_id='prop-seoul' ORDER BY rm.number`),
@@ -426,6 +455,7 @@ async function snapshot(db: D1, principal?: Principal | null) {
     db.prepare("SELECT i.*,a.account_no,a.name account_name,COALESCE(SUM(l.debit-l.credit),0) balance FROM ar_invoices i JOIN ar_accounts a ON a.id=i.ar_account_id LEFT JOIN ar_ledger_entries l ON l.invoice_id=i.id WHERE i.property_id='prop-seoul' GROUP BY i.id,a.id ORDER BY i.issued_date DESC,i.invoice_no DESC"),
     db.prepare(`SELECT COALESCE(SUM(CASE kind WHEN 'CHARGE' THEN amount WHEN 'PAYMENT' THEN -amount WHEN 'CHARGE_REVERSAL' THEN -amount WHEN 'PAYMENT_REVERSAL' THEN amount WHEN 'REFUND' THEN amount ELSE 0 END),0) guest_ledger,(SELECT COALESCE(SUM(debit-credit),0) FROM ar_ledger_entries WHERE property_id='prop-seoul') ar_ledger,COALESCE(SUM(CASE WHEN kind='CHARGE' THEN amount WHEN kind='CHARGE_REVERSAL' THEN -amount ELSE 0 END),0) gross_revenue,COALESCE(SUM(CASE WHEN kind='PAYMENT' THEN amount WHEN kind='PAYMENT_REVERSAL' THEN -amount WHEN kind='REFUND' THEN -amount ELSE 0 END),0) net_payments FROM folio_entries WHERE property_id='prop-seoul'`),
     db.prepare("SELECT * FROM channel_connections WHERE property_id='prop-seoul' ORDER BY provider,name"),
+    db.prepare("SELECT cc.*,c.provider,c.name connection_name FROM channel_contracts cc JOIN channel_connections c ON c.id=cc.connection_id WHERE cc.property_id='prop-seoul' ORDER BY c.provider,c.name"),
     db.prepare("SELECT m.*,c.provider,c.name connection_name,rt.code room_type_code,rt.name room_type_name FROM channel_mappings m JOIN channel_connections c ON c.id=m.connection_id JOIN room_types rt ON rt.id=m.room_type_id WHERE m.property_id='prop-seoul' ORDER BY c.provider,rt.code,m.rate_plan"),
     db.prepare("SELECT a.*,c.provider,m.external_room_type_id,m.external_rate_plan_id,rt.code room_type_code FROM ari_updates a JOIN channel_connections c ON c.id=a.connection_id JOIN channel_mappings m ON m.id=a.mapping_id JOIN room_types rt ON rt.id=m.room_type_id WHERE a.property_id='prop-seoul' ORDER BY a.created_at DESC LIMIT 150"),
     db.prepare("SELECT i.*,c.name connection_name FROM inbound_channel_messages i JOIN channel_connections c ON c.id=i.connection_id WHERE i.property_id='prop-seoul' ORDER BY i.received_at DESC LIMIT 150"),
@@ -449,13 +479,13 @@ async function snapshot(db: D1, principal?: Principal | null) {
   const inventory={dates,types:roomTypes.map(type=>{const physical=rooms.filter(room=>room.room_type_id===type.id&&Number(room.active??1)===1&&room.housekeeping_status!=="OUT_OF_SERVICE").length;return {...type,physical,cells:dates.map(stayDate=>{const control=inventoryControls.get(`${type.id}:${stayDate}`);const sellLimit=control?.sell_limit==null?physical:Number(control.sell_limit),reserved=booked.get(`${type.id}:${stayDate}`)??0,closed=Boolean(control?.closed);return {stayDate,sellLimit,reserved,available:closed?0:Math.max(0,sellLimit-reserved),closed,minStay:Number(control?.min_stay??1),cta:Boolean(control?.close_to_arrival),ctd:Boolean(control?.close_to_departure),price:Number(control?.price_override??type.base_rate)};})}})};
   const groups={accounts:accountProfilesResult.results,blocks:blocksResult.results,inventory:blockInventoryResult.results,rooming:roomingResult.results};
   const finance={windows:folioWindowsResult.results,entries:folioEntriesResult.results,routing:routingRulesResult.results,transactionCodes:transactionCodesResult.results,arAccounts:arAccountsResult.results,arInvoices:arInvoicesResult.results,trialBalance:trialBalanceResult.results[0]??{guest_ledger:0,ar_ledger:0,gross_revenue:0,net_payments:0}};
-  const integrations={connections:channelConnectionsResult.results,mappings:channelMappingsResult.results,ari:ariUpdatesResult.results,inbound:inboundMessagesResult.results,links:channelLinksResult.results,attempts:integrationAttemptsResult.results,outbox:outboxResult.results};
+  const integrations={connections:channelConnectionsResult.results,contracts:channelContractsResult.results,mappings:channelMappingsResult.results,ari:ariUpdatesResult.results,inbound:inboundMessagesResult.results,links:channelLinksResult.results,attempts:integrationAttemptsResult.results,outbox:outboxResult.results};
   return { property, reservations, rooms, metrics, principal, controls, inventory, groups, finance, integrations };
 }
 
 type Snapshot = Awaited<ReturnType<typeof snapshot>>;
 const snapshotCache = new Map<string,{expires:number,value:Promise<Snapshot>}>();
-const snapshotRepresentationCache = new Map<string,{expires:number,json:Promise<string>}>();
+const snapshotRepresentationCache = new Map<string,{expires:number,json:Promise<string>,gzip:Promise<ArrayBuffer>}>();
 type ReportResult=Awaited<ReturnType<typeof runReport>>;
 const reportCache=new Map<string,{expires:number;value:Promise<ReportResult>}>();
 function invalidateSnapshots() { snapshotCache.clear(); snapshotRepresentationCache.clear(); reportCache.clear(); }
@@ -465,10 +495,16 @@ async function cachedSnapshot(db:D1, principal:Principal) {
   const value=snapshot(db,principal); snapshotCache.set(key,{expires:now+3000,value});
   try { return await value; } catch (error) { snapshotCache.delete(key); throw error; }
 }
-async function cachedSnapshotResponse(db:D1,principal:Principal) {
+async function gzipSnapshot(json: Promise<string>) {
+  const stream = new Blob([await json]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Response(stream).arrayBuffer();
+}
+async function cachedSnapshotResponse(db:D1,principal:Principal,request:Request) {
   const key=principal.email,now=Date.now();let cached=snapshotRepresentationCache.get(key);
-  if(!cached||cached.expires<=now){const json=cachedSnapshot(db,principal).then(value=>JSON.stringify(value));cached={expires:now+3000,json};snapshotRepresentationCache.set(key,cached);}
-  return new Response(await cached.json,{headers:{"Cache-Control":"private, no-store","Content-Type":"application/json; charset=utf-8"}});
+  if(!cached||cached.expires<=now){const json=cachedSnapshot(db,principal).then(value=>JSON.stringify(value));cached={expires:now+3000,json,gzip:gzipSnapshot(json)};snapshotRepresentationCache.set(key,cached);}
+  const common={"Cache-Control":"private, no-store","Content-Type":"application/json; charset=utf-8","Vary":"Accept-Encoding"};
+  if(/(?:^|,)\s*gzip\s*(?:,|$)/i.test(request.headers.get("accept-encoding")||""))return new Response(await cached.gzip,{headers:{...common,"Content-Encoding":"gzip"}});
+  return new Response(await cached.json,{headers:common});
 }
 async function cachedReport(db:D1,params:URLSearchParams,principal:Principal){const key=`${principal.email}:${params.toString()}`,now=Date.now(),cached=reportCache.get(key);if(cached&&cached.expires>now)return cached.value;if(reportCache.size>200){for(const [cacheKey,item] of reportCache)if(item.expires<=now)reportCache.delete(cacheKey);if(reportCache.size>200)reportCache.clear();}const value=runReport(db,params,principal);reportCache.set(key,{expires:now+5000,value});try{return await value;}catch(error){reportCache.delete(key);throw error;}}
 
@@ -477,11 +513,23 @@ export async function GET(request: Request) {
   await ready(db); const principal = await principalFor(request, db);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
   const url=new URL(request.url);
+  if(url.searchParams.get("view")==="inventory") {
+    try {
+      const property=await db.prepare("SELECT business_date FROM properties WHERE id='prop-seoul'").first<{business_date:string}>(),from=url.searchParams.get("from")||String(property?.business_date),to=url.searchParams.get("to")||String(property?.business_date);
+      return Response.json(await loadInventoryCalendar(db,from,to),{headers:{"Cache-Control":"private, no-store"}});
+    } catch(error){if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});throw error;}
+  }
+  if(url.searchParams.get("view")==="accounting") {
+    try {
+      const property=await db.prepare("SELECT business_date FROM properties WHERE id='prop-seoul'").first<{business_date:string}>(),from=url.searchParams.get("from")||String(property?.business_date),to=url.searchParams.get("to")||String(property?.business_date);
+      return Response.json(await loadAccountingCenter(db,from,to),{headers:{"Cache-Control":"private, no-store"}});
+    } catch(error){if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});throw error;}
+  }
   if(url.searchParams.get("view")==="report") {
     try { return Response.json(await cachedReport(db,url.searchParams,principal),{headers:{"Cache-Control":"private, no-store"}}); }
     catch(error){if(error instanceof ReportRequestError)return Response.json({error:error.message},{status:error.status});throw error;}
   }
-  return cachedSnapshotResponse(db,principal);
+  return cachedSnapshotResponse(db,principal,request);
 }
 
 export async function POST(request: Request) {
@@ -517,7 +565,10 @@ export async function POST(request: Request) {
   const reservation = body.reservationId ? await db.prepare("SELECT * FROM reservations WHERE id=?").bind(body.reservationId).first<Record<string, unknown>>() : null;
   const propertyState = await db.prepare("SELECT business_date FROM properties WHERE id='prop-seoul'").first<{business_date:string}>(); const businessDate=String(propertyState?.business_date);
   try {
-    if(body.action==="create_room_type") {
+    if(await handleExtendedAction(db,body,principal,businessDate,now,idempotencyKey)) {
+      // Extended revenue, inventory and accounting actions are committed by the
+      // specialized service and share the same snapshot response contract.
+    } else if(body.action==="create_room_type") {
       const code=(body.code||"").trim().toUpperCase(),name=(body.name||"").trim(),baseRate=Number(body.baseRate),capacity=Number(body.capacity),description=(body.description||"").trim().slice(0,300);
       if(!/^[A-Z0-9_-]{2,12}$/.test(code)||name.length<2||name.length>80||!Number.isFinite(baseRate)||baseRate<0||!Number.isInteger(capacity)||capacity<1||capacity>20)return Response.json({error:"타입 코드는 영문·숫자 2~12자, 이름은 2~80자, 기준 인원은 1~20명으로 입력하세요."},{status:400});
       const typeId=crypto.randomUUID();await db.batch([
@@ -889,6 +940,7 @@ export async function POST(request: Request) {
     return Response.json(await snapshot(db, principal));
   } catch (error) {
     const message=error instanceof Error ? error.message : "처리 중 오류가 발생했습니다.";
+    if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});
     if (message.includes("room_night_uq") || message.includes("reservation_nights.property_id")) return Response.json({error:"선택한 객실은 해당 일정에 이미 예약되어 있습니다. 다른 객실을 선택하세요."},{status:409});
     if (message.includes("reservation_transition_from_uq") || message.includes("reservation_transitions.property_id")) return Response.json({error:"다른 작업자가 이미 이 예약의 상태를 변경했습니다. 화면을 새로고침해 확인하세요."},{status:409});
     if (message.includes("reservation_mutation_version_uq") || message.includes("reservation_mutations.property_id")) return Response.json({error:"다른 작업자가 같은 예약 버전을 먼저 변경했습니다. 화면을 새로고침하세요."},{status:409});
@@ -909,6 +961,8 @@ export async function POST(request: Request) {
     if (message.includes("channel_mapping_external_uq") || message.includes("channel_mappings.connection_id")) return Response.json({error:"같은 외부 객실·요금 매핑이 이미 있습니다."},{status:409});
     if (message.includes("stale channel revision")) return Response.json({error:"이미 처리한 revision보다 오래된 채널 메시지입니다."},{status:409});
     if (message.includes("integration attempts are immutable")) return Response.json({error:"연동 시도 원장은 수정·삭제할 수 없습니다."},{status:409});
+    if (message.includes("pay or void accrued settlements")) return Response.json({error:"정산 대기 건을 입금·지급 완료 또는 무효 처리한 뒤 계약 유형과 수수료율을 변경하세요."},{status:409});
+    if (message.includes("accounting journal lines are immutable") || message.includes("accounting journal entries are immutable")) return Response.json({error:"확정 회계 원장은 수정·삭제할 수 없습니다. 반대전표를 생성하세요."},{status:409});
     return Response.json({error:message},{status:500});
   }
 }

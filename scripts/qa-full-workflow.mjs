@@ -67,14 +67,14 @@ async function main() {
   const businessDate = data.property.business_date;
   record("Supabase 실데이터 스냅샷", `${elapsed}ms`);
 
-  const reportKeys = ["reservations", "occupancy", "financials", "ar", "housekeeping", "groups", "channels", "audit", "room_inventory"];
+  const reportKeys = ["reservations", "occupancy", "financials", "accounting_journal", "channel_settlements", "ar", "housekeeping", "groups", "channels", "audit", "room_inventory"];
   for (const report of reportKeys) {
     const query = new URLSearchParams({ view: "report", report, from: businessDate, to: addDays(businessDate, 7), page: "1", pageSize: "25", q: "" });
     const response = await request(`/api/pms?${query}`);
     assert.equal(response.response.status, 200, `${report}: ${response.json?.error}`);
     assert.equal(response.json.report.key, report);
   }
-  record("표준 리포트 9종 조회·필터");
+  record("표준 리포트 11종 조회·필터");
 
   for (const format of ["CSV", "XLSX"]) {
     const exported = await action("export_report", { format, report: "reservations", from: businessDate, to: addDays(businessDate, 7), q: `QA${runId}` });
@@ -216,6 +216,44 @@ async function main() {
   response = await action("create_channel_mapping", { connectionId: connection.id, roomTypeId: roomType.id, externalRoomTypeId: `ROOM-${runId}`, ratePlan: "QAOTA", externalRatePlanId: `RATE-${runId}` });
   const mapping = response.json.integrations.mappings.find((item) => item.connection_id === connection.id && item.external_room_type_id === `ROOM-${runId}`);
   assert.ok(mapping);
+  response = await action("upsert_channel_contract", { connectionId: connection.id, contractType: "COMMISSION", commissionPercent: "15", settlementCycle: "PER_STAY", paymentTermsDays: "14", validFrom: businessDate, validTo: "" });
+  assert.equal(response.json.integrations.contracts.find((item) => item.connection_id === connection.id).contract_type, "COMMISSION");
+  const commissionReservation = (await createReservation("Commission", roomType.id, addDays(businessDate, 10), addDays(businessDate, 11))).reservation;
+  await action("accrue_channel_settlement", { connectionId: connection.id, reservationId: commissionReservation.id });
+  let accounting = await request(`/api/pms?${new URLSearchParams({ view: "accounting", from: businessDate, to: addDays(businessDate, 30) })}`);
+  let settlement = accounting.json.settlements.find((item) => item.connection_id === connection.id && item.reservation_id === commissionReservation.id);
+  assert.equal(settlement.contract_type, "COMMISSION");
+  assert.equal(Number(settlement.channel_cost_amount), 16500);
+  await action("mark_channel_settlement_paid", { settlementId: settlement.id });
+  record("수수료 계약·정산 발생·입금/지급 완료");
+
+  await action("upsert_channel_contract", { connectionId: connection.id, contractType: "NET_RATE", commissionPercent: "0", settlementCycle: "WEEKLY", paymentTermsDays: "7", validFrom: businessDate, validTo: "" });
+  const netArrival = addDays(businessDate, 12), netReservation = (await createReservation("NetRate", roomType.id, netArrival, addDays(netArrival, 1))).reservation;
+  await action("bulk_update_inventory_controls", { from: netArrival, to: netArrival, roomTypeIds: JSON.stringify([roomType.id]), weekdays: JSON.stringify([0,1,2,3,4,5,6]), sellLimit: "", priceOverride: "145000", minStay: "1", closed: "false", cta: "false", ctd: "false", mappingId: mapping.id, channelSellRate: "145000", channelNetRate: "112000" });
+  const calendar = await request(`/api/pms?${new URLSearchParams({ view: "inventory", from: businessDate, to: addDays(businessDate, 399) })}`);
+  assert.equal(calendar.response.status, 200);
+  assert.equal(calendar.json.range.days, 400);
+  const rateCell = calendar.json.types.find((item) => item.id === roomType.id).cells.find((item) => item.stayDate === netArrival);
+  assert.equal(Number(rateCell.channelRates.find((item) => item.mapping_id === mapping.id).net_rate), 112000);
+  await action("accrue_channel_settlement", { connectionId: connection.id, reservationId: netReservation.id });
+  accounting = await request(`/api/pms?${new URLSearchParams({ view: "accounting", from: businessDate, to: addDays(businessDate, 30) })}`);
+  settlement = accounting.json.settlements.find((item) => item.connection_id === connection.id && item.reservation_id === netReservation.id);
+  assert.equal(settlement.contract_type, "NET_RATE");
+  assert.equal(Number(settlement.hotel_net_amount), 112000);
+  assert.equal(Number(settlement.gross_sell_amount) - Number(settlement.channel_cost_amount), Number(settlement.hotel_net_amount));
+  record("400일 캘린더·벌크 재고·채널 판매가·입금가 정산");
+
+  const accounts = accounting.json.accounts, expenseAccount = accounts.find((item) => item.code === "5200"), cashAccount = accounts.find((item) => item.code === "1100");
+  await action("post_accounting_entry", { businessDate, entryType: "EXPENSE", debitAccountId: expenseAccount.id, creditAccountId: cashAccount.id, amount: "25000", description: `QA 세탁비 ${runId}`, vendor: "QA Linen", department: "HOUSEKEEPING" });
+  accounting = await request(`/api/pms?${new URLSearchParams({ view: "accounting", from: businessDate, to: addDays(businessDate, 30) })}`);
+  const manual = accounting.json.entries.find((item) => item.description === `QA 세탁비 ${runId}`);
+  assert.equal(Number(manual.total_debit), Number(manual.total_credit));
+  await action("reverse_accounting_entry", { entryId: manual.id, reason: "QA 회계 반대전표 검증" });
+  accounting = await request(`/api/pms?${new URLSearchParams({ view: "accounting", from: businessDate, to: addDays(businessDate, 30) })}`);
+  assert.equal(accounting.json.entries.find((item) => item.id === manual.id).status, "REVERSED");
+  assert.ok(accounting.json.entries.every((item) => Math.abs(Number(item.total_debit) - Number(item.total_credit)) < 0.01));
+  record("수기 복식전표·차대 균형·반대전표");
+
   response = await action("queue_ari_delta", { mappingId: mapping.id, startDate: businessDate, endDate: addDays(businessDate, 2) });
   let ari = response.json.integrations.ari.find((item) => item.mapping_id === mapping.id && item.status === "PENDING");
   assert.ok(ari);
