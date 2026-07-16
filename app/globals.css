@@ -141,3 +141,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
   .workspace h1{font-size:21px}
   .cashier-btn,.header-actions .primary{font-size:10px}
 }
+
+/* Aurora PMS generated brand mark */
+.brand .brand-mark,.loading .brand-mark{overflow:hidden;border:1px solid rgba(49,130,246,.16);background:linear-gradient(145deg,#f8fbff,#eef1ff);color:transparent;padding:5px;box-shadow:0 8px 22px rgba(49,130,246,.18)}
+.brand-mark img{display:block;width:100%;height:100%;object-fit:contain}
+.brand b{font-size:15px;font-weight:800;letter-spacing:-.35px}
+.brand small{font-size:8px;letter-spacing:1.25px}
+.loading .brand-mark{width:56px;height:56px;border-radius:18px;padding:7px}
+.mobile-brand{display:none}
+@media(max-width:760px){.mobile-brand{display:flex;align-items:center;gap:7px;margin-bottom:8px;color:var(--brand-strong)}.mobile-brand img{width:24px;height:24px;object-fit:contain}.mobile-brand b{font-size:11px;font-weight:800;letter-spacing:-.2px}}
