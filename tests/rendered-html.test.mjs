@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import ts from "typescript";
 
 const root = new URL("../", import.meta.url);
 test("PMS product shell replaces the starter", async () => {
-  const [page, layout, css, route, hosting, reporting, workbook, roomMaster] = await Promise.all([
+  const [page, layout, css, route, hosting, reporting, workbook, roomMaster, inventory, accounting, contracts, extended] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"), readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"), readFile(new URL("app/api/pms/route.ts", root), "utf8"), readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("app/api/pms/reporting.ts", root), "utf8"), readFile(new URL("app/xlsx-export.ts", root), "utf8"), readFile(new URL("app/room-master.tsx", root), "utf8"),
+    readFile(new URL("app/inventory-calendar.tsx",root),"utf8"),readFile(new URL("app/accounting-center.tsx",root),"utf8"),readFile(new URL("app/channel-contracts.tsx",root),"utf8"),readFile(new URL("app/api/pms/extended.ts",root),"utf8"),
   ]);
-  assert.match(layout, /Aurora PMS/); assert.match(layout, /lang="ko"/);
+  assert.match(layout, /Aurora PMS/); assert.match(layout, /lang="ko"/); assert.match(layout, /https:\/\/static\.toss\.im\/tps\/main\.css/);
   assert.match(page, /오늘의 오퍼레이션/); assert.match(page, /체크인 완료/); assert.match(page, /야간 감사/); assert.match(page, /새 예약 만들기/);
   assert.match(css, /\.room-grid/); assert.match(css, /@media\(max-width:760px\)/);
   assert.match(route, /room_night_uq/); assert.match(route, /audit_logs/); assert.match(route, /idempotency_keys/); assert.match(route, /outbox_events/); assert.match(hosting, /"d1": "DB"/);
@@ -26,5 +28,59 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(page,/리포트 센터/);assert.match(page,/객실 마스터/);assert.match(route,/export_report/);assert.match(route,/bulk_create_rooms/);assert.match(route,/REPORT_EXPORT/);
   assert.match(reporting,/점유율 · ADR · RevPAR/);assert.match(reporting,/최대 367일/);assert.match(reporting,/integration_delivery_attempts/);assert.match(roomMaster,/최대 500실/);
   assert.match(workbook,/openxmlformats-officedocument\.spreadsheetml\.sheet/);assert.match(workbook,/Parameters/);assert.match(workbook,/autoFilter/);assert.doesNotMatch(workbook,/from "xlsx"/);
+  assert.match(page,/quickPanel/);assert.match(page,/frontdeskFilter/);assert.match(page,/Cmd\/Ctrl|metaKey\|\|event\.ctrlKey/);assert.match(page,/aria-pressed/);assert.match(page,/onReview/);
+  assert.match(css,/Aurora Flow UI/);assert.match(css,/#3182f6/i);assert.match(css,/Toss Product Sans/);assert.match(css,/html,body,body \*\{font-family:var\(--aurora-font-product\)!important\}/);assert.match(css,/prefers-reduced-motion/);assert.match(css,/focus-visible/);
+  assert.match(route,/PMS_DEMO_USER_EMAIL/);assert.match(route,/runtimeBindings/);assert.doesNotMatch(route,/cloudflare:workers/);
+  assert.match(inventory,/최대 730일|730일까지/);assert.match(inventory,/기간 벌크 요금·재고/);assert.match(inventory,/호텔 입금가/);
+  assert.match(accounting,/회계 & 손익/);assert.match(accounting,/복식부기 분개장/);assert.match(accounting,/채널 정산 원장/);
+  assert.match(contracts,/수수료 계약/);assert.match(contracts,/입금가 계약/);assert.match(extended,/bulk_update_inventory_controls/);assert.match(extended,/reverse_accounting_entry/);
+  assert.match(reporting,/accounting_journal/);assert.match(reporting,/channel_settlements/);assert.match(css,/master-modal>\.modal-actions/);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
+});
+
+test("every rendered button has an action, submit contract, or intentional disabled state", async () => {
+  for (const file of ["app/page.tsx", "app/room-master.tsx", "app/reports-center.tsx", "app/inventory-calendar.tsx", "app/accounting-center.tsx", "app/channel-contracts.tsx"]) {
+    const sourceText = await readFile(new URL(file, root), "utf8");
+    const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const inert = [];
+    const visit = (node) => {
+      if (ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === "button") {
+        const names = node.openingElement.attributes.properties.filter(ts.isJsxAttribute).map((attribute) => attribute.name.getText(source));
+        if (!names.includes("onClick") && !names.includes("type") && !names.includes("disabled")) {
+          const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+          inert.push(`${file}:${line + 1}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    assert.deepEqual(inert, [], `inert buttons: ${inert.join(", ")}`);
+  }
+});
+
+test("README is a complete architecture, development, and operations handoff", async () => {
+  const readme = await readFile(new URL("README.md", root), "utf8");
+  for (const section of [
+    "## 현재 릴리스 현황",
+    "## 전체 아키텍처",
+    "## 아키텍처 결정 기록",
+    "## 화면 및 기능 명세",
+    "## 마이그레이션 카탈로그",
+    "## API 상세 개발 명세",
+    "## 개발자 가이드",
+    "## 장애 대응 Runbook",
+    "## 프로덕션 전환 전 필수 작업",
+    "## 구현 변경 이력",
+  ]) assert.ok(readme.includes(section), `README section missing: ${section}`);
+  for (const contract of [
+    "bulk_update_inventory_controls",
+    "upsert_channel_contract",
+    "accrue_channel_settlement",
+    "post_accounting_entry",
+    "202607160005_settlement_contract_snapshot.sql",
+    "https://static.toss.im/tps/main.css",
+    "https://aurora-pms-gilt.vercel.app",
+    "PMS_DEMO_USER_EMAIL",
+  ]) assert.ok(readme.includes(contract), `README contract missing: ${contract}`);
+  assert.ok(readme.split("\n").length > 1_000, "README should remain a detailed handoff document");
 });

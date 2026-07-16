@@ -1,0 +1,8 @@
+.env*
+.openai
+.vinext
+.wrangler
+dist
+work
+outputs
+supabase/.temp

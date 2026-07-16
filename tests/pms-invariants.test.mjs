@@ -40,6 +40,15 @@ async function database() {
   db.exec("CREATE TRIGGER integration_attempts_validate_insert BEFORE INSERT ON integration_delivery_attempts WHEN NEW.attempt_no<1 OR NEW.direction NOT IN ('INBOUND','OUTBOUND') OR NEW.status NOT IN ('ACKED','FAILED') BEGIN SELECT RAISE(ABORT,'invalid integration attempt'); END");
   db.exec("CREATE TRIGGER integration_attempts_no_update BEFORE UPDATE ON integration_delivery_attempts BEGIN SELECT RAISE(ABORT,'integration attempts are immutable'); END");
   db.exec("CREATE TRIGGER integration_attempts_no_delete BEFORE DELETE ON integration_delivery_attempts BEGIN SELECT RAISE(ABORT,'integration attempts are immutable'); END");
+  db.exec("CREATE TABLE channel_contracts(id TEXT PRIMARY KEY,property_id TEXT NOT NULL,connection_id TEXT NOT NULL UNIQUE,contract_type TEXT NOT NULL CHECK(contract_type IN ('COMMISSION','NET_RATE')),commission_percent REAL NOT NULL CHECK(commission_percent BETWEEN 0 AND 100),status TEXT NOT NULL)");
+  db.exec("CREATE TABLE channel_rate_overrides(id TEXT PRIMARY KEY,property_id TEXT NOT NULL,connection_id TEXT NOT NULL,mapping_id TEXT NOT NULL,room_type_id TEXT NOT NULL,stay_date TEXT NOT NULL,sell_rate REAL NOT NULL CHECK(sell_rate>=0),net_rate REAL CHECK(net_rate IS NULL OR (net_rate>=0 AND net_rate<=sell_rate)),UNIQUE(mapping_id,stay_date))");
+  db.exec("CREATE TABLE channel_settlements(id TEXT PRIMARY KEY,property_id TEXT NOT NULL,contract_id TEXT NOT NULL,connection_id TEXT NOT NULL,reservation_id TEXT,business_date TEXT NOT NULL,contract_type TEXT NOT NULL,commission_percent REAL NOT NULL,gross_sell_amount REAL NOT NULL,channel_cost_amount REAL NOT NULL,hotel_net_amount REAL NOT NULL,status TEXT NOT NULL,CHECK(ABS((gross_sell_amount-channel_cost_amount)-hotel_net_amount)<=0.01),UNIQUE(connection_id,reservation_id))");
+  db.exec("CREATE TABLE accounting_accounts(id TEXT PRIMARY KEY,property_id TEXT NOT NULL,code TEXT NOT NULL,account_type TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,UNIQUE(property_id,code))");
+  db.exec("CREATE TABLE accounting_journal_entries(id TEXT PRIMARY KEY,property_id TEXT NOT NULL,entry_no TEXT NOT NULL,business_date TEXT NOT NULL,entry_type TEXT NOT NULL,description TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'POSTED',reversal_of_id TEXT,UNIQUE(property_id,entry_no))");
+  db.exec("CREATE TABLE accounting_journal_lines(id TEXT PRIMARY KEY,property_id TEXT NOT NULL,journal_entry_id TEXT NOT NULL,account_id TEXT NOT NULL,debit REAL NOT NULL DEFAULT 0,credit REAL NOT NULL DEFAULT 0,CHECK((debit>0 AND credit=0) OR (credit>0 AND debit=0)))");
+  db.exec("CREATE TRIGGER accounting_lines_validate BEFORE INSERT ON accounting_journal_lines WHEN NOT EXISTS(SELECT 1 FROM accounting_accounts WHERE id=NEW.account_id AND active=1) BEGIN SELECT RAISE(ABORT,'active accounting account is required'); END");
+  db.exec("CREATE TRIGGER accounting_lines_no_update BEFORE UPDATE ON accounting_journal_lines BEGIN SELECT RAISE(ABORT,'accounting journal lines are immutable'); END");
+  db.exec("CREATE TRIGGER accounting_lines_no_delete BEFORE DELETE ON accounting_journal_lines BEGIN SELECT RAISE(ABORT,'accounting journal lines are immutable'); END");
   return db;
 }
 
@@ -180,4 +189,19 @@ test("inactive and out-of-service rooms never increase sellable inventory", asyn
 test("report exports retain filters, row counts, format and requesting actor", async () => {
   const db=await database();db.prepare("INSERT INTO report_exports(id,property_id,report_key,format,filters_json,row_count,status,requested_by,created_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run("ex1","p1","occupancy","XLSX",JSON.stringify({from:"2026-08-01",to:"2026-08-31"}),31,"COMPLETED","revenue@hotel.test","2026-08-01T09:00:00Z","2026-08-01T09:00:01Z");
   const row=db.prepare("SELECT * FROM report_exports WHERE id='ex1'").get();assert.equal(row.report_key,"occupancy");assert.equal(row.row_count,31);assert.equal(row.requested_by,"revenue@hotel.test");assert.equal(JSON.parse(row.filters_json).to,"2026-08-31");db.close();
+});
+
+test("double-entry accounting stays balanced and journal lines are immutable", async()=>{
+  const db=await database(),account=db.prepare("INSERT INTO accounting_accounts(id,property_id,code,account_type,active) VALUES (?,?,?,?,1)");
+  account.run("cash","p1","1100","ASSET");account.run("expense","p1","5200","EXPENSE");
+  db.prepare("INSERT INTO accounting_journal_entries(id,property_id,entry_no,business_date,entry_type,description,status) VALUES (?,?,?,?,?,?,?)").run("j1","p1","JRN-1","2026-08-01","EXPENSE","Laundry","POSTED");
+  const line=db.prepare("INSERT INTO accounting_journal_lines(id,property_id,journal_entry_id,account_id,debit,credit) VALUES (?,?,?,?,?,?)");line.run("l1","p1","j1","expense",250000,0);line.run("l2","p1","j1","cash",0,250000);
+  const totals=db.prepare("SELECT SUM(debit) debit,SUM(credit) credit FROM accounting_journal_lines WHERE journal_entry_id='j1'").get();assert.equal(totals.debit,totals.credit);
+  assert.throws(()=>line.run("l3","p1","j1","missing",1,0),/active accounting account is required/);assert.throws(()=>db.prepare("UPDATE accounting_journal_lines SET debit=1 WHERE id='l1'").run(),/immutable/);assert.throws(()=>db.prepare("DELETE FROM accounting_journal_lines WHERE id='l1'").run(),/immutable/);db.close();
+});
+
+test("channel contracts preserve sell, distribution cost and hotel net equation",async()=>{
+  const db=await database();db.prepare("INSERT INTO channel_contracts VALUES (?,?,?,?,?,?)").run("c1","p1","conn1","NET_RATE",0,"ACTIVE");
+  const rate=db.prepare("INSERT INTO channel_rate_overrides VALUES (?,?,?,?,?,?,?,?)");rate.run("r1","p1","conn1","map1","rt1","2026-08-01",145000,112000);assert.throws(()=>rate.run("r2","p1","conn1","map1","rt1","2026-08-02",100000,120000),/CHECK constraint failed/);
+  const settlement=db.prepare("INSERT INTO channel_settlements VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");settlement.run("s1","p1","c1","conn1","res1","2026-08-01","NET_RATE",0,145000,33000,112000,"ACCRUED");const row=db.prepare("SELECT * FROM channel_settlements WHERE id='s1'").get();assert.equal(row.gross_sell_amount-row.channel_cost_amount,row.hotel_net_amount);assert.throws(()=>settlement.run("s2","p1","c1","conn1","res1","2026-08-01","NET_RATE",0,145000,10000,112000,"ACCRUED"),/CHECK constraint failed|UNIQUE constraint failed/);db.close();
 });
