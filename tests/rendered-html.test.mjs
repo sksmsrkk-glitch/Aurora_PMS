@@ -5,11 +5,11 @@ import ts from "typescript";
 
 const root = new URL("../", import.meta.url);
 test("PMS product shell replaces the starter", async () => {
-  const [page, layout, css, route, hosting, reporting, workbook, roomMaster, inventory, accounting, contracts, extended] = await Promise.all([
+  const [page, layout, css, route, hosting, reporting, workbook, roomMaster, inventory, accounting, contracts, extended, dialogController] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"), readFile(new URL("app/layout.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"), readFile(new URL("app/api/pms/route.ts", root), "utf8"), readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("app/api/pms/reporting.ts", root), "utf8"), readFile(new URL("app/xlsx-export.ts", root), "utf8"), readFile(new URL("app/room-master.tsx", root), "utf8"),
-    readFile(new URL("app/inventory-calendar.tsx",root),"utf8"),readFile(new URL("app/accounting-center.tsx",root),"utf8"),readFile(new URL("app/channel-contracts.tsx",root),"utf8"),readFile(new URL("app/api/pms/extended.ts",root),"utf8"),
+    readFile(new URL("app/inventory-calendar.tsx",root),"utf8"),readFile(new URL("app/accounting-center.tsx",root),"utf8"),readFile(new URL("app/channel-contracts.tsx",root),"utf8"),readFile(new URL("app/api/pms/extended.ts",root),"utf8"),readFile(new URL("app/dialog-controller.ts",root),"utf8"),
   ]);
   assert.match(layout, /Aurora PMS/); assert.match(layout, /lang="ko"/); assert.match(layout, /https:\/\/static\.toss\.im\/tps\/main\.css/);
   assert.match(page, /오늘의 오퍼레이션/); assert.match(page, /체크인 완료/); assert.match(page, /야간 감사/); assert.match(page, /새 예약 만들기/);
@@ -35,6 +35,10 @@ test("PMS product shell replaces the starter", async () => {
   assert.match(accounting,/회계 & 손익/);assert.match(accounting,/복식부기 분개장/);assert.match(accounting,/채널 정산 원장/);
   assert.match(contracts,/수수료 계약/);assert.match(contracts,/입금가 계약/);assert.match(extended,/bulk_update_inventory_controls/);assert.match(extended,/reverse_accounting_entry/);
   assert.match(reporting,/accounting_journal/);assert.match(reporting,/channel_settlements/);assert.match(css,/master-modal>\.modal-actions/);
+  assert.match(page,/headerSearchEnabled/);assert.match(page,/filteredRooms/);assert.match(page,/search-clear/);assert.match(page,/객실 청소 상태 필터/);
+  assert.match(dialogController,/MutationObserver/);assert.match(dialogController,/event\.key === "Escape"/);assert.match(dialogController,/focusableSelector/);assert.match(dialogController,/dialog-open/);
+  assert.match(css,/\.dialog-open/);assert.match(css,/min-height:44px/);assert.match(css,/safe-area-inset-bottom/);assert.match(css,/\.modal-backdrop,\.drawer-backdrop\{align-items:flex-end/);assert.match(css,/\.app-shell\{grid-template-columns:minmax\(0,1fr\);min-width:0\}/);
+  assert.match(roomMaster,/aria-modal="true"/);assert.match(inventory,/aria-label="요금 및 재고 편집"/);assert.match(accounting,/aria-label=\{config\.title\}/);assert.match(contracts,/aria-label="채널 계약 편집"/);
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
 });
 

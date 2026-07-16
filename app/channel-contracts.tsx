@@ -155,6 +155,9 @@ function ContractModal({
       }}
     >
       <form
+        role="dialog"
+        aria-modal="true"
+        aria-label="채널 계약 편집"
         className="booking-modal contract-modal"
         onSubmit={async (event) => {
           event.preventDefault();

@@ -49,3 +49,95 @@ html{scroll-behavior:smooth;scrollbar-width:thin;scrollbar-color:rgba(0,29,58,.1
    metric selectors, form controls, tables, and dynamically rendered modals. */
 :root{--aurora-font-product:"Toss Product Sans","Tossface",-apple-system,BlinkMacSystemFont,"Bazier Square","Pretendard Variable",Pretendard,"Noto Sans KR","Segoe UI",sans-serif}
 html,body,body *{font-family:var(--aurora-font-product)!important}
+
+/* Aurora interaction clarity and mobile operations */
+.dialog-open{overflow:hidden}
+.search{position:relative;display:flex;align-items:center;gap:8px}
+.search input{min-width:0}
+.search-count{flex:0 0 auto;color:var(--brand-strong);font-size:10px;font-weight:750;white-space:nowrap}
+.search-clear{flex:0 0 auto;width:26px;height:26px;border:0;border-radius:50%;background:#f2f4f6;color:#6b7684;font-size:16px;line-height:1;cursor:pointer}
+.search-clear:hover{background:#e5e8eb;color:#333d4b}
+.room-empty{grid-column:1/-1;min-height:180px}
+.booking-modal,.cashier-modal,.modal.master-modal{max-height:calc(100dvh - 32px);overscroll-behavior:contain;scrollbar-gutter:stable}
+.drawer{overscroll-behavior:contain}
+.drawer-head{position:sticky;top:0;z-index:5;margin:-4px -2px 12px;padding:4px 2px 12px;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}
+.drawer-head>button,.modal-head>button{display:grid;place-items:center;min-width:40px;min-height:40px;border-radius:50%}
+.modal-actions{position:sticky;bottom:0;z-index:5;margin:14px -2px -2px;padding:14px 2px 2px;background:rgba(255,255,255,.97);border-top:1px solid var(--line);backdrop-filter:blur(14px)}
+.quick-panel{max-height:calc(100dvh - 112px);overflow-y:auto;overscroll-behavior:contain}
+.quick-panel-head{position:sticky;top:-12px;z-index:2;background:rgba(255,255,255,.96);backdrop-filter:blur(14px)}
+button,a,input,select,textarea{touch-action:manipulation}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:3px solid rgba(49,130,246,.35);outline-offset:2px}
+
+@media(hover:hover) and (pointer:fine){
+  .room-card,.pulse-grid article,.type-master-grid article,.quick-panel button,.table-row,.flow-row{transition:transform .18s ease,box-shadow .18s ease,background-color .18s ease,border-color .18s ease}
+}
+
+@media(max-width:1100px){
+  .workspace>header{flex-wrap:wrap}
+  .header-actions{flex-wrap:wrap;justify-content:flex-end}
+  .search{display:flex;width:min(100%,420px)}
+}
+
+@media(max-width:760px){
+  .app-shell{grid-template-columns:minmax(0,1fr);min-width:0}
+  .sidebar{height:calc(76px + env(safe-area-inset-bottom));padding:7px 6px calc(7px + env(safe-area-inset-bottom))}
+  .sidebar nav{gap:3px;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+  .sidebar nav button{min-width:82px;min-height:58px;padding:6px 7px;font-size:10px;line-height:1.2;scroll-snap-align:start}
+  .sidebar nav i{font-size:18px}
+  .workspace{min-width:0;padding:16px 12px calc(104px + env(safe-area-inset-bottom))}
+  .workspace>header{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:12px;margin:-8px -2px 16px;padding:10px 2px 12px}
+  .workspace>header>div:first-child{min-width:0}
+  .workspace h1{font-size:23px;line-height:1.25}
+  .header-actions{display:grid;width:100%;grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);gap:8px;margin:0;justify-content:stretch}
+  .search{display:flex;grid-column:1/-1;width:100%;height:48px;padding:0 10px;background:#fff}
+  .search input{font-size:16px}
+  .search kbd{display:none}
+  .search-count{font-size:11px}
+  .search-clear{width:32px;height:32px}
+  .cashier-btn{display:inline-flex!important;justify-content:center;min-width:0;width:100%;height:44px;padding:8px 10px;white-space:nowrap}
+  .icon-btn{display:grid!important;width:44px;height:44px}
+  .header-actions .primary{display:inline-flex!important;align-items:center;justify-content:center;min-width:0;width:100%;min-height:44px;padding:8px 10px;white-space:nowrap}
+  .quick-panel{top:auto;right:12px;bottom:calc(88px + env(safe-area-inset-bottom));left:12px;width:auto;max-height:min(68dvh,560px);border-radius:22px}
+  .notification-panel>button{min-height:62px}
+  .panel,.report-main,.report-catalog,.master-panel{min-width:0}
+  .panel{padding:15px}
+  .panel-title{align-items:flex-start;gap:12px;flex-wrap:wrap}
+  .panel-title>div:first-child{min-width:0}
+  .segmented{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+  .segmented button{flex:0 0 auto;min-height:40px;padding:8px 12px}
+  .pulse-grid,.finance-kpis,.channel-kpis,.accounting-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .room-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .room-card{min-width:0;padding:14px}
+  .room-card>button{min-height:44px}
+  .reservation-table,.report-scroll,.advanced-calendar,.accounting-table,.settlement-table,.room-master-table{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+  .inventory-toolbar,.accounting-hero{gap:14px;padding:16px}
+  .inventory-presets{gap:4px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .inventory-presets button{flex:0 0 auto;min-height:44px;padding:9px 14px}
+  .inventory-range,.accounting-hero form,.accounting-actions{display:grid;grid-template-columns:1fr 1fr;align-items:end;gap:10px}
+  .inventory-range label,.accounting-hero form label{min-width:0}
+  .inventory-range input,.accounting-hero input{width:100%;min-height:44px;font-size:16px}
+  .inventory-range .primary,.accounting-hero form .primary{min-height:44px}
+  .inventory-range em{grid-column:1/-1}
+  .report-filters,.master-toolbar{min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .modal-backdrop,.drawer-backdrop{align-items:flex-end;padding:0}
+  .booking-modal,.cashier-modal,.modal.master-modal{width:100%;max-width:none;max-height:92dvh;margin:0;border-radius:24px 24px 0 0;padding:18px 16px 0;animation:flow-rise .22s cubic-bezier(.2,.8,.2,1)}
+  .drawer{align-self:flex-end;width:100%;height:min(92dvh,760px);margin-top:auto;border-radius:24px 24px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
+  .drawer-head{margin:-2px -2px 10px;padding:2px 2px 12px}
+  .modal-head{position:sticky;top:0;z-index:5;background:rgba(255,255,255,.97);border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}
+  .modal-actions,.modal-actions.sticky,.master-modal>.modal-actions{margin:12px -16px 0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));gap:8px}
+  .modal-actions button{min-height:46px;flex:1}
+  .form-grid,.master-form-grid,.bulk-date-grid,.channel-rate-fields,.contract-choice{grid-template-columns:1fr}
+  .form-grid input,.form-grid select,.form-grid textarea,.stack-form input,.stack-form select,.stack-form textarea,.master-form-grid input,.master-form-grid select,.master-form-grid textarea,.report-filters input,.report-filters select,.bulk-date-grid input,.channel-rate-fields input,.channel-rate-fields select,.stack-label textarea{min-height:46px;font-size:16px}
+  .weekday-selector span{width:42px;height:42px}
+  .bulk-selector span{min-height:42px;padding:11px 13px}
+  .drawer-actions button,.payment button,.manage-strip button{min-height:46px}
+  .toast{right:12px;left:12px;width:auto;max-width:none}
+}
+
+@media(max-width:420px){
+  .pulse-grid,.finance-kpis,.channel-kpis,.accounting-kpis,.room-grid{grid-template-columns:1fr}
+  .inventory-range,.accounting-hero form,.accounting-actions{grid-template-columns:1fr}
+  .inventory-range em{grid-column:auto}
+  .workspace h1{font-size:21px}
+  .cashier-btn,.header-actions .primary{font-size:10px}
+}
