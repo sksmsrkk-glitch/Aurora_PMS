@@ -172,3 +172,4 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 
 /* Keep the room-master description field content-sized; `.full` elsewhere is a page-height utility. */
 .modal.master-modal>.master-form-grid .full{min-height:0}
+.trend.down{background:#fff0f0;color:#d14343}

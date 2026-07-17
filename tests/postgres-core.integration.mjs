@@ -3,7 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import postgres from "postgres";
 import { consumeRateLimit } from "../app/api/rate-limit.ts";
-import { closePmsDatabase, getPmsDatabase } from "../db/pms-database.ts";
+import { snapshot } from "../app/api/pms/read-model.ts";
+import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL || "";
 const required = process.env.AURORA_REQUIRE_POSTGRES_TESTS === "true";
@@ -60,6 +61,44 @@ test("operational dates and timestamps use native PostgreSQL types", { skip }, a
     assert.ok(types.timestamp_columns >= 66);
     assert.ok(types.time_columns >= 3);
   } finally {
+    await sql.end({ timeout: 2 });
+  }
+});
+
+test("dashboard comparisons match current and prior business-day facts", { skip }, async () => {
+  const sql = client(1);
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  try {
+    const [expected] = await sql`
+      WITH context AS (
+        SELECT business_date current_day, business_date - 1 prior_day
+        FROM properties WHERE id='prop-seoul'
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM reservations r,context c
+          WHERE r.property_id='prop-seoul' AND r.arrival_date=c.current_day
+            AND r.status NOT IN ('CANCELLED','NO_SHOW')) current_arrivals,
+        (SELECT COUNT(*)::int FROM reservations r,context c
+          WHERE r.property_id='prop-seoul' AND r.arrival_date<=c.current_day
+            AND r.departure_date>c.current_day
+            AND r.status NOT IN ('CANCELLED','NO_SHOW')) current_occupied,
+        (SELECT COUNT(*)::int FROM reservations r,context c
+          WHERE r.property_id='prop-seoul' AND r.arrival_date=c.prior_day
+            AND r.status NOT IN ('CANCELLED','NO_SHOW')) prior_arrivals
+    `;
+    process.env.DATABASE_URL = databaseUrl;
+    const db = scopePmsDatabase(getPmsDatabase({ DATABASE_URL: databaseUrl }), "prop-seoul");
+    const model = await snapshot(db);
+    assert.equal(model.metrics.comparison.current.arrivals, expected.current_arrivals);
+    assert.equal(model.metrics.comparison.current.occupied, expected.current_occupied);
+    assert.equal(model.metrics.comparison.prior.arrivals, expected.prior_arrivals);
+    assert.equal(model.metrics.occupied, model.metrics.comparison.current.occupied);
+    assert.ok(Number.isFinite(model.metrics.comparison.current.revenue));
+    assert.ok(Number.isFinite(model.metrics.comparison.occupancyChangePoints));
+  } finally {
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
     await sql.end({ timeout: 2 });
   }
 });
