@@ -57,7 +57,7 @@ try{
       const remaining=Math.max(0,Number(target.capacity_limit)-Number(target.sold)-Number(target.held));
       for(let index=0;index<=remaining;index+=1){
         const reservationId=`smoke-capacity-${index}`;
-        await transaction`INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (${reservationId},${`SMOKE-CAP-${index}`},'prop-seoul',${guest.id},${target.room_type_id},NULL,${target.stay_date},${target.stay_date},'DUE_IN',1,0,'SMOKE','SMOKE',0,NULL,'',1,now()::text,now()::text)`;
+        await transaction`INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (${reservationId},${`SMOKE-CAP-${index}`},'prop-seoul',${guest.id},${target.room_type_id},NULL,${target.stay_date},${target.stay_date},'DUE_IN',1,0,'SMOKE','SMOKE',0,NULL,'',1,now(),now())`;
         await transaction`INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES ('prop-seoul',${reservationId},${target.room_type_id},${target.stay_date})`;
       }
     });

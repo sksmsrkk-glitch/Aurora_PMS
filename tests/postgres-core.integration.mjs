@@ -40,6 +40,30 @@ test("migrated schema contains booking tables and no arbitrary SQL RPC", { skip 
   }
 });
 
+test("operational dates and timestamps use native PostgreSQL types", { skip }, async () => {
+  const sql = client(1);
+  try {
+    const [types] = await sql`
+      SELECT
+        COUNT(*) FILTER (
+          WHERE data_type='text'
+            AND (column_name LIKE '%\\_date' ESCAPE '\\' OR column_name LIKE '%\\_at' ESCAPE '\\' OR column_name IN ('window_start','eta','checkin_time','checkout_time'))
+        )::int textual_temporal,
+        COUNT(*) FILTER (WHERE data_type='date')::int date_columns,
+        COUNT(*) FILTER (WHERE data_type='timestamp with time zone')::int timestamp_columns,
+        COUNT(*) FILTER (WHERE data_type='time without time zone')::int time_columns
+      FROM information_schema.columns
+      WHERE table_schema='public'
+    `;
+    assert.equal(types.textual_temporal, 0);
+    assert.ok(types.date_columns >= 28);
+    assert.ok(types.timestamp_columns >= 66);
+    assert.ok(types.time_columns >= 3);
+  } finally {
+    await sql.end({ timeout: 2 });
+  }
+});
+
 test("RLS tenant context hides and rejects cross-property access", { skip }, async () => {
   const sql = client(2);
   const suffix = crypto.randomUUID().slice(0, 8);
@@ -139,7 +163,7 @@ test("twenty parallel bookings for the last room allow exactly one night", { ski
     for (const item of reservations) {
       await sql`
         INSERT INTO guests(id,property_id,first_name,last_name,created_at)
-        VALUES (${item.guestId},${propertyId},'Parallel',${item.id},now()::text)
+        VALUES (${item.guestId},${propertyId},'Parallel',${item.id},now())
       `;
       await sql`
         INSERT INTO reservations(
@@ -147,7 +171,7 @@ test("twenty parallel bookings for the last room allow exactly one night", { ski
           departure_date,status,adults,source,rate_plan,nightly_rate,created_at,updated_at
         ) VALUES (
           ${item.id},${item.confirmation},${propertyId},${item.guestId},${roomTypeId},
-          ${stayDate},'2031-08-02','DUE_IN',1,'TEST','BAR',100000,now()::text,now()::text
+          ${stayDate},'2031-08-02','DUE_IN',1,'TEST','BAR',100000,now(),now()
         )
       `;
     }
