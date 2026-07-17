@@ -1,6 +1,8 @@
 /** Database-backed rate limiting shared by every serverless instance. */
 import { createHmac } from "node:crypto";
 import { getPmsDatabase, type PmsDatabase } from "../../db/pms-database";
+import { clientAddress } from "./request-policy";
+export { clientAddress } from "./request-policy";
 
 export type RateLimitResult = {
   allowed: boolean;
@@ -16,19 +18,6 @@ function signingSecret() {
   // This fallback is intentionally development-only; production fails closed so
   // client addresses are never persisted with a predictable digest.
   return "aurora-local-rate-limit-development-only";
-}
-
-export function clientAddress(request: Request) {
-  // Vercel overwrites x-forwarded-for and exposes x-vercel-forwarded-for as the
-  // proxy-safe client address. Outside Vercel, forwarding headers are trusted only
-  // when an operator explicitly declares a trusted proxy topology.
-  if (process.env.VERCEL) {
-    return (request.headers.get("x-vercel-forwarded-for") || request.headers.get("x-forwarded-for") || "unknown").split(",")[0].trim();
-  }
-  if (process.env.PMS_TRUST_PROXY === "true") {
-    return (request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown").split(",")[0].trim();
-  }
-  return "untrusted-direct-client";
 }
 
 export async function consumeRateLimit(

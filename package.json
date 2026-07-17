@@ -10,8 +10,8 @@
     "build": "next build",
     "start": "next start",
     "test": "npm run build && npm run test:unit",
-    "test:unit": "node --test tests/*.test.mjs",
-    "test:integration": "node --test tests/postgres-*.integration.mjs",
+    "test:unit": "node --import tsx --test tests/*.test.mjs",
+    "test:integration": "node --import tsx --test tests/postgres-*.integration.mjs",
     "test:ci": "npm run lint && npm run build && npm run test:unit && npm run test:integration",
     "qa:workflow": "node scripts/qa-full-workflow.mjs",
     "qa:booking": "node scripts/qa-booking-engine.mjs",
@@ -41,6 +41,7 @@
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "4.2.1",
+    "tsx": "^4.23.1",
     "typescript": "5.9.3"
   },
   "overrides": {

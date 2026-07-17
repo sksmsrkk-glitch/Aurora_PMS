@@ -1,7 +1,8 @@
 /** Authentication, authorization, and migration readiness for PMS routes. */
-import { timingSafeEqual } from "node:crypto";
 import { authenticateSupabaseRequest } from "../../supabase-session";
 import type { PmsDatabase, PmsRuntimeBindings } from "../../../db/pms-database";
+import { demoAuthenticationEnabled } from "./auth-policy";
+export { demoAuthenticationEnabled } from "./auth-policy";
 
 type D1=PmsDatabase;
 export type Role="PROPERTY_ADMIN"|"NIGHT_AUDITOR"|"FRONT_DESK"|"CASHIER"|"HOUSEKEEPING"|"REVENUE_MANAGER"|"SALES_MANAGER"|"ACCOUNTANT"|"VIEWER";
@@ -83,17 +84,6 @@ function decodedDisplayName(request: Request, email: string) {
 const principalCache = new Map<string,{expires:number;role:Role;propertyId:string}>();
 const principalInflight = new Map<string,Promise<{role:Role;propertyId:string}|null>>();
 
-function demoAuthenticationEnabled(request: Request) {
-  // Demo identity is deliberately impossible in production and requires both an
-  // operator flag and a high-entropy request token. Host-derived values are never
-  // authentication evidence because reverse proxies can rewrite them.
-  if (process.env.NODE_ENV === "production" || process.env.PMS_ALLOW_DEMO_AUTH !== "true") return false;
-  const expected = process.env.PMS_DEMO_AUTH_TOKEN || "";
-  const supplied = request.headers.get("x-aurora-demo-token") || "";
-  if (expected.length < 32 || supplied.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
-}
-
 export async function principalFor(request: Request, db: D1): Promise<Principal | null> {
   // Authentication establishes identity; role_assignments establishes the property
   // scope. The requested property is accepted only when that same user has an active
@@ -124,4 +114,3 @@ export async function principalFor(request: Request, db: D1): Promise<Principal 
   principalCache.set(cacheKey,{expires:now+30_000,role,propertyId});
   return { email, displayName: displayName||decodedDisplayName(request, email), role, capabilities: roleCapabilities[role], propertyId };
 }
-

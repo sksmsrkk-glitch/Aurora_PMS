@@ -205,3 +205,10 @@ export function getPmsDatabase(bindings: PmsRuntimeBindings): PmsDatabase {
   }
   return new PostgresDatabase(postgresClient);
 }
+
+/** Releases the shared pool during one-shot workers and integration test teardown. */
+export async function closePmsDatabase() {
+  if (postgresClient) await postgresClient.end({ timeout: 5 });
+  postgresClient = null;
+  postgresUrl = null;
+}
