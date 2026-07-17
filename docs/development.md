@@ -269,8 +269,8 @@ PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONF
 
 | 환경 | 결과 |
 | --- | --- |
-| 격리 Vercel/Supabase staging | `qa:workflow` 25개 checkpoint; health ref proof·실제 Supabase Auth·중단 캐셔 복구 포함 |
-| 로컬 Next.js + 격리 PostgreSQL | `qa:workflow` 25개 checkpoint와 `qa:public` SEO·CSS·검색 smoke |
+| 격리 Vercel/Supabase staging | `qa:workflow` 24개 핵심 checkpoint; health ref proof·실제 Supabase Auth·중단 캐셔 조건부 복구 포함 |
+| 로컬 Next.js + 격리 PostgreSQL | 24개 핵심 checkpoint와 필요 시 중단 캐셔 복구, `qa:public` SEO·CSS·검색 smoke |
 | Vercel Seoul Production + 실제 Supabase | 배포마다 같은 workflow·booking·CMS gate를 새 run ID로 기록 |
 | Node test suite | 36/36 tests 통과, production build·TypeScript 포함 |
 | 홈페이지 CMS E2E | 공개 projection, 동일 콘텐츠 version 저장, 잘못된 날짜 400, WEB OFF 제외·복원, Storage upload/public read/delete 통과 |
