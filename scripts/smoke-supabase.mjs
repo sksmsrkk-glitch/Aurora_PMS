@@ -15,10 +15,23 @@ function parseEnv(contents) {
   return values;
 }
 
-const env={...parseEnv(await readFile(path.join(process.cwd(),".env.local"),"utf8")),...Object.fromEntries(["DIRECT_URL","DATABASE_URL"].filter(key=>process.env[key]).map(key=>[key,process.env[key]]))};
+let localEnv={};
+try{
+  localEnv=parseEnv(await readFile(path.join(process.cwd(),".env.local"),"utf8"));
+}catch(error){
+  // GitHub Actions supplies both URLs directly and intentionally has no local
+  // developer environment file.
+  if(!(error instanceof Error&&"code" in error&&error.code==="ENOENT"))throw error;
+}
+const env={...localEnv,...Object.fromEntries(["DIRECT_URL","DATABASE_URL"].filter(key=>process.env[key]).map(key=>[key,process.env[key]]))};
 for(const key of ["DIRECT_URL","DATABASE_URL"])if(!env[key])throw new Error(`${key} is required`);
 
-const sql=postgres(env.DIRECT_URL,{max:1,prepare:false,ssl:"require",connect_timeout:15,idle_timeout:5});
+function connectionOptions(url){
+  const local=/^(?:localhost|127\.0\.0\.1)$/u.test(new URL(url).hostname);
+  return {max:1,prepare:false,ssl:local?false:"require",connect_timeout:15,idle_timeout:5};
+}
+
+const sql=postgres(env.DIRECT_URL,connectionOptions(env.DIRECT_URL));
 try{
   const [catalog]=await sql`
     SELECT
@@ -42,11 +55,11 @@ try{
   `;
   if(Number(website.settings)!==1||Number(website.published_rooms)<1||!website.website_control||!website.public_bucket)throw new Error("Website CMS catalog verification failed");
 
-  let capacityGuard=false;
+  let capacityGuard=false,capacityFailure="unknown inventory smoke failure";
   try{
     await sql.begin(async transaction=>{
       const [target]=await transaction`
-        SELECT p.business_date stay_date,rt.id room_type_id,
+        SELECT p.business_date stay_date,(p.business_date+1)::date departure_date,rt.id room_type_id,
           COALESCE(ic.sell_limit,COUNT(rm.id) FILTER (WHERE rm.active=1 AND rm.housekeeping_status<>'OUT_OF_SERVICE'))::int capacity_limit,
           (SELECT COUNT(*)::int FROM reservation_type_nights n WHERE n.property_id=p.id AND n.room_type_id=rt.id AND n.stay_date=p.business_date) sold,
           (SELECT COALESCE(SUM(bi.current_rooms-bi.picked_up),0)::int FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=p.id AND bi.room_type_id=rt.id AND bi.stay_date=p.business_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')) held
@@ -54,15 +67,20 @@ try{
         WHERE p.id='prop-seoul' AND rt.active=1 AND COALESCE(ic.closed,0)=0
         GROUP BY p.id,p.business_date,rt.id,ic.sell_limit ORDER BY rt.id LIMIT 1`;
       const [guest]=await transaction`SELECT id FROM guests WHERE property_id='prop-seoul' LIMIT 1`;
+      const [ratePlan]=await transaction`SELECT code FROM rate_plans WHERE property_id='prop-seoul' AND active=1 ORDER BY CASE WHEN code='BAR' THEN 0 ELSE 1 END,code LIMIT 1`;
+      if(!target||!guest||!ratePlan)throw new Error("inventory smoke prerequisites are missing");
       const remaining=Math.max(0,Number(target.capacity_limit)-Number(target.sold)-Number(target.held));
+      const runId=crypto.randomUUID();
       for(let index=0;index<=remaining;index+=1){
-        const reservationId=`smoke-capacity-${index}`;
-        await transaction`INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (${reservationId},${`SMOKE-CAP-${index}`},'prop-seoul',${guest.id},${target.room_type_id},NULL,${target.stay_date},${target.stay_date},'DUE_IN',1,0,'SMOKE','SMOKE',0,NULL,'',1,now(),now())`;
+        const reservationId=`smoke-capacity-${runId}-${index}`;
+        await transaction`INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (${reservationId},${`SMOKE-CAP-${runId}-${index}`},'prop-seoul',${guest.id},${target.room_type_id},NULL,${target.stay_date},${target.departure_date},'DUE_IN',1,0,'SMOKE',${ratePlan.code},0,NULL,'',1,now(),now())`;
         await transaction`INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES ('prop-seoul',${reservationId},${target.room_type_id},${target.stay_date})`;
       }
+      // A broken capacity trigger must still roll back every synthetic booking.
+      throw new Error("capacity guard accepted an oversell");
     });
-  }catch(error){capacityGuard=error instanceof Error&&error.message.includes("room type sold out");}
-  if(!capacityGuard)throw new Error("Inventory capacity trigger verification failed");
+  }catch(error){capacityFailure=error instanceof Error?error.message:String(error);capacityGuard=capacityFailure.includes("room type sold out");}
+  if(!capacityGuard)throw new Error(`Inventory capacity trigger verification failed: ${capacityFailure}`);
 
   let immutableGuard=false;
   try{await sql`UPDATE folio_entries SET description='smoke' WHERE id='fe1'`;}catch(error){immutableGuard=error instanceof Error&&error.message.includes("immutable");}
@@ -126,7 +144,7 @@ try{
   const [rateState]=await sql`SELECT COUNT(*)::int count FROM api_rate_limits WHERE scope=${rateScope}`;
   if(!rateRollback||Number(rateState.count)!==0)throw new Error("Rate-limit atomic rollback verification failed");
 
-  const started=Date.now(),runtimeSql=postgres(env.DATABASE_URL,{max:1,prepare:false,ssl:"require",connect_timeout:15,idle_timeout:5});
+  const started=Date.now(),runtimeSql=postgres(env.DATABASE_URL,connectionOptions(env.DATABASE_URL));
   try {
     const [runtime]=await runtimeSql`SELECT COUNT(*)::int count FROM reservations WHERE property_id='prop-seoul'`;
     if(Number(runtime?.count)<4)throw new Error("Pooled runtime connection returned fewer rows than the seed baseline");
