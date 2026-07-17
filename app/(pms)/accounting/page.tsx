@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable accounting workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function AccountingPage() {
-  return <PmsShell initialSection="accounting" />;
+  return null;
 }

@@ -3,15 +3,10 @@
 /** Aurora PMS application shell and cross-domain operational workspaces. */
 
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReportsCenter from "../../reports-center";
-import RoomMaster from "../../room-master";
-import RevenueInventoryCalendar from "../../inventory-calendar";
-import AccountingCenter from "../../accounting-center";
-import ChannelContracts from "../../channel-contracts";
-import HomepageManager from "../../homepage-manager";
 import { useDialogController } from "../../dialog-controller";
 import { ListSearch } from "../../list-search";
 import { PmsActionProvider, usePmsActions } from "../../pms-action-context";
@@ -23,6 +18,25 @@ import {
   pmsWorkspacePath,
   type PmsWorkspace,
 } from "../../pms-workspaces";
+
+/** Heavy, workspace-specific clients are split out of the initial PMS bundle. */
+const workspaceLoading = () => <section className="panel module-loading" aria-live="polite"><b>화면을 준비하고 있습니다</b><p>선택한 업무 모듈만 빠르게 불러오고 있어요.</p></section>;
+const ReportsCenter = dynamic(() => import("../../reports-center"), { loading: workspaceLoading });
+const RoomMaster = dynamic(() => import("../../room-master"), { loading: workspaceLoading });
+const RevenueInventoryCalendar = dynamic(() => import("../../inventory-calendar"), { loading: workspaceLoading });
+const AccountingCenter = dynamic(() => import("../../accounting-center"), { loading: workspaceLoading });
+const ChannelContracts = dynamic(() => import("../../channel-contracts"), { loading: workspaceLoading });
+const HomepageManager = dynamic(() => import("../../homepage-manager"), { loading: workspaceLoading });
+
+/** Warms only the code chunk associated with a user's navigation intent. */
+function prefetchWorkspaceModule(workspace: PmsWorkspace) {
+  if (workspace === "inventory") void import("../../inventory-calendar");
+  if (workspace === "website") void import("../../homepage-manager");
+  if (workspace === "accounting") void import("../../accounting-center");
+  if (workspace === "channels") void import("../../channel-contracts");
+  if (workspace === "reports") void import("../../reports-center");
+  if (workspace === "master") void import("../../room-master");
+}
 
 type Reservation = { id:string; confirmation_no:string; first_name:string; last_name:string; vip_level:string; room_number:string|null; room_type_id:string; room_type_code:string; room_type_name:string; arrival_date:string; departure_date:string; status:string; adults:number; children:number; source:string; rate_plan:string; nightly_rate:number; eta:string|null; notes:string; balance:number; version:number };
 type Room = { id:string; number:string; floor:number; room_type_id:string; room_type_code:string; room_type_name:string; front_desk_status:string; housekeeping_status:string; task_status:string|null; assignee:string|null; features:unknown; active:boolean; version:number };
@@ -48,6 +62,13 @@ type OutboxEvent = { id:string;topic:string;aggregate_type:string;aggregate_id:s
 type DashboardDayMetric = { arrivals:number;occupied:number;occupancy:number;revenue:number;adr:number };
 type DashboardComparison = { current:DashboardDayMetric;prior:DashboardDayMetric;arrivalChangePercent:number|null;occupancyChangePoints:number;revenueChangePercent:number|null };
 type Data = { property:{name:string;business_date:string;currency:string}; reservations:Reservation[]; rooms:Room[]; metrics:{rooms:number;occupied:number;dirty:number;ready:number;comparison:DashboardComparison}; principal:Principal; controls:{blockers:Blocker[];canClose:boolean;openCashier:Record<string,unknown>|null;priorAudit:Record<string,unknown>|null;pendingRoomPostings:number}; inventory:{dates:string[];types:InventoryType[]}; groups:{accounts:AccountProfile[];blocks:BusinessBlock[];inventory:BlockInventoryRow[];rooming:RoomingEntry[]}; finance:{windows:FolioWindow[];entries:FolioEntry[];routing:Array<{id:string;reservation_id:string;transaction_code:string;target_window_id:string;window_no:number;window_name:string;confirmation_no:string}>;transactionCodes:TransactionCode[];arAccounts:ArAccount[];arInvoices:ArInvoice[];trialBalance:{guest_ledger:number;ar_ledger:number;gross_revenue:number;net_payments:number}};integrations:{connections:ChannelConnection[];contracts:ChannelContract[];mappings:ChannelMapping[];ari:AriUpdate[];inbound:InboundMessage[];links:Array<{id:string;provider:string;external_reservation_id:string;reservation_id:string;confirmation_no:string;last_revision:number;status:string}>;attempts:Array<{id:string;direction:string;provider:string;aggregate_type:string;aggregate_id:string;attempt_no:number;status:string;http_status:number|null;error_message:string|null;created_at:string}>;outbox:OutboxEvent[]};completeness?:"core"|"full" };
+type WorkspaceDomain = "groups" | "finance" | "channels";
+type DomainStatus = Record<WorkspaceDomain,"idle"|"loading"|"ready"|"error">;
+type DomainPayload = { groups?:Partial<Data["groups"]>;finance?:Data["finance"];integrations?:Data["integrations"] };
+
+const idleDomains = ():DomainStatus=>({groups:"idle",finance:"idle",channels:"idle"});
+const domainForWorkspace=(workspace:PmsWorkspace):WorkspaceDomain|null=>workspace==="groups"?"groups":workspace==="finance"||workspace==="revenue"?"finance":workspace==="channels"?"channels":null;
+const mergeDomain=(current:Data,payload:DomainPayload):Data=>({...current,groups:payload.groups?{...current.groups,...payload.groups}:current.groups,finance:payload.finance??current.finance,integrations:payload.integrations??current.integrations});
 
 const money = formatMoney;
 const trendLabel=(value:number|null,suffix="%")=>value===null?"전일 기준 없음":Math.abs(value)<.05?"전일과 동일":`${value>0?"+":""}${value.toFixed(1)}${suffix}`;
@@ -55,10 +76,10 @@ const trendClass=(value:number|null)=>`trend ${value===null||Math.abs(value)<.05
 const labels:Record<string,string> = { DUE_IN:"도착 예정", IN_HOUSE:"투숙 중", CHECKED_OUT:"체크아웃", NO_SHOW:"노쇼", CANCELLED:"취소", CLEAN:"청소 완료", INSPECTED:"점검 완료", DIRTY:"청소 필요", OUT_OF_SERVICE:"판매 중지", VACANT:"공실", OCCUPIED:"재실" };
 const roleLabels:Record<string,string>={PROPERTY_ADMIN:"프로퍼티 관리자",NIGHT_AUDITOR:"야간 감사",FRONT_DESK:"프런트 데스크",CASHIER:"캐셔",HOUSEKEEPING:"하우스키핑",REVENUE_MANAGER:"레비뉴 매니저",SALES_MANAGER:"세일즈 매니저",ACCOUNTANT:"호텔 회계",VIEWER:"조회 전용"};
 
-async function fetchPmsData(url:string):Promise<Data> {
+async function fetchPmsData<T=Data>(url:string):Promise<T> {
   const response=await fetch(url,{cache:"no-store"});
   if(response.status===401){window.location.replace("/login");throw new Error("AUTH_REDIRECT");}
-  const payload=await response.json() as Data&{error?:string};
+  const payload=await response.json() as T&{error?:string};
   if(!response.ok)throw new Error(payload.error||"PMS 데이터를 불러오지 못했습니다.");
   return payload;
 }
@@ -68,8 +89,9 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
   const pathname = usePathname();
   const queryClient = useQueryClient();
   const [data,setData] = useState<Data|null>(null); const [error,setError] = useState(""); const [busy,setBusy] = useState("");
-  const [completeness,setCompleteness]=useState<"core"|"loading"|"full">("core");
+  const [domainStatus,setDomainStatus]=useState<DomainStatus>(idleDomains);
   const section = parsePmsWorkspace(pathname.split("/")[1]) ?? initialSection;
+  const activeDomain=domainForWorkspace(section);
   const [selected,setSelected] = useState<Reservation|null>(null); const [query,setQuery] = useState(""); const [roomFilter,setRoomFilter] = useState("ALL");
   const [frontdeskFilter,setFrontdeskFilter] = useState<"ALL"|"DUE_IN"|"IN_HOUSE">("ALL");
   const [quickPanel,setQuickPanel] = useState<"notifications"|"profile"|null>(null); const searchRef=useRef<HTMLInputElement>(null);
@@ -80,17 +102,32 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
     if (!target) return;
     router.push(pmsWorkspacePath(target));
   }, [router]);
+  const warmWorkspace = useCallback((workspace: string) => {
+    const target = parsePmsWorkspace(workspace);
+    if (!target) return;
+    router.prefetch(pmsWorkspacePath(target));
+    prefetchWorkspaceModule(target);
+    const domain=domainForWorkspace(target);
+    if (domain) {
+      void queryClient.prefetchQuery({
+        queryKey: ["pms", "workspace", domain],
+        queryFn: () => fetchPmsData<DomainPayload>(`/api/pms?view=${domain}`),
+        staleTime: 60_000,
+      });
+    }
+    if(target==="website")void queryClient.prefetchQuery({queryKey:["pms","website"],queryFn:()=>fetchPmsData<unknown>("/api/pms?view=website"),staleTime:60_000});
+  }, [queryClient, router]);
   useDialogController();
-  const load = useCallback(async():Promise<Data|null>=>{ try { const payload=await queryClient.fetchQuery({queryKey:["pms","core"],queryFn:()=>fetchPmsData("/api/pms?view=core")});setData(payload);setCompleteness("core");return payload; } catch(e){if(e instanceof Error&&e.message==="AUTH_REDIRECT")return null;setError(e instanceof Error?e.message:"데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
-  const loadFull=useCallback(async():Promise<Data|null>=>{setCompleteness("loading");try{const payload=await queryClient.fetchQuery({queryKey:["pms","full"],queryFn:()=>fetchPmsData("/api/pms")});setData(payload);setCompleteness("full");return payload;}catch(reason){setCompleteness("core");if(reason instanceof Error&&reason.message==="AUTH_REDIRECT")return null;setError(reason instanceof Error?reason.message:"업무 데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
+  const load = useCallback(async():Promise<Data|null>=>{ try { const payload=await queryClient.fetchQuery({queryKey:["pms","core"],queryFn:()=>fetchPmsData("/api/pms?view=core")});setData(payload);setDomainStatus(idleDomains());return payload; } catch(e){if(e instanceof Error&&e.message==="AUTH_REDIRECT")return null;setError(e instanceof Error?e.message:"데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
+  const loadDomain=useCallback(async(domain:WorkspaceDomain):Promise<DomainPayload|null>=>{setDomainStatus(current=>({...current,[domain]:"loading"}));try{const payload=await queryClient.fetchQuery({queryKey:["pms","workspace",domain],queryFn:()=>fetchPmsData<DomainPayload>(`/api/pms?view=${domain}`),staleTime:60_000});setData(current=>current?mergeDomain(current,payload):current);setDomainStatus(current=>({...current,[domain]:"ready"}));return payload;}catch(reason){setDomainStatus(current=>({...current,[domain]:"error"}));if(reason instanceof Error&&reason.message==="AUTH_REDIRECT")return null;setError(reason instanceof Error?reason.message:"업무 데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
   // The first render intentionally hydrates the live operational snapshot.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{load();},[load]);
-  // Network-backed module hydration is intentionally initiated by navigation.
+  // Each heavy workspace hydrates only its bounded server projection.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(()=>{if(completeness==="core"&&["groups","finance","channels"].includes(section))void loadFull();},[section,completeness,loadFull]);
+  useEffect(()=>{if(activeDomain&&domainStatus[activeDomain]==="idle")void loadDomain(activeDomain);},[activeDomain,domainStatus,loadDomain]);
   useEffect(()=>{const onKey=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="k"){event.preventDefault();navigateSection("frontdesk");setQuickPanel(null);requestAnimationFrame(()=>searchRef.current?.focus());}if(event.key==="Escape")setQuickPanel(null);};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);},[navigateSection]);
-  async function act(action:string, payload:Record<string,string>={}) { setBusy(action); setError(""); try { const r=await fetch("/api/pms",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action,...payload})}); if(r.status===401){window.location.replace('/login');return false;} const receipt=await r.json() as PmsMutationReceipt&{error?:string}; if(!r.ok) throw new Error(receipt.error); await Promise.all((receipt.invalidates||["core","full"]).map(key=>queryClient.invalidateQueries({queryKey:["pms",key],refetchType:"none"}))); const needsFull=completeness==="full"||["groups","finance","channels"].includes(section);const refreshed=needsFull?await loadFull():await load();if(selected&&refreshed)setSelected(refreshed.reservations.find((x:Reservation)=>x.id===selected.id)||null); return true; } catch(e){setError(e instanceof Error?e.message:"작업을 완료하지 못했습니다."); return false;} finally{setBusy("");} }
+  async function act(action:string, payload:Record<string,string>={}) { setBusy(action); setError(""); try { const r=await fetch("/api/pms",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action,...payload})}); if(r.status===401){window.location.replace('/login');return false;} const receipt=await r.json() as PmsMutationReceipt&{error?:string}; if(!r.ok) throw new Error(receipt.error); await Promise.all([...(receipt.invalidates||["core","full"]).map(key=>queryClient.invalidateQueries({queryKey:["pms",key],refetchType:"none"})),queryClient.invalidateQueries({queryKey:["pms","workspace"],refetchType:"none"})]); const refreshed=await load();if(activeDomain)await loadDomain(activeDomain);if(selected&&refreshed)setSelected(refreshed.reservations.find((x:Reservation)=>x.id===selected.id)||null); return true; } catch(e){setError(e instanceof Error?e.message:"작업을 완료하지 못했습니다."); return false;} finally{setBusy("");} }
   const normalizedQuery=query.trim().toLocaleLowerCase("ko-KR");
   const reservations = useMemo(()=>data?.reservations.filter(r=>`${r.first_name} ${r.last_name} ${r.confirmation_no} ${r.room_number??""}`.toLocaleLowerCase("ko-KR").includes(normalizedQuery))??[],[data,normalizedQuery]);
   const frontdeskReservations=useMemo(()=>reservations.filter(r=>frontdeskFilter==="ALL"||r.status===frontdeskFilter),[reservations,frontdeskFilter]);
@@ -111,7 +148,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark" aria-hidden="true"><Image src="/brand/aurora-mark-192.png" alt="" width={38} height={38} priority/></span><span><b>AURORA PMS</b><small>HOTEL OPERATIONS</small></span></div>
       <nav aria-label="주 메뉴">
-        {[['overview','⌂','오퍼레이션'],['frontdesk','⇄','프런트 데스크'],['inventory','▤','재고 & 요금'],['website','◇','홈페이지 관리'],['groups','◎','그룹 & 세일즈'],['finance','₩','폴리오 & AR'],['accounting','≋','회계 & 손익'],['channels','⌁','채널 허브'],['rooms','▦','룸 & 하우스키핑'],['reports','◫','리포트 센터'],['master','⚙','객실 마스터'],['revenue','↗','매출 & 인사이트'],['audit','✓','야간 감사']].map(([id,icon,label])=><button type="button" key={id} className={section===id?'active':''} aria-current={section===id?'page':undefined} onClick={()=>{navigateSection(id);setQuickPanel(null);setQuery("")}}><i aria-hidden="true">{icon}</i>{label}{id==='frontdesk'&&<em>{arrivalCount}</em>}</button>)}
+        {[['overview','⌂','오퍼레이션'],['frontdesk','⇄','프런트 데스크'],['inventory','▤','재고 & 요금'],['website','◇','홈페이지 관리'],['groups','◎','그룹 & 세일즈'],['finance','₩','폴리오 & AR'],['accounting','≋','회계 & 손익'],['channels','⌁','채널 허브'],['rooms','▦','룸 & 하우스키핑'],['reports','◫','리포트 센터'],['master','⚙','객실 마스터'],['revenue','↗','매출 & 인사이트'],['audit','✓','야간 감사']].map(([id,icon,label])=><button type="button" key={id} className={section===id?'active':''} aria-current={section===id?'page':undefined} onPointerEnter={()=>warmWorkspace(id)} onPointerDown={()=>warmWorkspace(id)} onFocus={()=>warmWorkspace(id)} onClick={()=>{navigateSection(id);setQuickPanel(null);setQuery("")}}><i aria-hidden="true">{icon}</i>{label}{id==='frontdesk'&&<em>{arrivalCount}</em>}</button>)}
       </nav>
       <div className="sidebar-bottom"><div className={`system-ok ${systemHealthy?'':'warn'}`}><span/> {systemHealthy?'인터페이스 오류 없음':`인터페이스 실패 ${failedInterfaceCount}건`}</div><button type="button" className="profile" aria-expanded={quickPanel==='profile'} onClick={()=>setQuickPanel(current=>current==='profile'?null:'profile')}><span>{data.principal.displayName.slice(0,2).toUpperCase()}</span><div><b>{data.principal.displayName}</b><small>{roleLabels[data.principal.role]||data.principal.role}</small></div><i>•••</i></button></div>
     </aside>
@@ -145,12 +182,13 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
       {section==='inventory'&&<RevenueInventoryCalendar businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INVENTORY_WRITE')}/>}
       {section==='website'&&<HomepageManager canAdmin={data.principal.capabilities.includes('ADMIN')}/>}
       {section==='accounting'&&<AccountingCenter businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('ACCOUNTING_WRITE')}/>}
-      {["groups","finance","channels"].includes(section)&&completeness==='loading'&&<section className="panel module-loading" aria-live="polite"><b>업무 데이터를 불러오고 있습니다</b><p>필요한 모듈만 안전하게 준비하고 있어요.</p></section>}
-      {section==='groups'&&completeness==='full'&&<GroupSales data={data}/>}
-      {section==='finance'&&completeness==='full'&&<Finance data={data}/>}
-      {section==='channels'&&completeness==='full'&&<><ChannelContracts connections={data.integrations.connections} contracts={data.integrations.contracts} businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INTEGRATION_WRITE')}/><ChannelHub data={data}/></>}
+      {activeDomain&&domainStatus[activeDomain]==='loading'&&<section className="panel module-loading" aria-live="polite"><b>업무 데이터를 불러오고 있습니다</b><p>선택한 업무에 필요한 데이터만 준비하고 있어요.</p></section>}
+      {activeDomain&&domainStatus[activeDomain]==='error'&&<section className="panel module-loading" role="alert"><b>업무 데이터를 불러오지 못했습니다</b><p>연결을 확인한 뒤 이 모듈만 다시 시도해 주세요.</p><button type="button" className="secondary" onClick={()=>void loadDomain(activeDomain)}>다시 시도</button></section>}
+      {section==='groups'&&domainStatus.groups==='ready'&&<GroupSales data={data}/>}
+      {section==='finance'&&domainStatus.finance==='ready'&&<Finance data={data}/>}
+      {section==='channels'&&domainStatus.channels==='ready'&&<><ChannelContracts connections={data.integrations.connections} contracts={data.integrations.contracts} businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INTEGRATION_WRITE')}/><ChannelHub data={data}/></>}
       {section==='rooms'&&<section className="panel full"><div className="panel-title"><div><h2>라이브 룸 랙</h2><p>객실 상태 변경은 프런트와 하우스키핑에 즉시 반영됩니다</p></div><div className="segmented" role="group" aria-label="객실 청소 상태 필터">{['ALL','DIRTY','CLEAN','INSPECTED'].map(f=><button type="button" className={roomFilter===f?'on':''} aria-pressed={roomFilter===f} onClick={()=>setRoomFilter(f)} key={f}>{f==='ALL'?'전체':labels[f]}</button>)}</div></div><div className="room-grid">{filteredRooms.map(r=><article className={`room-card ${r.housekeeping_status.toLowerCase()}`} key={r.id}><div><span>{r.room_type_code}</span><i className={`dot ${r.housekeeping_status.toLowerCase()}`}/></div><strong>{r.number}</strong><p>{r.room_type_name}</p><div className="room-status"><b>{labels[r.housekeeping_status]}</b><small>{labels[r.front_desk_status]}{r.assignee&&` · ${r.assignee}`}</small></div>{data.principal.capabilities.includes('HOUSEKEEPING_WRITE')&&r.housekeeping_status==='DIRTY'&&<button disabled={!!busy} onClick={()=>act('housekeeping',{roomId:r.id,status:'CLEAN'})}>청소 완료 처리</button>}{data.principal.capabilities.includes('HOUSEKEEPING_WRITE')&&r.housekeeping_status==='CLEAN'&&<button disabled={!!busy} onClick={()=>act('housekeeping',{roomId:r.id,status:'INSPECTED'})}>점검 완료 처리</button>}</article>)}{filteredRooms.length===0&&<div className="empty-state large room-empty"><b>조건에 맞는 객실이 없어요</b><p>검색어나 청소 상태 필터를 바꿔 보세요.</p></div>}</div></section>}
-      {section==='reports'&&<ReportsCenter businessDate={data.property.business_date} roomTypes={data.inventory.types}/>} {section==='master'&&<RoomMaster types={data.inventory.types} rooms={data.rooms} canAdmin={data.principal.capabilities.includes('ADMIN')}/>} {section==='revenue'&&<Revenue data={data}/>} {section==='audit'&&<Audit data={data} onReview={code=>{if(code==='UNRESOLVED_ARRIVALS')navigateSection('frontdesk');else if(code==='OPEN_CASHIERS'&&data.controls.openCashier)setCashierModal('close');else if(code==='FAILED_INTERFACES')navigateSection('channels');else navigateSection('rooms')}}/>}
+      {section==='reports'&&<ReportsCenter businessDate={data.property.business_date} roomTypes={data.inventory.types}/>} {section==='master'&&<RoomMaster types={data.inventory.types} rooms={data.rooms} canAdmin={data.principal.capabilities.includes('ADMIN')}/>} {section==='revenue'&&domainStatus.finance==='ready'&&<Revenue data={data}/>} {section==='audit'&&<Audit data={data} onReview={code=>{if(code==='UNRESOLVED_ARRIVALS')navigateSection('frontdesk');else if(code==='OPEN_CASHIERS'&&data.controls.openCashier)setCashierModal('close');else if(code==='FAILED_INTERFACES')navigateSection('channels');else navigateSection('rooms')}}/>}
     </main>
     {selected&&<ReservationDrawer r={selected} rooms={data.rooms} close={()=>setSelected(null)} capabilities={data.principal.capabilities} cashierOpen={!!data.controls.openCashier}/>}
     {newBooking&&<NewReservation rooms={data.rooms} businessDate={data.property.business_date} close={()=>setNewBooking(false)}/>}

@@ -89,6 +89,8 @@ npm run db:supabase:smoke
 
 `generate-supabase-migration.mjs`처럼 기존 migration을 다시 생성하거나 덮어쓰는 명령은 존재하지 않습니다. 새 schema 변경은 새 번호의 SQL 파일로만 추가하고, CI가 빈 PostgreSQL에 전체 history를 재적용합니다.
 
+native type 변환이나 CHECK 재검증처럼 lock·table rewrite 가능성이 있는 migration은 `docs/operations.md`의 점검 창 절차를 따릅니다. 데이터 수리 DML은 적용 전 영향 건수와 적용 후 audit 수를 반드시 기록하며, `IF NOT EXISTS`를 migration 재실행 허가로 해석하지 않습니다.
+
 ## 개발자 가이드
 
 ### 기술 스택
@@ -104,6 +106,8 @@ npm run db:supabase:smoke
 | Cache | TanStack Query 5 + server read-model cache | command receipt의 invalidation key로 필요한 projection만 재조회 |
 | Test | Node test runner + PostgreSQL 17 service + live staging workflow | 실제 migration, RLS, trigger, advisory lock과 E2E를 같은 계약으로 검증 |
 | Hosting | Vercel Production Seoul `icn1` + Fluid Compute | 한국 사용자 locality, instance concurrency와 표준 Next.js runtime |
+
+PMS 공통 shell은 workspace URL 사이에서 유지됩니다. 첫 화면은 `view=core`, 그룹·폴리오·채널은 각각 `view=groups|finance|channels`를 사용하며 메뉴 hover/focus/pointer intent 시 route chunk와 projection을 미리 준비합니다. 기본 전체 snapshot은 호환·QA 용도이며 일반 페이지 전환 hot path에는 사용하지 않습니다.
 
 ### npm 명령 전체 목록
 

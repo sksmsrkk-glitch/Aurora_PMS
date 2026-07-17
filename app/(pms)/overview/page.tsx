@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable overview workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function OverviewPage() {
-  return <PmsShell initialSection="overview" />;
+  return null;
 }

@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable audit workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function AuditPage() {
-  return <PmsShell initialSection="audit" />;
+  return null;
 }

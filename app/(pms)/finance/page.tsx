@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable finance workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function FinancePage() {
-  return <PmsShell initialSection="finance" />;
+  return null;
 }

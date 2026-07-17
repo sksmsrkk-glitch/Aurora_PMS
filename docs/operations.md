@@ -14,6 +14,26 @@
 - [ ] 같은 staging에서 `npm run qa:website`
 - [ ] RLS와 browser role grant 재검증
 
+### 테이블 재작성 마이그레이션 점검 창
+
+native date/time·boolean·JSONB처럼 `ALTER COLUMN ... TYPE`으로 테이블을 다시 쓰는 변경은 일반 배포와 분리합니다. 다음 순서를 스테이징과 운영에서 동일하게 지킵니다.
+
+1. 적용 대상과 현재 migration history를 확인하고, 동일 파일을 재실행하거나 수정하지 않습니다.
+2. 데이터 수리 쿼리가 있으면 먼저 영향 건수를 읽기 전용 SQL로 기록합니다. 예약 날짜 변경이라면 최소한 아래 preflight를 실행합니다.
+
+```sql
+SELECT COUNT(*) AS invalid_stays
+FROM reservations
+WHERE departure_date <= arrival_date;
+```
+
+3. 쓰기 트래픽이 없는 점검 창을 확보하고 예약·체크인·원장 전기를 잠시 중지합니다.
+4. Supabase PITR/backup 복구 지점을 확인한 뒤 migration을 순서대로 적용합니다.
+5. `npm run db:contract:verify`, `npm run db:supabase:smoke`, 스테이징 `qa:workflow`를 통과한 뒤 애플리케이션을 배포합니다.
+6. 긴 lock, dead tuple, API 5xx, 예약·room-night·원장 합계를 관찰하고 쓰기를 재개합니다.
+
+2026-07-17 운영 점검 결과 `0011`~`0014`는 이미 적용되어 추가 테이블 재작성은 필요하지 않았습니다. `0013` 적용 이력에는 0박 예약 32건이 `NORMALIZE_ZERO_NIGHT_RESERVATION`으로 기록되어 있었고 모두 Direct 소스였습니다. 점검 시점의 `departure_date <= arrival_date` 잔존 건수는 0건입니다. 이 수치는 과거 수리 영향 감사 기록이며 fixture나 재적용 지시가 아닙니다.
+
 ### 매일 운영
 
 - [ ] 도착 예정 미처리 건 확인
