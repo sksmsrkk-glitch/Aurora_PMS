@@ -66,5 +66,9 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/aurora_ci
         run: npm run db:contract:verify
+      - name: Smoke-test production database invariants
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/aurora_ci
+        run: npm run db:supabase:smoke
       - name: PostgreSQL integration and concurrency tests
         run: npm run test:integration
