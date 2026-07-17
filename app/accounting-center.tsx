@@ -118,6 +118,9 @@ export default function AccountingCenter({
   canWrite: boolean;
   act: (action: string, payload: Record<string, string>) => Promise<boolean>;
 }) {
+  // The range is applied explicitly so journal and settlement KPIs always come from
+  // one server projection. Local search narrows visible journal headers only and
+  // deliberately does not recalculate the authoritative period totals.
   const [from, setFrom] = useState(addDays(businessDate, -30)),
     [to, setTo] = useState(businessDate),
     [applied, setApplied] = useState({
@@ -165,6 +168,8 @@ export default function AccountingCenter({
     [data, query],
   );
   async function mutate(action: string, payload: Record<string, string>) {
+    // Reload after the command rather than patching financial state optimistically;
+    // the server may create multiple balanced lines and settlement-derived postings.
     if (await act(action, payload)) {
       setModal(null);
       await load();
@@ -457,6 +462,8 @@ function JournalRow({
   canWrite: boolean;
   reverse: () => void;
 }) {
+  // Detail lines remain collapsed for scanability, but the header is keyboard
+  // operable and always shows both totals so an imbalance is visually obvious.
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -541,6 +548,8 @@ function AccountingModal({
   close: () => void;
   submit: (action: string, payload: Record<string, string>) => Promise<boolean>;
 }) {
+  // One modal hosts three command shapes, but the server remains responsible for
+  // double-entry balancing, reversal immutability, and channel-contract arithmetic.
   const [busy, setBusy] = useState(false),
     assets = data.accounts.filter(
       (account) => account.active !== 0 && account.active !== false,
@@ -577,6 +586,9 @@ function AccountingModal({
             settlement.reservation_id === reservation.id,
         ),
     );
+  // Already accrued connection/reservation pairs are removed before selection to
+  // prevent an accidental duplicate settlement; the database constraint is the
+  // concurrent-request safety net.
   const config =
     mode.type === "journal"
       ? {

@@ -96,6 +96,8 @@ test("README is a complete architecture, development, and operations handoff", a
   assert.ok(readme.split("\n").length > 1_000, "README should remain a detailed handoff document");
 });
 
+// Source documentation is a release contract, not a one-time audit. The first test
+// checks coverage, while the next one prevents large files from keeping only a title.
 test("maintained source files include explanatory comments",async()=>{
   const files=[];
   for(const directory of ["app","db","scripts","tests","worker"]){
@@ -105,4 +107,35 @@ test("maintained source files include explanatory comments",async()=>{
   const uncommented=[];
   for(const file of files){const source=await readFile(new URL(file,root),"utf8"),header=source.split("\n").slice(0,10).join("\n");if(!/\/\*\*/u.test(header))uncommented.push(file);}
   assert.deepEqual(uncommented,[],`source files without comments: ${uncommented.join(", ")}`);
+});
+
+test("large source files document rationale and domain invariants",async()=>{
+  const files=[];
+  for(const directory of ["app","db","scripts","tests","worker"]){
+    const entries=await readdir(new URL(`${directory}/`,root),{recursive:true});
+    for(const entry of entries)if(/\.(?:ts|tsx|mjs|js)$/u.test(entry))files.push(`${directory}/${entry.replaceAll("\\","/")}`);
+  }
+  const sparse=[];
+  for(const file of files){
+    const source=await readFile(new URL(file,root),"utf8"),lines=source.split("\n"),nonBlank=lines.filter(line=>line.trim()).length;
+    if(nonBlank<120)continue;
+    const explanatoryLines=lines.filter(line=>/^\s*(?:\/\/|\/\*\*?|\*)\s+\S/u.test(line)).length;
+    const minimum=Math.ceil(nonBlank/100);
+    if(explanatoryLines<minimum)sparse.push(`${file} (${explanatoryLines}/${minimum})`);
+  }
+  assert.deepEqual(sparse,[],`large source files need more explanatory comments: ${sparse.join(", ")}`);
+
+  const rationaleContracts={
+    "app/api/pms/route.ts":[/tenant bounds/iu,/invalidate read caches/iu,/idempotency/iu],
+    "app/api/pms/extended.ts":[/append-only/iu,/double-entry/iu,/website visibility/iu],
+    "app/api/booking/service.ts":[/oversell/iu,/idempotency/iu,/atomic state transition/iu],
+    "db/pms-database.ts":[/all-or-nothing/iu,/server-only/iu,/property's scope/iu],
+    "app/inventory-calendar.tsx":[/keep each cell's existing value/iu,/contract-dependent/iu],
+    "app/accounting-center.tsx":[/reversal immutability/iu,/authoritative period totals/iu],
+    "scripts/qa-full-workflow.mjs":[/run identifier/iu,/idempotency key/iu],
+  };
+  for(const [file,patterns] of Object.entries(rationaleContracts)){
+    const source=await readFile(new URL(file,root),"utf8");
+    for(const pattern of patterns)assert.match(source,pattern,`${file} rationale missing: ${pattern}`);
+  }
 });

@@ -79,6 +79,9 @@ export default function RevenueInventoryCalendar({
   canWrite: boolean;
   act: (action: string, payload: Record<string, string>) => Promise<boolean>;
 }) {
+  // Draft dates stay separate from `applied`: changing an input must not trigger a
+  // server projection until the user submits or chooses a preset. This keeps wide
+  // multi-month calendars from refetching on every intermediate edit.
   const [from, setFrom] = useState(businessDate),
     [to, setTo] = useState(addDays(businessDate, 29)),
     [applied, setApplied] = useState({
@@ -125,6 +128,8 @@ export default function RevenueInventoryCalendar({
     () => `190px repeat(${data?.dates.length || 1}, 132px)`,
     [data?.dates.length],
   );
+  // Filtering only changes rendered room-type rows; date columns and server totals
+  // remain untouched, so a keyword can never alter the inventory calculation.
   const visibleTypes = useMemo(() => {
     const keyword = typeQuery.trim().toLocaleLowerCase("ko-KR");
     return data?.types.filter((type) => !keyword || `${type.code} ${type.name}`.toLocaleLowerCase("ko-KR").includes(keyword)) || [];
@@ -294,6 +299,9 @@ function InventoryRow({
   canWrite: boolean;
   edit: (cell: Cell) => void;
 }) {
+  // Commercial meaning is contract-dependent: commission channels show the
+  // percentage deducted from sell rate, while net-rate channels show the distinct
+  // hotel deposit amount. Neither value is inferred from the public website rate.
   const mapped = mappings.filter((mapping) => mapping.room_type_id === type.id),
     contractMap = new Map(
       contracts.map((contract) => [contract.connection_id, contract]),
@@ -367,6 +375,9 @@ function BulkInventoryModal({
   close: () => void;
   submit: (payload: Record<string, string>) => Promise<void>;
 }) {
+  // Empty bulk fields intentionally mean “keep each cell's existing value”. A
+  // single-cell edit pre-fills every field, while multi-cell edits stay sparse to
+  // avoid overwriting unrelated controls across a long date range.
   const single = Boolean(editor.type && editor.cell),
     initialTypeIds = editor.type
       ? [editor.type.id]
@@ -421,6 +432,8 @@ function BulkInventoryModal({
           event.preventDefault();
           setBusy(true);
           try {
+            // The API revalidates the 730-day/5,000-cell bounds, physical capacity,
+            // committed rooms, channel mapping, and contract before writing.
             await submit({
               ...form,
               roomTypeIds: JSON.stringify(typeIds),
