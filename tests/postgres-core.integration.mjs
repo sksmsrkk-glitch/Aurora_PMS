@@ -65,6 +65,54 @@ test("operational dates and timestamps use native PostgreSQL types", { skip }, a
   }
 });
 
+test("flags and structured payloads use native types with reservation invariants", { skip }, async () => {
+  const sql = client(1);
+  try {
+    const [types] = await sql`
+      SELECT
+        COUNT(*) FILTER (WHERE data_type='boolean')::int boolean_columns,
+        COUNT(*) FILTER (WHERE data_type='jsonb')::int jsonb_columns,
+        COUNT(*) FILTER (
+          WHERE data_type='integer' AND column_name IN (
+            'active','published','closed','close_to_arrival',
+            'close_to_departure','website_closed','deduct_inventory'
+          )
+        )::int legacy_integer_flags
+      FROM information_schema.columns
+      WHERE table_schema='public'
+    `;
+    assert.ok(types.boolean_columns >= 24);
+    assert.ok(types.jsonb_columns >= 12);
+    assert.equal(types.legacy_integer_flags, 0);
+
+    const [constraints] = await sql`
+      SELECT COUNT(*)::int count
+      FROM pg_constraint
+      WHERE connamespace='public'::regnamespace AND convalidated
+        AND conname IN (
+          'reservations_stay_range_check','reservations_occupancy_check',
+          'reservations_nightly_rate_check','reservations_version_check',
+          'reservations_status_check','guests_preferences_array',
+          'rooms_features_array','room_type_amenities_array'
+        )
+    `;
+    assert.equal(constraints.count, 8);
+    const [reservation] = await sql`SELECT id FROM reservations ORDER BY id LIMIT 1`;
+    const [guest] = await sql`SELECT id FROM guests ORDER BY id LIMIT 1`;
+    assert.ok(reservation?.id && guest?.id, "seed must include a reservation and guest");
+    await assert.rejects(
+      sql`UPDATE reservations SET departure_date=arrival_date WHERE id=${reservation.id}`,
+      (error) => error?.code === "23514" && /reservations_stay_range_check/u.test(error.message),
+    );
+    await assert.rejects(
+      sql`UPDATE guests SET preferences='{}'::jsonb WHERE id=${guest.id}`,
+      (error) => error?.code === "23514" && /guests_preferences_array/u.test(error.message),
+    );
+  } finally {
+    await sql.end({ timeout: 2 });
+  }
+});
+
 test("dashboard comparisons match current and prior business-day facts", { skip }, async () => {
   const sql = client(1);
   const previousDatabaseUrl = process.env.DATABASE_URL;
@@ -118,10 +166,10 @@ test("rate plans are relational and drive direct-booking nightly prices", { skip
         min_stay,close_to_arrival,close_to_departure,version,updated_at,updated_by
       ) VALUES (
         ${`it-rate-${crypto.randomUUID()}`},'prop-seoul',${plan.id},'rt-dlx',
-        ${stayDate},${rate},0,1,0,0,1,now(),'integration-test'
+        ${stayDate},${rate},false,1,false,false,1,now(),'integration-test'
       )
       ON CONFLICT(property_id,rate_plan_id,room_type_id,stay_date)
-      DO UPDATE SET sell_rate=excluded.sell_rate,closed=0,updated_at=now(),updated_by='integration-test'
+      DO UPDATE SET sell_rate=excluded.sell_rate,closed=false,updated_at=now(),updated_by='integration-test'
     `;
     process.env.DATABASE_URL = databaseUrl;
     const { getAvailability } = await import("../app/api/booking/service.ts");

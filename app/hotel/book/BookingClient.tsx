@@ -6,14 +6,15 @@ import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { addIsoDays, formatMoney, seoulDateAfter } from "../../../lib/format";
 
 type Offer = { roomTypeId:string;code:string;name:string;description:string;imageUrl:string|null;amenities:string[];capacity:number;available:number;averageNightlyRate:number;total:number;currency:string;nights:{date:string;rate:number;available:number}[] };
 type Availability = { property:{name:string;currency:string;businessDate:string};search:{arrival:string;departure:string;adults:number;children:number;nights:number};offers:Offer[] };
 type Search = { arrival:string;departure:string;adults:string;children:string };
 
-function dateAfter(days:number) { const date=new Date(Date.now()+days*86_400_000),parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(date),value=Object.fromEntries(parts.map(part=>[part.type,part.value]));return `${value.year}-${value.month}-${value.day}`; }
-function plusDays(value:string,days:number){const date=new Date(`${value}T00:00:00.000Z`);date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10);}
-function money(value:number,currency="KRW") { return new Intl.NumberFormat("ko-KR",{style:"currency",currency,maximumFractionDigits:0}).format(value); }
+const dateAfter = seoulDateAfter;
+const plusDays = addIsoDays;
+const money = formatMoney;
 function roomClass(code:string) { return code==="DLX"?"art-one":code==="TWN"?"art-two":"art-three"; }
 
 function initialSearch(params:ReturnType<typeof useSearchParams>):Search {

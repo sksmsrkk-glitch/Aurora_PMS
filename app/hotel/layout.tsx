@@ -1,12 +1,12 @@
 /** Isolated layout and visual system for the public hotel and booking pages. */
 import type { Metadata } from "next";
-import { getWebsiteContent } from "../api/booking/website-service";
+import { getCachedWebsiteContent } from "./content";
 import { hotelMetadata } from "./seo";
 import "./hotel.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   try {
-    return hotelMetadata(await getWebsiteContent());
+    return hotelMetadata(await getCachedWebsiteContent());
   } catch {
     // Database or unpublished-content failures stay out of search results while
     // the page's normal error/not-found boundary handles the visible response.

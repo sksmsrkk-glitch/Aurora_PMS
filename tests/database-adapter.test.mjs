@@ -19,7 +19,7 @@ test("parameter compiler rejects bind count mismatches and unterminated SQL",()=
 
 test("root query boundary rejects every tenant table including role assignments",()=>{
   assert.throws(
-    ()=>assertSystemOnlyRootQuery("SELECT property_id,role FROM role_assignments WHERE email=? AND active=1 OR true"),
+    ()=>assertSystemOnlyRootQuery("SELECT property_id,role FROM role_assignments WHERE email=? AND active OR true"),
     /dedicated root capability/iu,
   );
   assert.throws(

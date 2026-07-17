@@ -56,11 +56,11 @@ const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
   reverse_folio_entry:["entryId","reason"],refund_payment:["entryId","amount","reason"],transfer_to_ar:["windowId","accountProfileId","dueDate"],post_ar_payment:["invoiceId","amount"],
   housekeeping:["roomId"],open_cashier:["openingAmount"],close_cashier:["countedAmount"],
   create_channel_connection:["provider","externalPropertyId","name"],create_channel_mapping:["connectionId","roomTypeId","externalRoomTypeId","ratePlan","externalRatePlanId"],
-  queue_ari_delta:["mappingId","startDate","endDate"],dispatch_ari_update:["ariUpdateId"],
+  queue_ari_delta:["mappingId","startDate","endDate"],dispatch_ari_update:["updateId"],
   ingest_channel_message:["connectionId","messageId","eventType","externalReservationId","revision"],replay_channel_message:["messageId"],dispatch_outbox_event:["eventId"],
   update_room_type_website:["roomTypeId"],upload_website_media:["dataUrl","filename","scope"],delete_website_media:["mediaId"],
-  upsert_channel_contract:["connectionId","contractType","validFrom"],post_accounting_entry:["businessDate","description","linesJson"],
-  reverse_accounting_entry:["journalEntryId","reason"],accrue_channel_settlement:["connectionId","businessDate","grossSellAmount"],mark_channel_settlement_paid:["settlementId"],
+  upsert_channel_contract:["connectionId","contractType","validFrom"],post_accounting_entry:["businessDate","description","debitAccountId","creditAccountId","amount"],
+  reverse_accounting_entry:["entryId","reason"],accrue_channel_settlement:["connectionId","reservationId"],mark_channel_settlement_paid:["settlementId"],
   export_report:["report"],
 };
 

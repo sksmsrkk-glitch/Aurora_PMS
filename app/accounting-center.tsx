@@ -3,6 +3,7 @@
 /** Hotel subledger, profit-and-loss and channel settlement workspace. */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { addIsoDays, formatMoney } from "../lib/format";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
 
@@ -13,7 +14,7 @@ type Account = {
   account_type: string;
   category: string;
   department: string | null;
-  active: number | boolean;
+  active: boolean;
 };
 type Entry = {
   id: string;
@@ -91,17 +92,8 @@ type AccountingData = {
 };
 type Modal = { type: "journal" | "reverse" | "accrue"; entry?: Entry } | null;
 
-const money = (value: number) =>
-  new Intl.NumberFormat("ko-KR", {
-    style: "currency",
-    currency: "KRW",
-    maximumFractionDigits: 0,
-  }).format(value || 0);
-const addDays = (value: string, days: number) => {
-  const date = new Date(`${value}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-};
+const money = formatMoney;
+const addDays = addIsoDays;
 const accountType: Record<string, string> = {
   ASSET: "자산",
   LIABILITY: "부채",
@@ -552,7 +544,7 @@ function AccountingModal({
   // double-entry balancing, reversal immutability, and channel-contract arithmetic.
   const [busy, setBusy] = useState(false),
     assets = data.accounts.filter(
-      (account) => account.active !== 0 && account.active !== false,
+      (account) => account.active !== false,
     ),
     [form, setForm] = useState({
       businessDate,

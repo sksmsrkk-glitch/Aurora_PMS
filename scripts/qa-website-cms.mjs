@@ -30,8 +30,8 @@ async function availability(){return responseJson(`/api/booking/availability?${n
 
 await authenticateIfConfigured();
 const adminBefore=await websiteAdmin();
-assert.equal(Number(adminBefore.settings.published),1);
-assert.ok(adminBefore.rooms.some(room=>Number(room.published)===1));
+assert.equal(adminBefore.settings.published,true);
+assert.ok(adminBefore.rooms.some(room=>room.published===true));
 const homepage=await fetch(`${baseUrl}/hotel`),html=await homepage.text();
 assert.equal(homepage.status,200);
 assert.ok(html.includes(String(adminBefore.settings.hero_title)));
@@ -79,4 +79,4 @@ try {
 }
 assert.ok(!(await websiteAdmin()).media.some(item=>item.id===mediaId));
 
-console.log(JSON.stringify({homepage:homepage.status,publishedRooms:adminBefore.rooms.filter(room=>Number(room.published)===1).length,offers:before.body.offers.length,invalidDateStatus:invalid.response.status,settingsVersioned:true,webStopSell:true,webRestore:true,mediaLifecycle:true}));
+console.log(JSON.stringify({homepage:homepage.status,publishedRooms:adminBefore.rooms.filter(room=>room.published===true).length,offers:before.body.offers.length,invalidDateStatus:invalid.response.status,settingsVersioned:true,webStopSell:true,webRestore:true,mediaLifecycle:true}));

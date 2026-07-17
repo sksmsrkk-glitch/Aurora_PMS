@@ -73,6 +73,12 @@ async function action(name, payload = {}, options = {}) {
   });
   const expected = options.expectStatus || 200;
   assert.equal(result.response.status, expected, `${name}: ${result.json?.error || result.response.status}`);
+  if (expected === 200 && name !== "export_report") {
+    assert.equal(result.json?.mutation?.action, name, `${name}: mutation receipt missing`);
+    const refreshed = await request("/api/pms", { headers: { Accept: "application/json" } });
+    assert.equal(refreshed.response.status, 200, `${name}: projection refresh failed`);
+    return { ...result, receipt: result.json, json: refreshed.json, idempotencyKey };
+  }
   return { ...result, idempotencyKey };
 }
 
@@ -81,7 +87,7 @@ const findReservation = (data, lastName) => data.reservations.find((item) => ite
 async function createReservation(lastName, roomTypeId, arrivalDate, departureDate, roomId = "") {
   const created = await action("create_reservation", {
     firstName: `QA${runId}`, lastName, email: `qa.${runId.toLowerCase()}@example.com`, phone: "010-0000-0000",
-    arrivalDate, departureDate, roomTypeId, roomId, source: "Direct", ratePlan: "QA", nightlyRate: "110000", eta: "12:00",
+    arrivalDate, departureDate, roomTypeId, roomId, source: "Direct", ratePlan: "BAR", nightlyRate: "110000", eta: "12:00",
   });
   const reservation = findReservation(created.json, lastName);
   assert.ok(reservation, `reservation ${lastName} was not created`);
@@ -155,7 +161,7 @@ async function main() {
   assert.equal(qaRooms.length, 5);
   response = await action("update_room", { roomId: room.id, expectedVersion: String(room.version), number: room.number, floor: "9", roomTypeId: roomType.id, features: "QA, 금연, 코너룸", active: "true" });
   room = response.json.rooms.find((item) => item.id === room.id);
-  assert.match(room.features, /코너룸/);
+  assert.ok(Array.isArray(room.features)&&room.features.includes("코너룸"));
   record("단일·대량 객실 생성 및 객실 수정", "5실");
 
   for (const qaRoom of qaRooms) await action("housekeeping", { roomId: qaRoom.id, status: "INSPECTED" });
@@ -202,7 +208,7 @@ async function main() {
 
   let created = await createReservation("Operations", roomType.id, businessDate, addDays(businessDate, 1));
   let reservation = created.reservation;
-  response = await action("edit_reservation", { reservationId: reservation.id, expectedVersion: String(reservation.version), roomTypeId: roomType.id, arrivalDate: businessDate, departureDate: addDays(businessDate, 2), adults: "2", children: "1", ratePlan: "QA-FLEX", nightlyRate: "125000", eta: "13:30", notes: "수정 워크플로" });
+  response = await action("edit_reservation", { reservationId: reservation.id, expectedVersion: String(reservation.version), roomTypeId: roomType.id, arrivalDate: businessDate, departureDate: addDays(businessDate, 2), adults: "2", children: "1", ratePlan: "BAR", nightlyRate: "125000", eta: "13:30", notes: "수정 워크플로" });
   reservation = response.json.reservations.find((item) => item.id === reservation.id);
   response = await action("assign_room", { reservationId: reservation.id, expectedVersion: String(reservation.version), roomId: qaRooms[0].id });
   reservation = response.json.reservations.find((item) => item.id === reservation.id);
@@ -255,7 +261,7 @@ async function main() {
   response = await action("mark_no_show", { reservationId: created.reservation.id });
   assert.equal(response.json.reservations.find((item) => item.id === created.reservation.id).status, "NO_SHOW");
   created = await createReservation("Cancelled", roomType.id, businessDate, addDays(businessDate, 1));
-  response = await action("cancel_reservation", { reservationId: created.reservation.id, reason: "QA_USER_REQUEST" });
+  response = await action("cancel_reservation", { reservationId: created.reservation.id, expectedVersion: created.reservation.version, reason: "QA_USER_REQUEST" });
   assert.equal(response.json.reservations.find((item) => item.id === created.reservation.id).status, "CANCELLED");
   record("노쇼·예약 취소·재고 복원");
 
@@ -264,7 +270,7 @@ async function main() {
   response = await action("create_channel_connection", { provider: "QAOTA", externalPropertyId: `HOTEL-${runId}`, name: `QA OTA ${runId}` });
   const connection = response.json.integrations.connections.find((item) => item.external_property_id === `HOTEL-${runId}`);
   assert.ok(connection);
-  response = await action("create_channel_mapping", { connectionId: connection.id, roomTypeId: roomType.id, externalRoomTypeId: `ROOM-${runId}`, ratePlan: "QAOTA", externalRatePlanId: `RATE-${runId}` });
+  response = await action("create_channel_mapping", { connectionId: connection.id, roomTypeId: roomType.id, externalRoomTypeId: `ROOM-${runId}`, ratePlan: "OTA", externalRatePlanId: `RATE-${runId}` });
   const mapping = response.json.integrations.mappings.find((item) => item.connection_id === connection.id && item.external_room_type_id === `ROOM-${runId}`);
   assert.ok(mapping);
   response = await action("upsert_channel_contract", { connectionId: connection.id, contractType: "COMMISSION", commissionPercent: "15", settlementCycle: "PER_STAY", paymentTermsDays: "14", validFrom: businessDate, validTo: "" });
@@ -328,7 +334,7 @@ async function main() {
   data = (await snapshot()).data;
   const failedMessage = data.integrations.inbound.find((item) => item.message_id === failedMessageId);
   assert.equal(failedMessage.status, "FAILED");
-  await action("create_channel_mapping", { connectionId: connection.id, roomTypeId: roomType.id, externalRoomTypeId: `BAD-${runId}`, ratePlan: "QAOTA", externalRatePlanId: `BADRATE-${runId}` });
+  await action("create_channel_mapping", { connectionId: connection.id, roomTypeId: roomType.id, externalRoomTypeId: `BAD-${runId}`, ratePlan: "OTA", externalRatePlanId: `BADRATE-${runId}` });
   response = await action("replay_channel_message", { messageId: failedMessage.id });
   assert.equal(response.json.integrations.inbound.find((item) => item.id === failedMessage.id).status, "PROCESSED");
   record("채널 연결·매핑·ARI·NEW/MODIFY/CANCEL·멱등·DLQ 재처리");

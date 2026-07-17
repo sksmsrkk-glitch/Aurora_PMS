@@ -54,6 +54,8 @@ jobs:
         run: npm run build
       - name: Unit and behavior tests
         run: npm run test:unit
+      - name: Verify generated project metrics
+        run: npm run docs:metrics:check
       - name: Prepare isolated PostgreSQL
         run: npm run db:test:bootstrap
       - name: Apply historical migrations through RPC removal
