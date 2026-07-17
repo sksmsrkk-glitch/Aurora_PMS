@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compilePostgresParameters } from "../db/postgres-parameters.mjs";
+import { assertSystemOnlyRootQuery } from "../db/pms-database.ts";
 
 test("positional parameters ignore SQL literals, identifiers, and comments",()=>{
   const input=`SELECT '?', "?", ? AS value -- ?\n/* ? */ WHERE note=$tag$?$tag$ AND id=?`;
@@ -14,4 +15,18 @@ test("positional parameters ignore SQL literals, identifiers, and comments",()=>
 test("parameter compiler rejects bind count mismatches and unterminated SQL",()=>{
   assert.throws(()=>compilePostgresParameters("SELECT ?",0),/parameter mismatch/u);
   assert.throws(()=>compilePostgresParameters("SELECT 'unterminated",0),/unterminated/iu);
+});
+
+test("root query boundary rejects every tenant table including role assignments",()=>{
+  assert.throws(
+    ()=>assertSystemOnlyRootQuery("SELECT property_id,role FROM role_assignments WHERE email=? AND active=1 OR true"),
+    /dedicated root capability/iu,
+  );
+  assert.throws(
+    ()=>assertSystemOnlyRootQuery("WITH exposed AS (SELECT * FROM reservations) SELECT * FROM exposed"),
+    /scopePmsDatabase/iu,
+  );
+  assert.doesNotThrow(
+    ()=>assertSystemOnlyRootQuery("SELECT rolname FROM pg_roles WHERE rolname=?"),
+  );
 });

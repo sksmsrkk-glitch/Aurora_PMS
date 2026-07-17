@@ -1,6 +1,7 @@
 /** Authentication, authorization, and migration readiness for PMS routes. */
 import { authenticateSupabaseRequest } from "../../supabase-session";
 import type { PmsDatabase, PmsRuntimeBindings } from "../../../db/pms-database";
+import { verifyPmsSchemaContract } from "../../../db/schema-contract";
 import { demoAuthenticationEnabled } from "./auth-policy";
 export { demoAuthenticationEnabled } from "./auth-policy";
 
@@ -39,40 +40,7 @@ export async function ready(db: D1) {
 }
 
 async function verifyMigratedSchema(db: D1) {
-  const requiredTables = [
-    "properties",
-    "reservations",
-    "reservation_type_nights",
-    "reservation_rate_nights",
-    "booking_requests",
-    "api_rate_limits",
-    "business_blocks",
-    "folio_windows",
-    "channel_connections",
-    "report_exports",
-    "channel_contracts",
-    "accounting_accounts",
-    "accounting_journal_entries",
-    "website_settings",
-    "room_type_website",
-    "website_media",
-  ];
-  const rows = await db
-    .prepare(
-      `SELECT table_name
-         FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = ANY(?::text[])`,
-    )
-    .bind(requiredTables)
-    .all<{ table_name: string }>();
-  const found = new Set(rows.results.map((row) => row.table_name));
-  const missing = requiredTables.filter((table) => !found.has(table));
-  if (missing.length) {
-    throw new Error(
-      `Aurora PMS database is not migrated. Missing tables: ${missing.join(", ")}. Run npm run db:supabase:migrate.`,
-    );
-  }
+  await verifyPmsSchemaContract(db);
 }
 
 function decodedDisplayName(request: Request, email: string) {
@@ -101,8 +69,9 @@ export async function principalFor(request: Request, db: D1): Promise<Principal 
   if(principalCache.size>500){for(const [key,item] of principalCache)if(item.expires<=now)principalCache.delete(key);if(principalCache.size>500)principalCache.clear();}
   let assignmentPromise=principalInflight.get(cacheKey);
   if(!assignmentPromise){
-    assignmentPromise=db.prepare("SELECT property_id,role FROM role_assignments WHERE email=? AND active=1 ORDER BY created_at").bind(email).all<{property_id:string;role:Role}>().then((assignments)=>{
-      const assignment=requestedProperty?assignments.results.find((item)=>item.property_id===requestedProperty):assignments.results[0];
+    assignmentPromise=db.findActiveRoleAssignments(email).then((assignments)=>{
+      const typedAssignments=assignments as {property_id:string;role:Role}[];
+      const assignment=requestedProperty?typedAssignments.find((item)=>item.property_id===requestedProperty):typedAssignments[0];
       return assignment&&roleCapabilities[assignment.role]?{role:assignment.role,propertyId:assignment.property_id}:null;
     });
     principalInflight.set(cacheKey,assignmentPromise);

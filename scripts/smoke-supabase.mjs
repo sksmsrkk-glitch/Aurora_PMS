@@ -31,7 +31,7 @@ try{
       (SELECT COUNT(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('pms_execute','pms_batch','pms_execute_statement','pms_render_sql')) arbitrary_sql_functions,
       (SELECT COUNT(*)::int FROM role_assignments WHERE id IN ('role-local-admin','role-local-pms-admin')) seeded_admins
   `;
-  if(catalog.tables<51||catalog.rls_tables<51||catalog.triggers<29||Number(catalog.required_triggers)!==9||catalog.foreign_keys<79||catalog.migrations<14||Number(catalog.arbitrary_sql_functions)!==0||Number(catalog.seeded_admins)!==0)throw new Error("Supabase catalog verification failed");
+  if(catalog.tables<54||catalog.rls_tables<54||catalog.triggers<29||Number(catalog.required_triggers)!==9||catalog.foreign_keys<86||catalog.migrations<16||Number(catalog.arbitrary_sql_functions)!==0||Number(catalog.seeded_admins)!==0)throw new Error("Supabase catalog verification failed");
 
   const [website]=await sql`
     SELECT
@@ -57,7 +57,7 @@ try{
       const remaining=Math.max(0,Number(target.capacity_limit)-Number(target.sold)-Number(target.held));
       for(let index=0;index<=remaining;index+=1){
         const reservationId=`smoke-capacity-${index}`;
-        await transaction`INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (${reservationId},${`SMOKE-CAP-${index}`},'prop-seoul',${guest.id},${target.room_type_id},NULL,${target.stay_date},${target.stay_date},'DUE_IN',1,0,'SMOKE','SMOKE',0,NULL,'',1,now()::text,now()::text)`;
+        await transaction`INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (${reservationId},${`SMOKE-CAP-${index}`},'prop-seoul',${guest.id},${target.room_type_id},NULL,${target.stay_date},${target.stay_date},'DUE_IN',1,0,'SMOKE','SMOKE',0,NULL,'',1,now(),now())`;
         await transaction`INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES ('prop-seoul',${reservationId},${target.room_type_id},${target.stay_date})`;
       }
     });

@@ -3,7 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import postgres from "postgres";
 import { consumeRateLimit } from "../app/api/rate-limit.ts";
-import { closePmsDatabase, getPmsDatabase } from "../db/pms-database.ts";
+import { snapshot } from "../app/api/pms/read-model.ts";
+import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL || "";
 const required = process.env.AURORA_REQUIRE_POSTGRES_TESTS === "true";
@@ -36,6 +37,108 @@ test("migrated schema contains booking tables and no arbitrary SQL RPC", { skip 
     assert.equal(surface.pms_execute, null);
     assert.equal(surface.pms_batch, null);
   } finally {
+    await sql.end({ timeout: 2 });
+  }
+});
+
+test("operational dates and timestamps use native PostgreSQL types", { skip }, async () => {
+  const sql = client(1);
+  try {
+    const [types] = await sql`
+      SELECT
+        COUNT(*) FILTER (
+          WHERE data_type='text'
+            AND (column_name LIKE '%\\_date' ESCAPE '\\' OR column_name LIKE '%\\_at' ESCAPE '\\' OR column_name IN ('window_start','eta','checkin_time','checkout_time'))
+        )::int textual_temporal,
+        COUNT(*) FILTER (WHERE data_type='date')::int date_columns,
+        COUNT(*) FILTER (WHERE data_type='timestamp with time zone')::int timestamp_columns,
+        COUNT(*) FILTER (WHERE data_type='time without time zone')::int time_columns
+      FROM information_schema.columns
+      WHERE table_schema='public'
+    `;
+    assert.equal(types.textual_temporal, 0);
+    assert.ok(types.date_columns >= 28);
+    assert.ok(types.timestamp_columns >= 66);
+    assert.ok(types.time_columns >= 3);
+  } finally {
+    await sql.end({ timeout: 2 });
+  }
+});
+
+test("dashboard comparisons match current and prior business-day facts", { skip }, async () => {
+  const sql = client(1);
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  try {
+    const [expected] = await sql`
+      WITH context AS (
+        SELECT business_date current_day, business_date - 1 prior_day
+        FROM properties WHERE id='prop-seoul'
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM reservations r,context c
+          WHERE r.property_id='prop-seoul' AND r.arrival_date=c.current_day
+            AND r.status NOT IN ('CANCELLED','NO_SHOW')) current_arrivals,
+        (SELECT COUNT(*)::int FROM reservations r,context c
+          WHERE r.property_id='prop-seoul' AND r.arrival_date<=c.current_day
+            AND r.departure_date>c.current_day
+            AND r.status NOT IN ('CANCELLED','NO_SHOW')) current_occupied,
+        (SELECT COUNT(*)::int FROM reservations r,context c
+          WHERE r.property_id='prop-seoul' AND r.arrival_date=c.prior_day
+            AND r.status NOT IN ('CANCELLED','NO_SHOW')) prior_arrivals
+    `;
+    process.env.DATABASE_URL = databaseUrl;
+    const db = scopePmsDatabase(getPmsDatabase({ DATABASE_URL: databaseUrl }), "prop-seoul");
+    const model = await snapshot(db);
+    assert.equal(model.metrics.comparison.current.arrivals, expected.current_arrivals);
+    assert.equal(model.metrics.comparison.current.occupied, expected.current_occupied);
+    assert.equal(model.metrics.comparison.prior.arrivals, expected.prior_arrivals);
+    assert.equal(model.metrics.occupied, model.metrics.comparison.current.occupied);
+    assert.ok(Number.isFinite(model.metrics.comparison.current.revenue));
+    assert.ok(Number.isFinite(model.metrics.comparison.occupancyChangePoints));
+  } finally {
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    await sql.end({ timeout: 2 });
+  }
+});
+
+test("rate plans are relational and drive direct-booking nightly prices", { skip }, async () => {
+  const sql = client(2);
+  const stayDate = "2031-09-01";
+  const departure = "2031-09-02";
+  const rate = 345678;
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  try {
+    const [plan] = await sql`SELECT id FROM rate_plans WHERE property_id='prop-seoul' AND code='WEB-DIRECT'`;
+    assert.ok(plan?.id);
+    await sql`
+      INSERT INTO rate_plan_calendar(
+        id,property_id,rate_plan_id,room_type_id,stay_date,sell_rate,closed,
+        min_stay,close_to_arrival,close_to_departure,version,updated_at,updated_by
+      ) VALUES (
+        ${`it-rate-${crypto.randomUUID()}`},'prop-seoul',${plan.id},'rt-dlx',
+        ${stayDate},${rate},0,1,0,0,1,now(),'integration-test'
+      )
+      ON CONFLICT(property_id,rate_plan_id,room_type_id,stay_date)
+      DO UPDATE SET sell_rate=excluded.sell_rate,closed=0,updated_at=now(),updated_by='integration-test'
+    `;
+    process.env.DATABASE_URL = databaseUrl;
+    const { getAvailability } = await import("../app/api/booking/service.ts");
+    const availability = await getAvailability({ arrival: stayDate, departure, adults: 2, children: 0 });
+    const offer = availability.offers.find((item) => item.roomTypeId === "rt-dlx");
+    assert.equal(offer?.nights[0].rate, rate);
+    const [constraints] = await sql`
+      SELECT COUNT(*)::int count FROM pg_constraint
+      WHERE connamespace='public'::regnamespace AND convalidated
+        AND conname IN ('reservation_rate_plan_fk','reservation_rate_night_plan_fk','channel_mapping_rate_plan_fk')
+    `;
+    assert.equal(constraints.count, 3);
+  } finally {
+    await sql`DELETE FROM rate_plan_calendar WHERE property_id='prop-seoul' AND stay_date=${stayDate} AND updated_by='integration-test'`;
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
     await sql.end({ timeout: 2 });
   }
 });
@@ -133,13 +236,21 @@ test("twenty parallel bookings for the last room allow exactly one night", { ski
       VALUES (${roomTypeId},${propertyId},'LAST','Last Room',100000,2)
     `;
     await sql`
+      INSERT INTO rate_plans(
+        id,property_id,code,name,currency,created_at,updated_at,created_by,updated_by
+      ) VALUES (
+        ${`it-plan-${suffix}`},${propertyId},'BAR','Concurrency BAR','KRW',
+        now(),now(),'integration-test','integration-test'
+      )
+    `;
+    await sql`
       INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status)
       VALUES (${`it-room-${suffix}`},${propertyId},${roomTypeId},'101',1,'VACANT','CLEAN')
     `;
     for (const item of reservations) {
       await sql`
         INSERT INTO guests(id,property_id,first_name,last_name,created_at)
-        VALUES (${item.guestId},${propertyId},'Parallel',${item.id},now()::text)
+        VALUES (${item.guestId},${propertyId},'Parallel',${item.id},now())
       `;
       await sql`
         INSERT INTO reservations(
@@ -147,7 +258,7 @@ test("twenty parallel bookings for the last room allow exactly one night", { ski
           departure_date,status,adults,source,rate_plan,nightly_rate,created_at,updated_at
         ) VALUES (
           ${item.id},${item.confirmation},${propertyId},${item.guestId},${roomTypeId},
-          ${stayDate},'2031-08-02','DUE_IN',1,'TEST','BAR',100000,now()::text,now()::text
+          ${stayDate},'2031-08-02','DUE_IN',1,'TEST','BAR',100000,now(),now()
         )
       `;
     }

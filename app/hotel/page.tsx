@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getWebsiteContent } from "../api/booking/website-service";
 import HotelSearchForm from "./HotelSearchForm";
+import { hotelStructuredData, serializeJsonLd } from "./seo";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,7 @@ export default async function AuroraHotelPage() {
   const { settings } = content;
 
   return <main className="hotel-site">
+    <script type="application/ld+json" dangerouslySetInnerHTML={{__html:serializeJsonLd(hotelStructuredData(content))}}/>
     <nav className="hotel-nav" aria-label="호텔 홈페이지">
       <Link className="hotel-brand" href="/hotel"><Image src="/brand/aurora-mark-192.png" alt="" width={42} height={42} priority/><span><b>AURORA</b><small>SEOUL</small></span></Link>
       <div className="hotel-nav-links"><a href="#stay">STAY</a><a href="#experience">EXPERIENCE</a><a href="#location">LOCATION</a></div>

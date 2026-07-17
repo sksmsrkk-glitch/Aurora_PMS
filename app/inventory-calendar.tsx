@@ -11,6 +11,14 @@ type ChannelRate = {
   sell_rate: number;
   net_rate: number | null;
 };
+type RatePlanRate = {
+  rate_plan_id: string;
+  code: string;
+  rate_plan_name: string;
+  sell_rate: number;
+  closed: number;
+  min_stay: number;
+};
 type Cell = {
   stayDate: string;
   sellLimit: number;
@@ -22,6 +30,7 @@ type Cell = {
   cta: boolean;
   ctd: boolean;
   price: number;
+  ratePlanRates: RatePlanRate[];
   channelRates: ChannelRate[];
 };
 type RoomType = {
@@ -49,12 +58,32 @@ type Contract = {
   connection_name: string;
   provider: string;
 };
+type RatePlan = {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  currency: string;
+  market_segment: string;
+  meal_plan: string;
+  cancellation_policy: string;
+  guarantee_policy: string;
+  pricing_model: "FIXED" | "OFFSET" | "PERCENT";
+  adjustment: number;
+  min_stay: number;
+  max_stay: number;
+  valid_from: string | null;
+  valid_to: string | null;
+  active: number;
+  version: number;
+};
 type InventoryData = {
   range: { from: string; to: string; days: number };
   dates: string[];
   types: RoomType[];
   mappings: Mapping[];
   contracts: Contract[];
+  ratePlans: RatePlan[];
 };
 type Editor = { mode: "bulk"; type?: RoomType; cell?: Cell } | null;
 
@@ -92,7 +121,8 @@ export default function RevenueInventoryCalendar({
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [typeQuery, setTypeQuery] = useState(""),
-    [editor, setEditor] = useState<Editor>(null);
+    [editor, setEditor] = useState<Editor>(null),
+    [rateEditor,setRateEditor]=useState<RatePlan|"new"|null>(null);
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -156,6 +186,13 @@ export default function RevenueInventoryCalendar({
             <button onClick={() => preset(365)}>1년</button>
           </div>
         </div>
+        {data && (
+          <RatePlanBoard
+            plans={data.ratePlans}
+            canWrite={canWrite}
+            edit={setRateEditor}
+          />
+        )}
         <form
           className="inventory-range"
           onSubmit={(event) => {
@@ -282,8 +319,29 @@ export default function RevenueInventoryCalendar({
           }}
         />
       )}
+      {rateEditor && data && (
+        <RatePlanModal
+          plan={rateEditor === "new" ? null : rateEditor}
+          close={() => setRateEditor(null)}
+          submit={async (payload) => {
+            if (await act("upsert_rate_plan", payload)) {
+              setRateEditor(null);
+              await load();
+            }
+          }}
+        />
+      )}
     </>
   );
+}
+
+function RatePlanBoard({plans,canWrite,edit}:{plans:RatePlan[];canWrite:boolean;edit:(plan:RatePlan|"new")=>void}){
+  return <section className="rate-plan-board"><div className="rate-plan-board-head"><div><b>요금제 포트폴리오</b><span>판매 조건·유효 기간·객실별 일자 요금</span></div>{canWrite&&<button type="button" className="secondary" onClick={()=>edit("new")}>＋ 요금제</button>}</div><div className="rate-plan-cards">{plans.map(plan=><button type="button" key={plan.id} disabled={!canWrite} className={plan.active?"":"inactive"} onClick={()=>edit(plan)}><span><b>{plan.code}</b><i>{plan.active?"판매 중":"중지"}</i></span><strong>{plan.name}</strong><small>{plan.pricing_model} · {plan.min_stay}~{plan.max_stay}박 · {plan.currency}</small></button>)}</div></section>
+}
+
+function RatePlanModal({plan,close,submit}:{plan:RatePlan|null;close:()=>void;submit:(payload:Record<string,string>)=>Promise<void>}){
+  const [busy,setBusy]=useState(false),[form,setForm]=useState({code:plan?.code||"",name:plan?.name||"",description:plan?.description||"",currency:plan?.currency||"KRW",marketSegment:plan?.market_segment||"TRANSIENT",mealPlan:plan?.meal_plan||"ROOM_ONLY",cancellationPolicy:plan?.cancellation_policy||"FLEXIBLE",guaranteePolicy:plan?.guarantee_policy||"CARD_GUARANTEE",pricingModel:plan?.pricing_model||"FIXED",adjustment:String(plan?.adjustment||0),minStay:String(plan?.min_stay||1),maxStay:String(plan?.max_stay||30),validFrom:plan?.valid_from||"",validTo:plan?.valid_to||"",active:String(plan?.active!==0)}),set=(key:string,value:string)=>setForm(current=>({...current,[key]:value}));
+  return <div className="modal-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><form role="dialog" aria-modal="true" aria-label="요금제 편집" className="booking-modal rate-plan-modal" onSubmit={async event=>{event.preventDefault();setBusy(true);try{await submit({...form,...(plan?{ratePlanId:plan.id,version:String(plan.version)}:{})})}finally{setBusy(false)}}}><div className="drawer-head"><div><p>RATE PLAN MASTER</p><h2>{plan?`${plan.code} 요금제 편집`:"새 요금제 만들기"}</h2></div><button type="button" onClick={close}>×</button></div><p className="form-intro">예약·공식 홈페이지·채널 매핑이 참조하는 표준 요금제입니다. 사용된 코드는 변경할 수 없습니다.</p><div className="form-grid"><label><span>요금제 코드</span><input required disabled={Boolean(plan)} maxLength={24} value={form.code} onChange={e=>set("code",e.target.value.toUpperCase())}/></label><label><span>요금제 이름</span><input required maxLength={100} value={form.name} onChange={e=>set("name",e.target.value)}/></label><label><span>통화</span><input required maxLength={3} value={form.currency} onChange={e=>set("currency",e.target.value.toUpperCase())}/></label><label><span>가격 모델</span><select value={form.pricingModel} onChange={e=>set("pricingModel",e.target.value)}><option value="FIXED">고정가</option><option value="OFFSET">기준가 증감액</option><option value="PERCENT">기준가 증감률</option></select></label><label><span>기준 조정값</span><input type="number" value={form.adjustment} onChange={e=>set("adjustment",e.target.value)}/></label><label><span>시장 세그먼트</span><input value={form.marketSegment} onChange={e=>set("marketSegment",e.target.value)}/></label><label><span>최소 숙박</span><input type="number" min="1" max="365" value={form.minStay} onChange={e=>set("minStay",e.target.value)}/></label><label><span>최대 숙박</span><input type="number" min={form.minStay} max="365" value={form.maxStay} onChange={e=>set("maxStay",e.target.value)}/></label><label><span>판매 시작일</span><input type="date" value={form.validFrom} onChange={e=>set("validFrom",e.target.value)}/></label><label><span>판매 종료일</span><input type="date" min={form.validFrom} value={form.validTo} onChange={e=>set("validTo",e.target.value)}/></label><label><span>식사 조건</span><input value={form.mealPlan} onChange={e=>set("mealPlan",e.target.value)}/></label><label><span>취소 정책</span><input value={form.cancellationPolicy} onChange={e=>set("cancellationPolicy",e.target.value)}/></label><label className="span-2"><span>설명</span><textarea maxLength={1000} value={form.description} onChange={e=>set("description",e.target.value)}/></label><label className="toggle"><input type="checkbox" checked={form.active==="true"} onChange={e=>set("active",String(e.target.checked))}/><span>판매 활성화</span></label></div><div className="modal-actions"><button type="button" className="secondary" onClick={close}>닫기</button><button className="primary" disabled={busy}>{busy?"저장 중…":"요금제 저장"}</button></div></form></div>
 }
 
 function InventoryRow({
@@ -327,6 +385,7 @@ function InventoryRow({
           </small>
           <strong>{money(cell.price)}</strong>
           {cell.websiteClosed&&<mark>WEB OFF</mark>}
+          {cell.ratePlanRates.slice(0,2).map(plan=><em className="plan-rate" key={plan.rate_plan_id}><b>{plan.code}</b> {plan.closed?"마감":money(Number(plan.sell_rate))}<small> / MLOS {plan.min_stay}</small></em>)}
           {mapped.slice(0, 2).map((mapping) => {
             const rate = cell.channelRates.find(
                 (item) => item.mapping_id === mapping.id,
@@ -400,12 +459,14 @@ function BulkInventoryModal({
     ),
     rate = editor.cell?.channelRates.find(
       (item) => item.mapping_id === mappingId,
-    );
+    ),selectedPlanRate=editor.cell?.ratePlanRates.find(item=>item.code==="WEB-DIRECT")||editor.cell?.ratePlanRates[0];
   const [form, setForm] = useState({
       from: editor.cell?.stayDate || data.range.from,
       to: editor.cell?.stayDate || data.range.to,
       sellLimit: editor.cell ? String(editor.cell.sellLimit) : "",
       priceOverride: editor.cell ? String(editor.cell.price) : "",
+      ratePlanId: selectedPlanRate?.rate_plan_id || "",
+      ratePlanSellRate: selectedPlanRate ? String(selectedPlanRate.sell_rate) : "",
       minStay: editor.cell ? String(editor.cell.minStay) : "1",
       closed: editor.cell ? String(editor.cell.closed) : "false",
       cta: editor.cell ? String(editor.cell.cta) : "false",
@@ -475,6 +536,17 @@ function BulkInventoryModal({
                 value={form.from}
                 onChange={(event) => set("from", event.target.value)}
               />
+            </label>
+            <label>
+              <span>요금제 캘린더 <small>선택 적용</small></span>
+              <select value={form.ratePlanId} onChange={(event)=>{const id=event.target.value,setRate=editor.cell?.ratePlanRates.find(item=>item.rate_plan_id===id);set("ratePlanId",id);set("ratePlanSellRate",setRate?String(setRate.sell_rate):"")}}>
+                <option value="">요금제 변경 안 함</option>
+                {data.ratePlans.filter(plan=>plan.active).map(plan=><option value={plan.id} key={plan.id}>{plan.code} · {plan.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>요금제 판매가 <small>빈칸=호텔가</small></span>
+              <input type="number" min="0" step="100" disabled={!form.ratePlanId} value={form.ratePlanSellRate} onChange={event=>set("ratePlanSellRate",event.target.value)}/>
             </label>
             <label>
               <span>종료일</span>

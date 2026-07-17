@@ -20,6 +20,7 @@ export interface PmsDatabase {
   prepare(query: string): PmsPreparedStatement;
   batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]): Promise<PmsResult<T>[]>;
   forProperty(propertyId: string): PmsDatabase;
+  findActiveRoleAssignments(email: string): Promise<{ property_id: string; role: string }[]>;
 }
 
 /**
@@ -52,19 +53,13 @@ const tenantTables = [
   "channel_rate_overrides", "channel_settlements", "accounting_accounts",
   "accounting_journal_entries", "accounting_journal_lines", "website_settings",
   "room_type_website", "website_media", "role_assignments",
+  "rate_plans", "rate_plan_room_types", "rate_plan_calendar",
 ] as const;
 const tenantTablePattern = new RegExp(`\\b(?:${tenantTables.join("|")})\\b`, "iu");
 
-function assertSafeRootQuery(query: string) {
-  if (!tenantTablePattern.test(query)) return;
-  const roleLookup =
-    /^\s*SELECT\b/iu.test(query) &&
-    /\bFROM\s+role_assignments\b/iu.test(query) &&
-    /\bemail\s*=\s*\?/iu.test(query) &&
-    /\bactive\s*=\s*1\b/iu.test(query) &&
-    !tenantTables.some((table) => table !== "role_assignments" && new RegExp(`\\b${table}\\b`, "iu").test(query));
-  if (!roleLookup) {
-    throw new Error("Tenant-scoped table access requires scopePmsDatabase()");
+export function assertSystemOnlyRootQuery(query: string) {
+  if (tenantTablePattern.test(query)) {
+    throw new Error("Tenant-scoped table access requires scopePmsDatabase() or a dedicated root capability");
   }
 }
 
@@ -121,6 +116,23 @@ class PostgresDatabase implements PmsDatabase {
     return new PostgresPreparedStatement(this, query);
   }
 
+  /**
+   * The sole root-level tenant lookup is a closed capability, not arbitrary SQL.
+   * Authentication supplies only a normalized email bind; callers cannot alter
+   * selected columns, predicates, joins, ordering, or tenant-table scope.
+   */
+  async findActiveRoleAssignments(email: string) {
+    if (this.propertyId) throw new Error("Role assignment lookup requires the root database capability");
+    const normalized = email.trim().toLowerCase();
+    if (!normalized || normalized.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) return [];
+    const result = await this.executeRaw<{ property_id: string; role: string }>(
+      "SELECT property_id,role FROM role_assignments WHERE email=? AND active=1 ORDER BY created_at",
+      [normalized],
+      this.client,
+    );
+    return result.results;
+  }
+
   private async configureTenant(transaction: postgres.TransactionSql) {
     if (!this.propertyId) return;
     await transaction.unsafe("SET LOCAL ROLE aurora_app");
@@ -147,7 +159,7 @@ class PostgresDatabase implements PmsDatabase {
     values: unknown[],
     executor?: PostgresExecutor,
   ): Promise<PmsResult<T>> {
-    if (!this.propertyId) assertSafeRootQuery(query);
+    if (!this.propertyId) assertSystemOnlyRootQuery(query);
     if (executor) return this.executeRaw<T>(query, values, executor);
     if (!this.propertyId) return this.executeRaw<T>(query, values, this.client);
 
@@ -199,6 +211,17 @@ export function getPmsDatabase(bindings: PmsRuntimeBindings): PmsDatabase {
       idle_timeout: 20,
       max_lifetime: 60 * 15,
       ssl: localDatabase ? false : "require",
+      // A hotel business/stay date has no timezone. Returning PostgreSQL DATE as
+      // YYYY-MM-DD prevents UTC Date objects from corrupting map keys or moving a
+      // stay date when a server/client timezone differs.
+      types: {
+        dateOnly: {
+          to: 1082,
+          from: [1082],
+          serialize: (value: unknown) => String(value).slice(0, 10),
+          parse: (value: string) => value,
+        },
+      },
       transform: { undefined: null },
     });
     postgresUrl = databaseUrl;
