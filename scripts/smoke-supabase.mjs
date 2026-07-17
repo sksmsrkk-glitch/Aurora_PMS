@@ -1,3 +1,4 @@
+/** Production-like Supabase catalog, invariant and Data API smoke checks. */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import postgres from "postgres";
@@ -27,7 +28,16 @@ try{
       (SELECT COUNT(*)::int FROM pg_constraint WHERE connamespace='public'::regnamespace AND contype='f' AND convalidated) foreign_keys,
       (SELECT COUNT(*)::int FROM pms_schema_migrations) migrations
   `;
-  if(catalog.tables<47||catalog.rls_tables<47||catalog.triggers<34||catalog.foreign_keys<74||catalog.migrations<8)throw new Error("Supabase catalog verification failed");
+  if(catalog.tables<50||catalog.rls_tables<50||catalog.triggers<34||catalog.foreign_keys<79||catalog.migrations<10)throw new Error("Supabase catalog verification failed");
+
+  const [website]=await sql`
+    SELECT
+      (SELECT COUNT(*)::int FROM website_settings WHERE property_id='prop-seoul' AND published=1) settings,
+      (SELECT COUNT(*)::int FROM room_type_website WHERE property_id='prop-seoul' AND published=1) published_rooms,
+      EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='inventory_controls' AND column_name='website_closed') website_control,
+      EXISTS(SELECT 1 FROM storage.buckets WHERE id='hotel-media' AND public=true) public_bucket
+  `;
+  if(Number(website.settings)!==1||Number(website.published_rooms)<1||!website.website_control||!website.public_bucket)throw new Error("Website CMS catalog verification failed");
 
   let capacityGuard=false;
   try{
@@ -82,5 +92,5 @@ try{
   if(!response.ok)throw new Error(`Supabase Data API smoke test failed (${response.status})`);
   const data=await response.json();
   if(Number(data.results?.[0]?.count)<4)throw new Error("Supabase Data API returned fewer rows than the seed baseline");
-  console.log(`Supabase smoke passed: ${catalog.tables} tables, ${catalog.triggers} triggers, ${catalog.foreign_keys} validated foreign keys, ${catalog.rls_tables} RLS tables, Data API ${Date.now()-started} ms.`);
+  console.log(`Supabase smoke passed: ${catalog.tables} tables, ${catalog.triggers} triggers, ${catalog.foreign_keys} validated foreign keys, ${catalog.rls_tables} RLS tables, ${website.published_rooms} published website rooms, Data API ${Date.now()-started} ms.`);
 }finally{await sql.end({timeout:5});}

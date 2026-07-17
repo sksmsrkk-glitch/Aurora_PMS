@@ -1,5 +1,7 @@
 "use client";
 
+/** Administrative room-type and physical-room master editor. */
+
 import { useMemo, useState } from "react";
 
 type RoomType={id:string;code:string;name:string;base_rate:number;capacity:number;description?:string;active?:number|boolean;version:number;physical:number};

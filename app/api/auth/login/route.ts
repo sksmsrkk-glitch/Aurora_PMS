@@ -1,3 +1,4 @@
+/** Same-origin login endpoint that issues hardened Supabase session cookies. */
 import { signInWithPassword } from "../../../supabase-session";
 
 export const runtime = "nodejs";

@@ -1,3 +1,4 @@
+/** Verified Supabase identity, refresh rotation and hardened cookie sessions. */
 import { createHash } from "node:crypto";
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { cookies } from "next/headers";

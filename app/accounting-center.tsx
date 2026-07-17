@@ -1,5 +1,7 @@
 "use client";
 
+/** Hotel subledger, profit-and-loss and channel settlement workspace. */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Account = {

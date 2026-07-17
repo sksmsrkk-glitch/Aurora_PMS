@@ -1,5 +1,7 @@
 "use client";
 
+/** Shared focus trap, Escape handling and scroll locking for PMS dialogs. */
+
 import { useEffect } from "react";
 
 const overlaySelector = ".modal-backdrop, .drawer-backdrop";

@@ -1,5 +1,7 @@
 "use client";
 
+/** Dependency-light OpenXML workbook generator for audited report exports. */
+
 import { strToU8, zipSync } from "fflate";
 
 export type ExportColumn={key:string;label:string;type?:string};

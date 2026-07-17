@@ -1,3 +1,4 @@
+/** Converts D1-compatible Drizzle output into the baseline Supabase DDL. */
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 

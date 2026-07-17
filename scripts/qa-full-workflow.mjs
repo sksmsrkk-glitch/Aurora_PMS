@@ -1,3 +1,4 @@
+/** Destructive staging workflow QA spanning every PMS operating domain. */
 import assert from "node:assert/strict";
 
 const baseUrl = (process.env.PMS_BASE_URL || "http://localhost:3000").replace(/\/$/, "");

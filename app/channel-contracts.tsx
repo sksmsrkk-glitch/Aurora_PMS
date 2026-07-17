@@ -1,5 +1,7 @@
 "use client";
 
+/** Channel commission and net-rate contract editor. */
+
 import { useState } from "react";
 
 type Connection = {

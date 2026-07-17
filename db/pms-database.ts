@@ -1,3 +1,4 @@
+/** Unified prepared-statement adapter for Supabase RPC, PostgreSQL and D1. */
 import postgres from "postgres";
 
 export type PmsDialect = "d1" | "postgres";

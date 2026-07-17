@@ -1,3 +1,4 @@
+/** Ordered, history-aware Supabase migration and seed runner. */
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import postgres from "postgres";

@@ -1,7 +1,8 @@
 import { getPmsDatabase, scopePmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRuntimeBindings } from "../../../db/pms-database";
 import { authenticateSupabaseRequest } from "../../supabase-session";
 import { ReportRequestError, runReport } from "./reporting";
-import { handleExtendedAction, loadAccountingCenter, loadInventoryCalendar, PmsExtendedError } from "./extended";
+/** Authenticated PMS API router and transactional command gateway. */
+import { handleExtendedAction, loadAccountingCenter, loadInventoryCalendar, loadWebsiteAdmin, PmsExtendedError } from "./extended";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,6 +41,7 @@ const actionCapability: Record<string, string> = {
   post_accounting_entry: "ACCOUNTING_WRITE", reverse_accounting_entry: "ACCOUNTING_WRITE", accrue_channel_settlement: "ACCOUNTING_WRITE", mark_channel_settlement_paid: "ACCOUNTING_WRITE",
   open_cashier: "CASHIER_WRITE", close_cashier: "CASHIER_WRITE", run_night_audit: "EOD_RUN",
   create_room_type: "ADMIN", update_room_type: "ADMIN", create_room: "ADMIN", update_room: "ADMIN", bulk_create_rooms: "ADMIN", export_report: "REPORT_EXPORT",
+  update_website_settings: "ADMIN", update_room_type_website: "ADMIN", upload_website_media: "ADMIN", delete_website_media: "ADMIN",
 };
 
 let initialization: Promise<void> | null = null;
@@ -62,7 +64,10 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS night_audits (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, business_date TEXT NOT NULL, status TEXT NOT NULL, blockers_json TEXT NOT NULL, summary_json TEXT, started_at TEXT NOT NULL, completed_at TEXT, completed_by TEXT)`,
   `CREATE TABLE IF NOT EXISTS reservation_transitions (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, from_status TEXT NOT NULL, to_status TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS reservation_mutations (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, expected_version INTEGER NOT NULL, kind TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS inventory_controls (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, sell_limit INTEGER, closed INTEGER NOT NULL DEFAULT 0, min_stay INTEGER NOT NULL DEFAULT 1, close_to_arrival INTEGER NOT NULL DEFAULT 0, close_to_departure INTEGER NOT NULL DEFAULT 0, price_override REAL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS inventory_controls (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, sell_limit INTEGER, closed INTEGER NOT NULL DEFAULT 0, min_stay INTEGER NOT NULL DEFAULT 1, close_to_arrival INTEGER NOT NULL DEFAULT 0, close_to_departure INTEGER NOT NULL DEFAULT 0, price_override REAL, website_closed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS website_settings (property_id TEXT PRIMARY KEY, hotel_name TEXT NOT NULL, brand_eyebrow TEXT NOT NULL, hero_title TEXT NOT NULL, hero_subtitle TEXT NOT NULL, overview_title TEXT NOT NULL, overview_body TEXT NOT NULL, experience_title TEXT NOT NULL, experience_body TEXT NOT NULL, location_title TEXT NOT NULL, location_body TEXT NOT NULL, address TEXT NOT NULL, phone TEXT NOT NULL, email TEXT NOT NULL, checkin_time TEXT NOT NULL DEFAULT '15:00', checkout_time TEXT NOT NULL DEFAULT '11:00', published INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS room_type_website (property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0, display_order INTEGER NOT NULL DEFAULT 0, marketing_name TEXT NOT NULL, short_description TEXT NOT NULL, long_description TEXT NOT NULL, amenities_json TEXT NOT NULL DEFAULT '[]', version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY(property_id,room_type_id))`,
+  `CREATE TABLE IF NOT EXISTS website_media (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, scope TEXT NOT NULL, room_type_id TEXT, role TEXT NOT NULL, object_path TEXT NOT NULL, public_url TEXT NOT NULL, alt_text TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS room_moves (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, from_room_id TEXT, to_room_id TEXT NOT NULL, move_date TEXT NOT NULL, reason TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS account_profiles (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, type TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, email TEXT, phone TEXT, negotiated_rate_code TEXT, credit_status TEXT NOT NULL DEFAULT 'CASH', notes TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS business_blocks (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, account_profile_id TEXT, group_profile_id TEXT, arrival_date TEXT NOT NULL, departure_date TEXT NOT NULL, status TEXT NOT NULL, reservation_method TEXT NOT NULL, deduct_inventory INTEGER NOT NULL DEFAULT 1, cutoff_date TEXT, currency TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, cutoff_processed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
@@ -196,7 +201,7 @@ async function ready(db: D1) {
 }
 
 async function initializePostgres(db: D1) {
-  const tables = ["properties", "reservation_type_nights", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries"];
+  const tables = ["properties", "reservation_type_nights", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries", "website_settings", "room_type_website", "website_media"];
   const results = await db.batch([
     ...tables.map((table)=>db.prepare(`SELECT 1 FROM ${table} LIMIT 1`)),
     db.prepare("SELECT id FROM properties WHERE id='prop-seoul'"),
@@ -212,7 +217,7 @@ async function initialize(db: D1) {
   catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
   const now = new Date().toISOString();
   await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", now).run();
-  if (propertyExists) { await ensureReportingModel(db); await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await ensureExtendedModel(db,now); await backfillLegacyNights(db,now); return; }
+  if (propertyExists) { await ensureReportingModel(db); await ensureWebsiteModel(db,now); await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await ensureExtendedModel(db,now); await backfillLegacyNights(db,now); return; }
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
     db.prepare("INSERT OR IGNORE INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind("rt-dlx", "prop-seoul", "DLX", "디럭스 킹", 198000, 2, "킹 베드 기반의 대표 객실"),
@@ -253,6 +258,16 @@ async function initialize(db: D1) {
   await ensureIntegrationModel(db,now);
   await ensureReportingModel(db);
   await ensureExtendedModel(db,now);
+  await ensureWebsiteModel(db,now);
+}
+
+/** Upgrades a legacy local D1 database to the same website model as Supabase. */
+async function ensureWebsiteModel(db:D1,now:string){
+  const columns=await db.prepare("PRAGMA table_info(inventory_controls)").all<{name:string}>();
+  if(!columns.results.some(column=>column.name==="website_closed"))await db.prepare("ALTER TABLE inventory_controls ADD COLUMN website_closed INTEGER NOT NULL DEFAULT 0").run();
+  for(const statement of schema.filter(sql=>sql.includes("website_settings")||sql.includes("room_type_website")||sql.includes("website_media")))await db.prepare(statement).run();
+  await db.prepare("INSERT OR IGNORE INTO website_settings(property_id,hotel_name,brand_eyebrow,hero_title,hero_subtitle,overview_title,overview_body,experience_title,experience_body,location_title,location_body,address,phone,email,checkin_time,checkout_time,published,version,updated_at,updated_by) VALUES ('prop-seoul','Aurora Hotel Seoul','URBAN NIGHTS, QUIETLY BRIGHT','도시의 밤이 가장 편안해지는 곳','정제된 객실과 세심한 서비스. 서울의 리듬을 오롯이 누리는 새로운 스테이.','머무는 시간에 집중한 객실','편안한 동선, 부드러운 빛, 깊은 휴식을 설계했습니다.','아침부터 깊은 밤까지 당신의 속도에 맞춰','조식, 라운지, 피트니스가 여행의 리듬을 지켜드립니다.','서울을 만나는 가장 좋은 시작점','비즈니스와 문화, 미식의 중심을 가볍게 잇습니다.','서울특별시 중구 오로라로 1','02-0000-2026','stay@aurora.hotel','15:00','11:00',1,1,?, 'system')").bind(now).run();
+  await db.prepare("INSERT OR IGNORE INTO room_type_website(property_id,room_type_id,published,display_order,marketing_name,short_description,long_description,amenities_json,version,updated_at,updated_by) SELECT property_id,id,CASE WHEN code IN ('DLX','TWN','STE') THEN 1 ELSE 0 END,0,name,description,description,'[\"무료 Wi-Fi\",\"스마트 TV\",\"프리미엄 침구\"]',1,?,'system' FROM room_types WHERE property_id='prop-seoul' AND active=1").bind(now).run();
 }
 
 async function ensureExtendedModel(db:D1,now:string){
@@ -568,6 +583,10 @@ export async function GET(request: Request) {
        return Response.json(await loadAccountingCenter(db,from,to,principal.propertyId),{headers:{"Cache-Control":"private, no-store"}});
     } catch(error){if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});throw error;}
   }
+  if(url.searchParams.get("view")==="website") {
+    try { return Response.json(await loadWebsiteAdmin(db,principal.propertyId),{headers:{"Cache-Control":"private, no-store"}}); }
+    catch(error){if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});throw error;}
+  }
   if(url.searchParams.get("view")==="report") {
     try { return Response.json(await cachedReport(db,url.searchParams,principal),{headers:{"Cache-Control":"private, no-store"}}); }
     catch(error){if(error instanceof ReportRequestError)return Response.json({error:error.message},{status:error.status});throw error;}
@@ -745,13 +764,13 @@ export async function POST(request: Request) {
       const stayDate=String(body.stayDate), roomType=await db.prepare("SELECT * FROM room_types WHERE id=? AND property_id='prop-seoul'").bind(body.roomTypeId).first<Record<string,unknown>>(); if(!roomType) return Response.json({error:"객실 타입이 올바르지 않습니다."},{status:400});
       const horizon=new Date(`${businessDate}T00:00:00Z`);horizon.setUTCDate(horizon.getUTCDate()+365); if(stayDate<businessDate||stayDate>horizon.toISOString().slice(0,10)) return Response.json({error:"영업일부터 365일 범위만 수정할 수 있습니다."},{status:400});
       const capacity=await db.prepare("SELECT COUNT(*) count FROM rooms WHERE property_id='prop-seoul' AND room_type_id=? AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE'").bind(body.roomTypeId).first<{count:number}>(); const physical=Number(capacity?.count??0);
-      const sellLimit=body.sellLimit===""?physical:Number(body.sellLimit), minStay=Number(body.minStay||1), price=body.priceOverride===""?null:Number(body.priceOverride), closed=body.closed==="true"?1:0;
+      const sellLimit=body.sellLimit===""?physical:Number(body.sellLimit), minStay=Number(body.minStay||1), price=body.priceOverride===""?null:Number(body.priceOverride), closed=body.closed==="true"?1:0,websiteClosed=body.websiteClosed==="true"?1:0;
       if(!Number.isInteger(sellLimit)||sellLimit<0||sellLimit>physical||!Number.isInteger(minStay)||minStay<1||minStay>30||price!==null&&(!Number.isFinite(price)||price<0)) return Response.json({error:"판매 수량·최소 숙박·요금을 올바르게 입력하세요."},{status:400});
       const reserved=await db.prepare("SELECT COUNT(*) count FROM reservation_type_nights WHERE property_id='prop-seoul' AND room_type_id=? AND stay_date=?").bind(body.roomTypeId,stayDate).first<{count:number}>(); if(!closed&&sellLimit<Number(reserved?.count??0)) return Response.json({error:"이미 확정된 예약 수보다 판매 한도를 낮출 수 없습니다."},{status:409});
       const existing=await db.prepare("SELECT * FROM inventory_controls WHERE property_id='prop-seoul' AND room_type_id=? AND stay_date=?").bind(body.roomTypeId,stayDate).first(); const controlId=String((existing as Record<string,unknown>|null)?.id??crypto.randomUUID());
       const statements:D1PreparedStatement[]=[
-        db.prepare("INSERT INTO inventory_controls VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(property_id,room_type_id,stay_date) DO UPDATE SET sell_limit=excluded.sell_limit,closed=excluded.closed,min_stay=excluded.min_stay,close_to_arrival=excluded.close_to_arrival,close_to_departure=excluded.close_to_departure,price_override=excluded.price_override,updated_at=excluded.updated_at,updated_by=excluded.updated_by").bind(controlId,body.roomTypeId,stayDate,sellLimit,closed,minStay,body.cta==="true"?1:0,body.ctd==="true"?1:0,price,now,actor),
-        db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'UPDATE_INVENTORY_CONTROL', 'inventory_control', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,controlId,existing?JSON.stringify(existing):null,JSON.stringify({roomTypeId:body.roomTypeId,stayDate,sellLimit,closed:Boolean(closed),minStay,cta:body.cta==="true",ctd:body.ctd==="true",price}),now),
+        db.prepare("INSERT INTO inventory_controls(id,property_id,room_type_id,stay_date,sell_limit,closed,min_stay,close_to_arrival,close_to_departure,price_override,website_closed,updated_at,updated_by) VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(property_id,room_type_id,stay_date) DO UPDATE SET sell_limit=excluded.sell_limit,closed=excluded.closed,min_stay=excluded.min_stay,close_to_arrival=excluded.close_to_arrival,close_to_departure=excluded.close_to_departure,price_override=excluded.price_override,website_closed=excluded.website_closed,updated_at=excluded.updated_at,updated_by=excluded.updated_by").bind(controlId,body.roomTypeId,stayDate,sellLimit,closed,minStay,body.cta==="true"?1:0,body.ctd==="true"?1:0,price,websiteClosed,now,actor),
+        db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'UPDATE_INVENTORY_CONTROL', 'inventory_control', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,controlId,existing?JSON.stringify(existing):null,JSON.stringify({roomTypeId:body.roomTypeId,stayDate,sellLimit,closed:Boolean(closed),websiteClosed:Boolean(websiteClosed),minStay,cta:body.cta==="true",ctd:body.ctd==="true",price}),now),
         db.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'inventory.updated', 'room_type', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),body.roomTypeId,JSON.stringify({roomTypeId:body.roomTypeId,stayDate,sellLimit,closed:Boolean(closed),minStay,price}),now),
       ];
       if(idempotencyKey) statements.push(db.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now));

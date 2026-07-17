@@ -1,3 +1,4 @@
+/** Suspense boundary for URL-driven direct-booking interactions. */
 import { Suspense } from "react";
 import BookingClient from "./BookingClient";
 

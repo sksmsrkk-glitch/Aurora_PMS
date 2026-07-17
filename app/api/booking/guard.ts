@@ -1,3 +1,4 @@
+/** Public booking rate limits, payload limits and same-origin protections. */
 import type { NextRequest } from "next/server";
 
 const buckets = new Map<string, { count: number; resetAt: number }>();

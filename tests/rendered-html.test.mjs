@@ -1,5 +1,6 @@
+/** Source-rendering and documentation completeness regression tests. */
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
@@ -44,7 +45,7 @@ test("PMS product shell replaces the starter", async () => {
 });
 
 test("every rendered button has an action, submit contract, or intentional disabled state", async () => {
-  for (const file of ["app/page.tsx", "app/room-master.tsx", "app/reports-center.tsx", "app/inventory-calendar.tsx", "app/accounting-center.tsx", "app/channel-contracts.tsx"]) {
+  for (const file of ["app/page.tsx", "app/room-master.tsx", "app/reports-center.tsx", "app/inventory-calendar.tsx", "app/accounting-center.tsx", "app/channel-contracts.tsx", "app/homepage-manager.tsx", "app/hotel/HotelSearchForm.tsx", "app/hotel/book/BookingClient.tsx"]) {
     const sourceText = await readFile(new URL(file, root), "utf8");
     const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const inert = [];
@@ -82,10 +83,24 @@ test("README is a complete architecture, development, and operations handoff", a
     "upsert_channel_contract",
     "accrue_channel_settlement",
     "post_accounting_entry",
+    "update_website_settings",
+    "upload_website_media",
+    "202607170004_website_cms.sql",
     "202607160005_settlement_contract_snapshot.sql",
     "https://static.toss.im/tps/main.css",
     "https://aurora-pms-gilt.vercel.app",
     "PMS_DEMO_USER_EMAIL",
   ]) assert.ok(readme.includes(contract), `README contract missing: ${contract}`);
   assert.ok(readme.split("\n").length > 1_000, "README should remain a detailed handoff document");
+});
+
+test("maintained source files include explanatory comments",async()=>{
+  const files=[];
+  for(const directory of ["app","db","scripts","tests","worker"]){
+    const entries=await readdir(new URL(`${directory}/`,root),{recursive:true});
+    for(const entry of entries)if(/\.(?:ts|tsx|mjs|js)$/u.test(entry))files.push(`${directory}/${entry.replaceAll("\\","/")}`);
+  }
+  const uncommented=[];
+  for(const file of files){const source=await readFile(new URL(file,root),"utf8"),header=source.split("\n").slice(0,10).join("\n");if(!/\/\*\*/u.test(header))uncommented.push(file);}
+  assert.deepEqual(uncommented,[],`source files without comments: ${uncommented.join(", ")}`);
 });

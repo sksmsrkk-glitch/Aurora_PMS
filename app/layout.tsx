@@ -1,3 +1,4 @@
+/** Root metadata, security nonce bridge, fonts and global visual system. */
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
