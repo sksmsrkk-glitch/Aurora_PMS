@@ -1,5 +1,5 @@
 /** Secret-free readiness and database latency probe. */
-import { getPmsDatabase, type PmsRuntimeBindings } from "../../../db/pms-database";
+import { getPmsDatabase, scopePmsDatabase, type PmsRuntimeBindings } from "../../../db/pms-database";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ function databaseProjectRef() {
 export async function GET() {
   const started=Date.now();
   try {
-    const database=getPmsDatabase(bindings),result=await database.prepare("SELECT COUNT(*) count FROM properties").first<{count:number}>();
+    const database=scopePmsDatabase(getPmsDatabase(bindings),process.env.AURORA_PUBLIC_PROPERTY_ID||"prop-seoul"),result=await database.prepare("SELECT COUNT(*) count FROM properties WHERE id=pms_current_property_id()").first<{count:number}>();
     if(!result||Number(result.count)<1)throw new Error("property catalog unavailable");
     const environment=deploymentEnvironment();
     return Response.json({status:"ok",service:"aurora-pms",database:"ready",environment,qaAllowed:environment==="staging"&&process.env.PMS_ALLOW_DESTRUCTIVE_QA==="true",databaseProjectRef:databaseProjectRef(),latencyMs:Date.now()-started,timestamp:new Date().toISOString()},{headers:{"Cache-Control":"no-store"}});

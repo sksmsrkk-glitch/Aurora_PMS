@@ -4,11 +4,12 @@
  * The browser never receives a database credential: this module runs on the
  * server and selects only content explicitly published by a PMS administrator.
  */
-import { getPmsDatabase, type PmsRuntimeBindings } from "../../../db/pms-database";
+import { getPmsDatabase, scopePmsDatabase, type PmsRuntimeBindings } from "../../../db/pms-database";
 
 const bindings: PmsRuntimeBindings = {
   DATABASE_URL: process.env.DATABASE_URL,
 };
+const PUBLIC_PROPERTY_ID = process.env.AURORA_PUBLIC_PROPERTY_ID || "prop-seoul";
 
 export type WebsiteMedia = {
   id: string;
@@ -80,11 +81,11 @@ function mediaFromRow(row: Record<string, unknown>): WebsiteMedia {
 
 /** Loads the currently published hotel and room merchandising projection. */
 export async function getWebsiteContent(): Promise<WebsiteContent> {
-  const db = getPmsDatabase(bindings);
+  const db = scopePmsDatabase(getPmsDatabase(bindings), PUBLIC_PROPERTY_ID);
   const [settingsResult, roomResult, mediaResult] = await db.batch([
-    db.prepare("SELECT * FROM website_settings WHERE property_id='prop-seoul' LIMIT 1"),
-    db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.display_order FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id='prop-seoul' AND rt.active=1 AND rw.published=1 ORDER BY rw.display_order,rt.base_rate,rt.code"),
-    db.prepare("SELECT id,scope,room_type_id,role,public_url,alt_text,sort_order FROM website_media WHERE property_id='prop-seoul' AND active=1 ORDER BY scope,room_type_id,sort_order,created_at"),
+    db.prepare("SELECT * FROM website_settings WHERE property_id=pms_current_property_id() LIMIT 1"),
+    db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.display_order FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id=pms_current_property_id() AND rt.active=1 AND rw.published=1 ORDER BY rw.display_order,rt.base_rate,rt.code"),
+    db.prepare("SELECT id,scope,room_type_id,role,public_url,alt_text,sort_order FROM website_media WHERE property_id=pms_current_property_id() AND active=1 ORDER BY scope,room_type_id,sort_order,created_at"),
   ]);
   const row = settingsResult.results[0] as Record<string, unknown> | undefined;
   if (!row) throw new Error("Website content is not initialized");

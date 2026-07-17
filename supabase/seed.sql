@@ -86,7 +86,7 @@ INSERT INTO idempotency_keys(key,property_id,action,actor,created_at) VALUES
   ('system:inventory-triggers-v2','prop-seoul','SYSTEM_DDL','system',clock_timestamp()::text),
   ('system:group-triggers-v2','prop-seoul','SYSTEM_DDL','system',clock_timestamp()::text),
   ('system:financial-triggers-v2','prop-seoul','SYSTEM_DDL','system',clock_timestamp()::text)
-ON CONFLICT (key) DO NOTHING;
+ON CONFLICT (property_id,key) DO NOTHING;
 
 -- Website projection seed belongs here rather than in a schema migration. The
 -- migration runner applies every schema migration before this file, so a pristine

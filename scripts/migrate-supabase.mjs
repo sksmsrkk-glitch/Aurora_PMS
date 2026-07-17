@@ -24,7 +24,8 @@ const env = parseEnv(await readFile(path.join(root,".env.local"),"utf8"));
 const directUrl = process.env.DIRECT_URL || env.DIRECT_URL;
 if (!directUrl || !/^postgres(?:ql)?:\/\//u.test(directUrl)) throw new Error("DIRECT_URL is missing or invalid in .env.local");
 
-const sql = postgres(directUrl, { max:1, prepare:false, ssl:"require", connect_timeout:15, idle_timeout:5 });
+const directHost=new URL(directUrl).hostname;
+const sql = postgres(directUrl, { max:1, prepare:false, ssl:/^(?:localhost|127\.0\.0\.1)$/u.test(directHost)?false:"require", connect_timeout:15, idle_timeout:5 });
 try {
   await sql`CREATE TABLE IF NOT EXISTS pms_schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
   const migrationsDirectory=path.join(root,"supabase","migrations");

@@ -1,12 +1,13 @@
 /** Direct-booking availability and reservation domain service. */
 import { createHash } from "node:crypto";
-import { getPmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRuntimeBindings } from "../../../db/pms-database";
+import { getPmsDatabase, scopePmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRuntimeBindings } from "../../../db/pms-database";
 
 const MAX_STAY_NIGHTS = 30;
 
 const bindings: PmsRuntimeBindings = {
   DATABASE_URL: process.env.DATABASE_URL,
 };
+const PUBLIC_PROPERTY_ID = process.env.AURORA_PUBLIC_PROPERTY_ID || "prop-seoul";
 
 type PropertyRow = { id: string; name: string; currency: string; business_date: string };
 type RoomTypeRow = { id: string; code: string; name: string; marketing_name: string; short_description: string; amenities_json: string; image_url: string | null; base_rate: number; capacity: number; physical: number };
@@ -36,7 +37,7 @@ export type AvailabilityResult = {
 };
 
 function database() {
-  return getPmsDatabase(bindings);
+  return scopePmsDatabase(getPmsDatabase(bindings), PUBLIC_PROPERTY_ID);
 }
 
 function isoDate(value: string) {
@@ -95,11 +96,11 @@ function controlKey(roomTypeId: string, stayDate: string) {
  */
 async function availabilityRows(db: PmsDatabase, arrival: string, departure: string) {
   const [propertyResult, typesResult, controlsResult, soldResult, heldResult] = await db.batch([
-    db.prepare("SELECT id,name,currency,business_date FROM properties WHERE id='prop-seoul' LIMIT 1"),
-    db.prepare("SELECT rt.id,rt.code,rt.name,rw.marketing_name,rw.short_description,rw.amenities_json,rt.base_rate,rt.capacity,COUNT(r.id) physical,(SELECT wm.public_url FROM website_media wm WHERE wm.property_id=rt.property_id AND wm.room_type_id=rt.id AND wm.active=1 ORDER BY CASE wm.role WHEN 'CARD' THEN 0 WHEN 'HERO' THEN 1 ELSE 2 END,wm.sort_order LIMIT 1) image_url FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id LEFT JOIN rooms r ON r.room_type_id=rt.id AND r.property_id=rt.property_id AND r.active=1 AND r.housekeeping_status<>'OUT_OF_SERVICE' WHERE rt.property_id='prop-seoul' AND rt.active=1 AND rw.published=1 GROUP BY rt.id,rt.code,rt.name,rw.marketing_name,rw.short_description,rw.amenities_json,rt.base_rate,rt.capacity,rw.display_order ORDER BY rw.display_order,rt.base_rate"),
-    db.prepare("SELECT room_type_id,stay_date,sell_limit,closed,website_closed,min_stay,close_to_arrival,close_to_departure,price_override FROM inventory_controls WHERE property_id='prop-seoul' AND stay_date>=? AND stay_date<=?").bind(arrival, departure),
-    db.prepare("SELECT room_type_id,stay_date,COUNT(*) count FROM reservation_type_nights WHERE property_id='prop-seoul' AND stay_date>=? AND stay_date<? GROUP BY room_type_id,stay_date").bind(arrival, departure),
-    db.prepare("SELECT bi.room_type_id,bi.stay_date,COALESCE(SUM(bi.current_rooms-bi.picked_up),0) count FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id AND bb.property_id=bi.property_id WHERE bi.property_id='prop-seoul' AND bi.stay_date>=? AND bi.stay_date<? AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE') GROUP BY bi.room_type_id,bi.stay_date").bind(arrival, departure),
+    db.prepare("SELECT id,name,currency,business_date FROM properties WHERE id=pms_current_property_id() LIMIT 1"),
+    db.prepare("SELECT rt.id,rt.code,rt.name,rw.marketing_name,rw.short_description,rw.amenities_json,rt.base_rate,rt.capacity,COUNT(r.id) physical,(SELECT wm.public_url FROM website_media wm WHERE wm.property_id=rt.property_id AND wm.room_type_id=rt.id AND wm.active=1 ORDER BY CASE wm.role WHEN 'CARD' THEN 0 WHEN 'HERO' THEN 1 ELSE 2 END,wm.sort_order LIMIT 1) image_url FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id LEFT JOIN rooms r ON r.room_type_id=rt.id AND r.property_id=rt.property_id AND r.active=1 AND r.housekeeping_status<>'OUT_OF_SERVICE' WHERE rt.property_id=pms_current_property_id() AND rt.active=1 AND rw.published=1 GROUP BY rt.id,rt.code,rt.name,rw.marketing_name,rw.short_description,rw.amenities_json,rt.base_rate,rt.capacity,rw.display_order ORDER BY rw.display_order,rt.base_rate"),
+    db.prepare("SELECT room_type_id,stay_date,sell_limit,closed,website_closed,min_stay,close_to_arrival,close_to_departure,price_override FROM inventory_controls WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<=?").bind(arrival, departure),
+    db.prepare("SELECT room_type_id,stay_date,COUNT(*) count FROM reservation_type_nights WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<? GROUP BY room_type_id,stay_date").bind(arrival, departure),
+    db.prepare("SELECT bi.room_type_id,bi.stay_date,COALESCE(SUM(bi.current_rooms-bi.picked_up),0) count FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id AND bb.property_id=bi.property_id WHERE bi.property_id=pms_current_property_id() AND bi.stay_date>=? AND bi.stay_date<? AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE') GROUP BY bi.room_type_id,bi.stay_date").bind(arrival, departure),
   ]);
   return {
     property: propertyResult.results[0] as PropertyRow | undefined,
@@ -207,7 +208,7 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
   // A retried browser request returns the original reservation instead of
   // consuming another room. The unique booking_requests key is the final guard
   // when concurrent requests pass this fast-path lookup at the same time.
-  const existing = await db.prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id='prop-seoul' AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
+  const existing = await db.prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id=pms_current_property_id() AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
   if (existing) return { reservationId: String(existing.id), confirmation: String(existing.confirmation_no), arrival: String(existing.arrival_date), departure: String(existing.departure_date), status: String(existing.status), duplicate: true };
 
   const availability = await getAvailability({ arrival, departure, adults: input.adults, children: input.children });
@@ -226,25 +227,25 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
   // and outbox event form one atomic unit. Capacity constraints on the night rows
   // reject a stale offer rather than allowing an oversell after the availability read.
   const statements: PmsPreparedStatement[] = [
-    db.prepare("INSERT INTO guests(id,property_id,first_name,last_name,email,phone,vip_level,nationality,preferences,created_at) VALUES (?, 'prop-seoul', ?, ?, ?, ?, 'NONE', NULL, '[]', ?)").bind(guestId, firstName, lastName, normalizedEmail(email), phone, now),
-    db.prepare("INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (?, ?, 'prop-seoul', ?, ?, NULL, ?, ?, 'DUE_IN', ?, ?, 'Aurora Web', 'WEB-DIRECT', ?, NULL, ?, 1, ?, ?)").bind(reservationId, confirmation, guestId, roomTypeId, arrival, departure, adults, children, average, specialRequests, now, now),
-    db.prepare("INSERT INTO folio_windows(id,property_id,reservation_id,window_no,name,payee_type,payee_account_profile_id,status,created_at,created_by,closed_at) VALUES (?, 'prop-seoul', ?, 1, 'Guest Folio', 'GUEST', NULL, 'OPEN', ?, ?, NULL)").bind(`fw-${reservationId}`, reservationId, now, actor),
+    db.prepare("INSERT INTO guests(id,property_id,first_name,last_name,email,phone,vip_level,nationality,preferences,created_at) VALUES (?, pms_current_property_id(), ?, ?, ?, ?, 'NONE', NULL, '[]', ?)").bind(guestId, firstName, lastName, normalizedEmail(email), phone, now),
+    db.prepare("INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (?, ?, pms_current_property_id(), ?, ?, NULL, ?, ?, 'DUE_IN', ?, ?, 'Aurora Web', 'WEB-DIRECT', ?, NULL, ?, 1, ?, ?)").bind(reservationId, confirmation, guestId, roomTypeId, arrival, departure, adults, children, average, specialRequests, now, now),
+    db.prepare("INSERT INTO folio_windows(id,property_id,reservation_id,window_no,name,payee_type,payee_account_profile_id,status,created_at,created_by,closed_at) VALUES (?, pms_current_property_id(), ?, 1, 'Guest Folio', 'GUEST', NULL, 'OPEN', ?, ?, NULL)").bind(`fw-${reservationId}`, reservationId, now, actor),
   ];
   for (const night of offer.nights) {
-    statements.push(db.prepare("INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES ('prop-seoul',?,?,?)").bind(reservationId, roomTypeId, night.date));
-    statements.push(db.prepare("INSERT INTO reservation_rate_nights(id,property_id,reservation_id,room_type_id,stay_date,sell_rate,currency,rate_plan,created_at) VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 'WEB-DIRECT', ?)").bind(crypto.randomUUID(), reservationId, roomTypeId, night.date, night.rate, offer.currency, now));
+    statements.push(db.prepare("INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES (pms_current_property_id(),?,?,?)").bind(reservationId, roomTypeId, night.date));
+    statements.push(db.prepare("INSERT INTO reservation_rate_nights(id,property_id,reservation_id,room_type_id,stay_date,sell_rate,currency,rate_plan,created_at) VALUES (?, pms_current_property_id(), ?, ?, ?, ?, ?, 'WEB-DIRECT', ?)").bind(crypto.randomUUID(), reservationId, roomTypeId, night.date, night.rate, offer.currency, now));
   }
   statements.push(
-    db.prepare("INSERT INTO booking_requests(id,property_id,idempotency_key,reservation_id,email_hash,created_at) VALUES (?, 'prop-seoul', ?, ?, ?, ?)").bind(crypto.randomUUID(), idempotencyKey, reservationId, emailHash(email), now),
-    db.prepare("INSERT INTO audit_logs(id,property_id,actor,action,entity_type,entity_id,before_json,after_json,created_at) VALUES (?, 'prop-seoul', ?, 'WEB_BOOKING_CREATED', 'reservation', ?, NULL, ?, ?)").bind(crypto.randomUUID(), actor, reservationId, JSON.stringify({ confirmation, arrival, departure, roomTypeId, adults, children, total: offer.total, currency: offer.currency }), now),
-    db.prepare("INSERT INTO outbox_events(id,property_id,topic,aggregate_type,aggregate_id,payload_json,status,attempts,created_at,published_at) VALUES (?, 'prop-seoul', 'reservation.web_created', 'reservation', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(), reservationId, JSON.stringify({ reservationId, confirmation, email: normalizedEmail(email), total: offer.total, currency: offer.currency }), now),
+    db.prepare("INSERT INTO booking_requests(id,property_id,idempotency_key,reservation_id,email_hash,created_at) VALUES (?, pms_current_property_id(), ?, ?, ?, ?)").bind(crypto.randomUUID(), idempotencyKey, reservationId, emailHash(email), now),
+    db.prepare("INSERT INTO audit_logs(id,property_id,actor,action,entity_type,entity_id,before_json,after_json,created_at) VALUES (?, pms_current_property_id(), ?, 'WEB_BOOKING_CREATED', 'reservation', ?, NULL, ?, ?)").bind(crypto.randomUUID(), actor, reservationId, JSON.stringify({ confirmation, arrival, departure, roomTypeId, adults, children, total: offer.total, currency: offer.currency }), now),
+    db.prepare("INSERT INTO outbox_events(id,property_id,topic,aggregate_type,aggregate_id,payload_json,status,attempts,created_at,published_at) VALUES (?, pms_current_property_id(), 'reservation.web_created', 'reservation', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(), reservationId, JSON.stringify({ reservationId, confirmation, email: normalizedEmail(email), total: offer.total, currency: offer.currency }), now),
   );
   await db.batch(statements);
   return { reservationId, confirmation, arrival, departure, status: "DUE_IN", roomType: offer.name, total: offer.total, currency: offer.currency, duplicate: false };
 }
 
 export async function findWebReservationByIdempotency(idempotencyKey: string) {
-  const existing = await database().prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id='prop-seoul' AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
+  const existing = await database().prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id=pms_current_property_id() AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
   return existing ? { reservationId: String(existing.id), confirmation: String(existing.confirmation_no), arrival: String(existing.arrival_date), departure: String(existing.departure_date), status: String(existing.status), duplicate: true } : null;
 }
 
@@ -254,7 +255,7 @@ export async function cancelWebReservation(input: { confirmation?: unknown; emai
   const lastName = requiredText(input.lastName, 80);
   if (!confirmation || !email || !lastName || !validEmail(email)) throw new BookingError("예약번호, 이메일, 성을 정확히 입력해 주세요.", 400, "INVALID_LOOKUP");
   const db = database();
-  const reservation = await db.prepare("SELECT r.id,r.status,r.arrival_date,r.departure_date,r.confirmation_no,r.version,g.last_name,b.email_hash,p.business_date FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id JOIN booking_requests b ON b.reservation_id=r.id AND b.property_id=r.property_id JOIN properties p ON p.id=r.property_id WHERE r.property_id='prop-seoul' AND r.confirmation_no=? LIMIT 1").bind(confirmation).first<Record<string, unknown>>();
+  const reservation = await db.prepare("SELECT r.id,r.status,r.arrival_date,r.departure_date,r.confirmation_no,r.version,g.last_name,b.email_hash,p.business_date FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id JOIN booking_requests b ON b.reservation_id=r.id AND b.property_id=r.property_id JOIN properties p ON p.id=r.property_id WHERE r.property_id=pms_current_property_id() AND r.confirmation_no=? LIMIT 1").bind(confirmation).first<Record<string, unknown>>();
   if (!reservation || String(reservation.email_hash) !== emailHash(email) || String(reservation.last_name).toLocaleLowerCase("en-US") !== lastName.toLocaleLowerCase("en-US")) {
     throw new BookingError("입력한 정보와 일치하는 웹 예약을 찾지 못했습니다.", 404, "BOOKING_NOT_FOUND");
   }
@@ -268,12 +269,12 @@ export async function cancelWebReservation(input: { confirmation?: unknown; emai
   // and type-level night rows in the same batch makes inventory immediately agree
   // with the reservation status while audit and integration consumers see one event.
   await db.batch([
-    db.prepare("INSERT INTO reservation_transitions(id,property_id,reservation_id,from_status,to_status,actor,created_at) VALUES (?, 'prop-seoul', ?, 'DUE_IN', 'CANCELLED', ?, ?)").bind(crypto.randomUUID(), reservation.id, actor, now),
-    db.prepare("UPDATE reservations SET status='CANCELLED',version=version+1,updated_at=? WHERE id=? AND property_id='prop-seoul' AND status='DUE_IN' AND version=?").bind(now, reservation.id, Number(reservation.version)),
-    db.prepare("DELETE FROM reservation_nights WHERE reservation_id=? AND property_id='prop-seoul'").bind(reservation.id),
-    db.prepare("DELETE FROM reservation_type_nights WHERE reservation_id=? AND property_id='prop-seoul'").bind(reservation.id),
-    db.prepare("INSERT INTO audit_logs(id,property_id,actor,action,entity_type,entity_id,before_json,after_json,created_at) VALUES (?, 'prop-seoul', ?, 'WEB_BOOKING_CANCELLED', 'reservation', ?, ?, ?, ?)").bind(crypto.randomUUID(), actor, reservation.id, JSON.stringify({ status: reservation.status }), JSON.stringify({ status: "CANCELLED" }), now),
-    db.prepare("INSERT INTO outbox_events(id,property_id,topic,aggregate_type,aggregate_id,payload_json,status,attempts,created_at,published_at) VALUES (?, 'prop-seoul', 'reservation.web_cancelled', 'reservation', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(), reservation.id, JSON.stringify({ reservationId: reservation.id, confirmation }), now),
+    db.prepare("INSERT INTO reservation_transitions(id,property_id,reservation_id,from_status,to_status,actor,created_at) VALUES (?, pms_current_property_id(), ?, 'DUE_IN', 'CANCELLED', ?, ?)").bind(crypto.randomUUID(), reservation.id, actor, now),
+    db.prepare("UPDATE reservations SET status='CANCELLED',version=version+1,updated_at=? WHERE id=? AND property_id=pms_current_property_id() AND status='DUE_IN' AND version=?").bind(now, reservation.id, Number(reservation.version)),
+    db.prepare("DELETE FROM reservation_nights WHERE reservation_id=? AND property_id=pms_current_property_id()").bind(reservation.id),
+    db.prepare("DELETE FROM reservation_type_nights WHERE reservation_id=? AND property_id=pms_current_property_id()").bind(reservation.id),
+    db.prepare("INSERT INTO audit_logs(id,property_id,actor,action,entity_type,entity_id,before_json,after_json,created_at) VALUES (?, pms_current_property_id(), ?, 'WEB_BOOKING_CANCELLED', 'reservation', ?, ?, ?, ?)").bind(crypto.randomUUID(), actor, reservation.id, JSON.stringify({ status: reservation.status }), JSON.stringify({ status: "CANCELLED" }), now),
+    db.prepare("INSERT INTO outbox_events(id,property_id,topic,aggregate_type,aggregate_id,payload_json,status,attempts,created_at,published_at) VALUES (?, pms_current_property_id(), 'reservation.web_cancelled', 'reservation', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(), reservation.id, JSON.stringify({ reservationId: reservation.id, confirmation }), now),
   ]);
   return { confirmation, status: "CANCELLED", duplicate: false };
 }
