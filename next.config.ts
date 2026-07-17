@@ -3,13 +3,17 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   async headers() {
+    // React's development diagnostics reconstruct stack traces with eval.
+    // Keep production strict while preventing the local error overlay from
+    // intercepting clicks during browser QA.
+    const developmentScriptSource = process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'";
     const contentSecurityPolicy = [
       "default-src 'self'",
       "base-uri 'self'",
       "frame-ancestors 'none'",
       "object-src 'none'",
       "form-action 'self'",
-      "script-src 'self' 'unsafe-inline'",
+      `script-src 'self' 'unsafe-inline'${developmentScriptSource}`,
       "style-src 'self' 'unsafe-inline' https://static.toss.im",
       "font-src 'self' data: https://static.toss.im",
       "img-src 'self' data: blob:",

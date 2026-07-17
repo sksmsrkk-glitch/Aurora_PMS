@@ -2,7 +2,8 @@
 
 /** Channel commission and net-rate contract editor. */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { ListSearch } from "./list-search";
 
 type Connection = {
   id: string;
@@ -40,6 +41,14 @@ export default function ChannelContracts({
   act: (action: string, payload: Record<string, string>) => Promise<boolean>;
 }) {
   const [selected, setSelected] = useState<Connection | null>(null);
+  const [query, setQuery] = useState("");
+  const visibleConnections = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase("ko-KR");
+    return connections.filter((connection) => {
+      const contract = contracts.find((item) => item.connection_id === connection.id);
+      return !keyword || `${connection.provider} ${connection.name} ${connection.status} ${contract?.contract_type||"계약 미설정"} ${contract?.status||""}`.toLocaleLowerCase("ko-KR").includes(keyword);
+    });
+  }, [connections, contracts, query]);
   return (
     <>
       <section className="panel contract-panel">
@@ -53,8 +62,9 @@ export default function ChannelContracts({
           </div>
           <span className="live">COMMERCIAL TERMS</span>
         </div>
+        <ListSearch value={query} onChange={setQuery} label="채널 계약 검색" placeholder="채널·연결명·계약 유형" count={visibleConnections.length}/>
         <div className="contract-card-grid">
-          {connections.map((connection) => {
+          {visibleConnections.map((connection) => {
             const contract = contracts.find(
               (item) => item.connection_id === connection.id,
             );
@@ -102,8 +112,8 @@ export default function ChannelContracts({
               </article>
             );
           })}
-          {!connections.length && (
-            <div className="master-empty">먼저 채널 연결을 생성하세요.</div>
+          {!visibleConnections.length && (
+            <div className="master-empty">검색 조건에 맞는 채널 계약이 없습니다.</div>
           )}
         </div>
       </section>

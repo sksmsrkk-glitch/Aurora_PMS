@@ -27,6 +27,7 @@ function closeTopOverlay() {
 
 export function useDialogController() {
   useEffect(() => {
+    const focusOrigins = new Map<HTMLElement, HTMLElement | null>();
     const enhanceDialogs = () => {
       const overlays = document.querySelectorAll<HTMLElement>(overlaySelector);
       document.body.classList.toggle("dialog-open", overlays.length > 0);
@@ -44,7 +45,30 @@ export function useDialogController() {
             dialog.setAttribute("aria-labelledby", title.id);
           }
         }
+        const closeButton = dialog.querySelector<HTMLButtonElement>(closeSelector);
+        if (closeButton && !closeButton.getAttribute("aria-label")) closeButton.setAttribute("aria-label", "팝업 닫기");
+        if (!focusOrigins.has(overlay)) {
+          focusOrigins.set(overlay, document.activeElement instanceof HTMLElement ? document.activeElement : null);
+          requestAnimationFrame(() => {
+            if (!overlay.isConnected) return;
+            // Prefer the first editable field even when a close button appears
+            // earlier in the DOM; informational dialogs still fall back safely.
+            const initial =
+              dialog.querySelector<HTMLElement>("[autofocus]") ||
+              dialog.querySelector<HTMLElement>(
+                'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])',
+              ) ||
+              dialog.querySelector<HTMLElement>(closeSelector);
+            (initial || dialog).focus({ preventScroll: true });
+          });
+        }
       });
+
+      for (const [overlay, origin] of focusOrigins) {
+        if (overlay.isConnected) continue;
+        focusOrigins.delete(overlay);
+        if (origin?.isConnected) origin.focus({ preventScroll: true });
+      }
     };
 
     const onKeyDown = (event: KeyboardEvent) => {

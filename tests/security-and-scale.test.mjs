@@ -52,6 +52,8 @@ test("core snapshot, hardened headers and health monitoring are present",async()
   assert.match(config,/Content-Security-Policy/);
   assert.match(config,/frame-ancestors 'none'/);
   assert.match(config,/poweredByHeader:\s*false/);
+  assert.match(config,/NODE_ENV === "production"/);
+  assert.match(config,/unsafe-eval/);
   assert.match(health,/status:\"degraded\"/);
 });
 

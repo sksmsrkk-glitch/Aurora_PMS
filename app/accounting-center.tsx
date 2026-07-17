@@ -3,6 +3,7 @@
 /** Hotel subledger, profit-and-loss and channel settlement workspace. */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ListSearch } from "./list-search";
 
 type Account = {
   id: string;
@@ -274,14 +275,7 @@ export default function AccountingCenter({
                 </p>
               </div>
               <div className="accounting-actions">
-                <label className="master-search">
-                  ⌕
-                  <input
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="전표번호·적요·거래처"
-                  />
-                </label>
+                <ListSearch value={query} onChange={setQuery} label="회계 전표 검색" placeholder="전표번호·적요·거래처" count={filteredEntries.length}/>
                 {canWrite && (
                   <button
                     className="primary"
