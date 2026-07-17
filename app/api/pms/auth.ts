@@ -69,8 +69,9 @@ export async function principalFor(request: Request, db: D1): Promise<Principal 
   if(principalCache.size>500){for(const [key,item] of principalCache)if(item.expires<=now)principalCache.delete(key);if(principalCache.size>500)principalCache.clear();}
   let assignmentPromise=principalInflight.get(cacheKey);
   if(!assignmentPromise){
-    assignmentPromise=db.prepare("SELECT property_id,role FROM role_assignments WHERE email=? AND active=1 ORDER BY created_at").bind(email).all<{property_id:string;role:Role}>().then((assignments)=>{
-      const assignment=requestedProperty?assignments.results.find((item)=>item.property_id===requestedProperty):assignments.results[0];
+    assignmentPromise=db.findActiveRoleAssignments(email).then((assignments)=>{
+      const typedAssignments=assignments as {property_id:string;role:Role}[];
+      const assignment=requestedProperty?typedAssignments.find((item)=>item.property_id===requestedProperty):typedAssignments[0];
       return assignment&&roleCapabilities[assignment.role]?{role:assignment.role,propertyId:assignment.property_id}:null;
     });
     principalInflight.set(cacheKey,assignmentPromise);
