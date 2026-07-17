@@ -4,9 +4,10 @@ import { consumeRateLimit, rateLimitHeaders } from "../rate-limit";
 import { handleExtendedAction, PmsExtendedError } from "./extended";
 import { ReportRequestError, runReport } from "./reporting";
 import { principalFor, ready, runtimeBindings } from "./auth";
-import { cachedSnapshot, invalidateSnapshots, snapshot } from "./read-model";
+import { invalidateSnapshots } from "./read-model";
 import { registrationFor, validationMessage } from "./action-registry";
 import { mapPmsError } from "./error-map";
+import { pmsMutationReceipt } from "../../pms-mutation";
 
 type D1=PmsDatabase;
 type D1PreparedStatement=PmsPreparedStatement;
@@ -120,7 +121,7 @@ export async function handlePmsPost(request: Request) {
   // retries must make the losing transaction roll back all side effects.
   const mutationReceipt = () => db.prepare("INSERT INTO idempotency_keys VALUES (?, pms_current_property_id(), ?, ?, ?)").bind(idempotencyKey,body.action,actor,now);
   const duplicate = await db.prepare("SELECT key FROM idempotency_keys WHERE key=? AND property_id=pms_current_property_id()").bind(idempotencyKey).first();
-  if (duplicate && body.action!=="export_report") return Response.json(await cachedSnapshot(db, principal), {headers:{"X-Idempotent-Replay":"true"}});
+  if (duplicate && body.action!=="export_report") return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}), {headers:{"X-Idempotent-Replay":"true"}});
   if(body.action==="export_report") {
     try {
       const params=new URLSearchParams();for(const key of ["report","q","from","to","status","source","roomTypeId"]){if(body[key])params.set(key,body[key]);}
@@ -335,7 +336,7 @@ export async function handlePmsPost(request: Request) {
     } else if (body.action === "dispatch_ari_update") {
       const update=await db.prepare("SELECT a.*,c.provider FROM ari_updates a JOIN channel_connections c ON c.id=a.connection_id WHERE a.id=? AND a.property_id=pms_current_property_id() AND c.property_id=pms_current_property_id() AND a.status IN ('PENDING','FAILED')").bind(body.updateId).first<Record<string,unknown>>();if(!update)return Response.json({error:"전송 또는 재처리 가능한 ARI 업데이트가 없습니다."},{status:409});const failed=body.outcome==="FAIL",attempt=Number(update.attempts)+1;await db.batch([db.prepare("UPDATE ari_updates SET status=?,attempts=?,sent_at=?,last_error=? WHERE id=? AND property_id=pms_current_property_id()").bind(failed?"FAILED":"SENT",attempt,failed?null:now,failed?"SANDBOX_TIMEOUT":null,update.id),db.prepare("UPDATE channel_connections SET last_sync_at=CASE WHEN ?=1 THEN last_sync_at ELSE ? END,updated_at=? WHERE id=? AND property_id=pms_current_property_id()").bind(failed?1:0,now,now,update.connection_id),db.prepare("INSERT INTO integration_delivery_attempts VALUES (?, pms_current_property_id(), 'OUTBOUND', ?, 'ari_update', ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(),update.provider,update.id,attempt,failed?"FAILED":"ACKED",failed?504:200,failed?"TIMEOUT":null,failed?"Sandbox timeout":null,update.payload_json,now,actor)]);
     } else if (body.action === "ingest_channel_message") {
-      const connection=await db.prepare("SELECT * FROM channel_connections WHERE id=? AND property_id=pms_current_property_id() AND status='ACTIVE'").bind(body.connectionId).first<Record<string,unknown>>();if(!connection)return Response.json({error:"활성 채널 연결을 선택하세요."},{status:400});const duplicate=await db.prepare("SELECT id FROM inbound_channel_messages WHERE connection_id=? AND message_id=? AND property_id=pms_current_property_id()").bind(body.connectionId,body.messageId).first();if(duplicate)return Response.json(await snapshot(db,principal),{headers:{"X-Channel-Duplicate":"true"}});
+      const connection=await db.prepare("SELECT * FROM channel_connections WHERE id=? AND property_id=pms_current_property_id() AND status='ACTIVE'").bind(body.connectionId).first<Record<string,unknown>>();if(!connection)return Response.json({error:"활성 채널 연결을 선택하세요."},{status:400});const duplicate=await db.prepare("SELECT id FROM inbound_channel_messages WHERE connection_id=? AND message_id=? AND property_id=pms_current_property_id()").bind(body.connectionId,body.messageId).first();if(duplicate)return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}),{headers:{"X-Channel-Duplicate":"true"}});
       const payload:ChannelPayload={connectionId:body.connectionId,messageId:body.messageId,eventType:body.eventType,externalReservationId:body.externalReservationId,revision:Number(body.revision),externalRoomTypeId:body.externalRoomTypeId,externalRatePlanId:body.externalRatePlanId,firstName:body.firstName,lastName:body.lastName,email:body.email,arrivalDate:body.arrivalDate,departureDate:body.departureDate,adults:Number(body.adults),children:Number(body.children),nightlyRate:Number(body.nightlyRate),currency:body.currency||"KRW"},messageId=crypto.randomUUID();await db.prepare("INSERT INTO inbound_channel_messages VALUES (?, pms_current_property_id(), ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, NULL, NULL, ?, NULL)").bind(messageId,body.connectionId,connection.provider,body.messageId,body.eventType.toUpperCase(),body.externalReservationId,Number(body.revision),JSON.stringify(payload),now).run();const message=await db.prepare("SELECT * FROM inbound_channel_messages WHERE id=? AND property_id=pms_current_property_id()").bind(messageId).first<Record<string,unknown>>();
       try{await processChannelMessage(db,message!,payload,actor,now);}catch(error){const detail=error instanceof Error?error.message:String(error);await db.batch([db.prepare("UPDATE inbound_channel_messages SET status='FAILED',attempts=attempts+1,last_error=? WHERE id=? AND property_id=pms_current_property_id()").bind(detail,messageId),db.prepare("INSERT INTO integration_delivery_attempts VALUES (?, pms_current_property_id(), 'INBOUND', ?, 'channel_message', ?, 1, 'FAILED', 409, 'PROCESSING_ERROR', ?, ?, ?, ?)").bind(crypto.randomUUID(),connection.provider,messageId,detail,JSON.stringify(payload),now,actor)]);invalidateSnapshots();return Response.json({error:detail,messageId,status:"FAILED"},{status:409});}
     } else if (body.action === "replay_channel_message") {
@@ -516,11 +517,11 @@ export async function handlePmsPost(request: Request) {
       ]);
     } else return Response.json({error:"지원하지 않는 작업입니다."},{status:400});
     invalidateSnapshots();
-    return Response.json(await snapshot(db, principal));
+    return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body}));
   } catch (error) {
     const message=error instanceof Error ? error.message : "처리 중 오류가 발생했습니다.";
     if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});
-    if (/idempotency_keys_pkey|idempotency_keys\.key/iu.test(message)) return Response.json(await cachedSnapshot(db, principal), {headers:{"X-Idempotent-Replay":"true"}});
+    if (/idempotency_keys_pkey|idempotency_keys\.key/iu.test(message)) return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}), {headers:{"X-Idempotent-Replay":"true"}});
     const mapped=mapPmsError(message);
     if(mapped)return Response.json({error:mapped.error},{status:mapped.status});
     const errorId=crypto.randomUUID();

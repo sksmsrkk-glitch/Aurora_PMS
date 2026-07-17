@@ -4,6 +4,7 @@
 
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReportsCenter from "../../reports-center";
 import RoomMaster from "../../room-master";
@@ -14,6 +15,7 @@ import HomepageManager from "../../homepage-manager";
 import { useDialogController } from "../../dialog-controller";
 import { ListSearch } from "../../list-search";
 import { PmsActionProvider, usePmsActions } from "../../pms-action-context";
+import type { PmsMutationReceipt } from "../../pms-mutation";
 import {
   parsePmsWorkspace,
   pmsWorkspacePath,
@@ -47,9 +49,18 @@ const money = (n:number) => new Intl.NumberFormat("ko-KR", { style:"currency", c
 const labels:Record<string,string> = { DUE_IN:"도착 예정", IN_HOUSE:"투숙 중", CHECKED_OUT:"체크아웃", NO_SHOW:"노쇼", CANCELLED:"취소", CLEAN:"청소 완료", INSPECTED:"점검 완료", DIRTY:"청소 필요", OUT_OF_SERVICE:"판매 중지", VACANT:"공실", OCCUPIED:"재실" };
 const roleLabels:Record<string,string>={PROPERTY_ADMIN:"프로퍼티 관리자",NIGHT_AUDITOR:"야간 감사",FRONT_DESK:"프런트 데스크",CASHIER:"캐셔",HOUSEKEEPING:"하우스키핑",REVENUE_MANAGER:"레비뉴 매니저",SALES_MANAGER:"세일즈 매니저",ACCOUNTANT:"호텔 회계",VIEWER:"조회 전용"};
 
+async function fetchPmsData(url:string):Promise<Data> {
+  const response=await fetch(url,{cache:"no-store"});
+  if(response.status===401){window.location.replace("/login");throw new Error("AUTH_REDIRECT");}
+  const payload=await response.json() as Data&{error?:string};
+  if(!response.ok)throw new Error(payload.error||"PMS 데이터를 불러오지 못했습니다.");
+  return payload;
+}
+
 export default function PmsShell({ initialSection }: { initialSection: PmsWorkspace }) {
   const router = useRouter();
   const pathname = usePathname();
+  const queryClient = useQueryClient();
   const [data,setData] = useState<Data|null>(null); const [error,setError] = useState(""); const [busy,setBusy] = useState("");
   const [completeness,setCompleteness]=useState<"core"|"loading"|"full">("core");
   const section = parsePmsWorkspace(pathname.split("/")[1]) ?? initialSection;
@@ -64,8 +75,8 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
     router.push(pmsWorkspacePath(target));
   }, [router]);
   useDialogController();
-  const load = useCallback(async()=>{ try { const r=await fetch("/api/pms?view=core",{cache:"no-store"}); if(r.status===401){window.location.replace("/login");return;} const j=await r.json() as Data & {error?:string}; if(!r.ok) throw new Error(j.error); setData(j);setCompleteness("core"); } catch(e){setError(e instanceof Error?e.message:"데이터를 불러오지 못했습니다.");}},[]);
-  const loadFull=useCallback(async()=>{setCompleteness("loading");try{const response=await fetch("/api/pms",{cache:"no-store"});if(response.status===401){window.location.replace("/login");return;}const payload=await response.json() as Data&{error?:string};if(!response.ok)throw new Error(payload.error);setData(payload);setCompleteness("full");}catch(reason){setCompleteness("core");setError(reason instanceof Error?reason.message:"업무 데이터를 불러오지 못했습니다.");}},[]);
+  const load = useCallback(async():Promise<Data|null>=>{ try { const payload=await queryClient.fetchQuery({queryKey:["pms","core"],queryFn:()=>fetchPmsData("/api/pms?view=core")});setData(payload);setCompleteness("core");return payload; } catch(e){if(e instanceof Error&&e.message==="AUTH_REDIRECT")return null;setError(e instanceof Error?e.message:"데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
+  const loadFull=useCallback(async():Promise<Data|null>=>{setCompleteness("loading");try{const payload=await queryClient.fetchQuery({queryKey:["pms","full"],queryFn:()=>fetchPmsData("/api/pms")});setData(payload);setCompleteness("full");return payload;}catch(reason){setCompleteness("core");if(reason instanceof Error&&reason.message==="AUTH_REDIRECT")return null;setError(reason instanceof Error?reason.message:"업무 데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
   // The first render intentionally hydrates the live operational snapshot.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{load();},[load]);
@@ -73,7 +84,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{if(completeness==="core"&&["groups","finance","channels"].includes(section))void loadFull();},[section,completeness,loadFull]);
   useEffect(()=>{const onKey=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="k"){event.preventDefault();navigateSection("frontdesk");setQuickPanel(null);requestAnimationFrame(()=>searchRef.current?.focus());}if(event.key==="Escape")setQuickPanel(null);};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);},[navigateSection]);
-  async function act(action:string, payload:Record<string,string>={}) { setBusy(action); setError(""); try { const r=await fetch("/api/pms",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action,...payload})}); if(r.status===401){window.location.replace('/login');return false;} const j=await r.json() as Data & {error?:string}; if(!r.ok) throw new Error(j.error); setData(j);setCompleteness("full"); if(selected) setSelected(j.reservations.find((x:Reservation)=>x.id===selected.id)||null); return true; } catch(e){setError(e instanceof Error?e.message:"작업을 완료하지 못했습니다."); return false;} finally{setBusy("");} }
+  async function act(action:string, payload:Record<string,string>={}) { setBusy(action); setError(""); try { const r=await fetch("/api/pms",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action,...payload})}); if(r.status===401){window.location.replace('/login');return false;} const receipt=await r.json() as PmsMutationReceipt&{error?:string}; if(!r.ok) throw new Error(receipt.error); await Promise.all((receipt.invalidates||["core","full"]).map(key=>queryClient.invalidateQueries({queryKey:["pms",key],refetchType:"none"}))); const needsFull=completeness==="full"||["groups","finance","channels"].includes(section);const refreshed=needsFull?await loadFull():await load();if(selected&&refreshed)setSelected(refreshed.reservations.find((x:Reservation)=>x.id===selected.id)||null); return true; } catch(e){setError(e instanceof Error?e.message:"작업을 완료하지 못했습니다."); return false;} finally{setBusy("");} }
   const normalizedQuery=query.trim().toLocaleLowerCase("ko-KR");
   const reservations = useMemo(()=>data?.reservations.filter(r=>`${r.first_name} ${r.last_name} ${r.confirmation_no} ${r.room_number??""}`.toLocaleLowerCase("ko-KR").includes(normalizedQuery))??[],[data,normalizedQuery]);
   const frontdeskReservations=useMemo(()=>reservations.filter(r=>frontdeskFilter==="ALL"||r.status===frontdeskFilter),[reservations,frontdeskFilter]);

@@ -1,6 +1,7 @@
 /** Root metadata, security nonce bridge, fonts and global visual system. */
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { AuroraQueryProvider } from "./query-provider";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -14,7 +15,7 @@ export default function RootLayout({children}:{children:React.ReactNode}) {
         <link rel="preconnect" href="https://static.toss.im" crossOrigin="anonymous" />
         <link rel="stylesheet" href="https://static.toss.im/tps/main.css" />
       </head>
-      <body>{children}</body>
+      <body><AuroraQueryProvider>{children}</AuroraQueryProvider></body>
     </html>
   );
 }
