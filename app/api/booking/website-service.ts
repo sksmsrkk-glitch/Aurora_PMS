@@ -61,7 +61,7 @@ export type WebsiteContent = {
 
 function safeStringArray(value: unknown) {
   try {
-    const parsed = JSON.parse(String(value || "[]"));
+    const parsed = typeof value === "string" ? JSON.parse(value || "[]") : value;
     return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string").slice(0, 20) : [];
   } catch {
     return [];
@@ -87,8 +87,8 @@ export async function getWebsiteContent(): Promise<WebsiteContent> {
   const db = scopePmsDatabase(rootDatabase, PUBLIC_PROPERTY_ID);
   const [settingsResult, roomResult, mediaResult] = await db.batch([
     db.prepare("SELECT * FROM website_settings WHERE property_id=pms_current_property_id() LIMIT 1"),
-    db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.display_order FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id=pms_current_property_id() AND rt.active=1 AND rw.published=1 ORDER BY rw.display_order,rt.base_rate,rt.code"),
-    db.prepare("SELECT id,scope,room_type_id,role,public_url,alt_text,sort_order FROM website_media WHERE property_id=pms_current_property_id() AND active=1 ORDER BY scope,room_type_id,sort_order,created_at"),
+    db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.display_order FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id=pms_current_property_id() AND rt.active AND rw.published ORDER BY rw.display_order,rt.base_rate,rt.code"),
+    db.prepare("SELECT id,scope,room_type_id,role,public_url,alt_text,sort_order FROM website_media WHERE property_id=pms_current_property_id() AND active ORDER BY scope,room_type_id,sort_order,created_at"),
   ]);
   const row = settingsResult.results[0] as Record<string, unknown> | undefined;
   if (!row) throw new Error("Website content is not initialized");

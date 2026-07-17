@@ -4,12 +4,13 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
+import { safeStringArray } from "../lib/format";
 
-type Settings = Record<string, string | number> & { version:number;published:number };
+type Settings = Record<string, string | number | boolean> & { version:number;published:boolean };
 type WebsiteRoom = {
-  id:string;code:string;name:string;base_rate:number;capacity:number;description:string;active:number;
-  published:number|null;display_order:number|null;marketing_name:string|null;short_description:string|null;
-  long_description:string|null;amenities_json:string|null;website_version:number|null;
+  id:string;code:string;name:string;base_rate:number;capacity:number;description:string;active:boolean;
+  published:boolean|null;display_order:number|null;marketing_name:string|null;short_description:string|null;
+  long_description:string|null;amenities_json:unknown;website_version:number|null;
 };
 type Media = { id:string;scope:"HOTEL"|"ROOM_TYPE";room_type_id:string|null;role:"HERO"|"GALLERY"|"CARD";public_url:string;alt_text:string;sort_order:number };
 type WebsiteAdmin = { settings:Settings|null;rooms:WebsiteRoom[];media:Media[] };
@@ -29,9 +30,7 @@ function fileDataUrl(file: File) {
   });
 }
 
-function parsedAmenities(value:string|null) {
-  try { const parsed=JSON.parse(value||"[]");return Array.isArray(parsed)?parsed.join(", "):""; } catch { return ""; }
-}
+const parsedAmenities = (value:unknown) => safeStringArray(value).join(", ");
 
 export default function HomepageManager({canAdmin}:{canAdmin:boolean}) {
   const {busy,act}=usePmsActions();

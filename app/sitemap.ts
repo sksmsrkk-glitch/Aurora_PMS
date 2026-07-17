@@ -1,15 +1,19 @@
 /** Search-engine discovery for the published hotel experience only. */
 import type { MetadataRoute } from "next";
-import { getWebsiteContent } from "./api/booking/website-service";
+import { connection } from "next/server";
+import { getCachedWebsiteContent } from "./hotel/content";
 import { publicSiteUrl } from "./hotel/seo";
 
-// Publication state is managed in the PMS, so discovery must reflect it without
-// waiting for a new frontend deployment.
-export const dynamic = "force-dynamic";
+// Publication changes reach crawlers within one minute without regenerating the
+// sitemap on every request.
+export const revalidate = 60;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   try {
-    const content = await getWebsiteContent();
+    // Avoid freezing an empty sitemap when application build precedes the
+    // matching database migration. CMS content remains cached for 60 seconds.
+    await connection();
+    const content = await getCachedWebsiteContent();
     if (!content.published) return [];
     const base = publicSiteUrl();
     return [

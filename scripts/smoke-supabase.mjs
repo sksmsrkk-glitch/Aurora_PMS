@@ -48,8 +48,8 @@ try{
 
   const [website]=await sql`
     SELECT
-      (SELECT COUNT(*)::int FROM website_settings WHERE property_id='prop-seoul' AND published=1) settings,
-      (SELECT COUNT(*)::int FROM room_type_website WHERE property_id='prop-seoul' AND published=1) published_rooms,
+      (SELECT COUNT(*)::int FROM website_settings WHERE property_id='prop-seoul' AND published) settings,
+      (SELECT COUNT(*)::int FROM room_type_website WHERE property_id='prop-seoul' AND published) published_rooms,
       EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='inventory_controls' AND column_name='website_closed') website_control,
       EXISTS(SELECT 1 FROM storage.buckets WHERE id='hotel-media' AND public=true) public_bucket
   `;
@@ -60,14 +60,14 @@ try{
     await sql.begin(async transaction=>{
       const [target]=await transaction`
         SELECT p.business_date stay_date,(p.business_date+1)::date departure_date,rt.id room_type_id,
-          COALESCE(ic.sell_limit,COUNT(rm.id) FILTER (WHERE rm.active=1 AND rm.housekeeping_status<>'OUT_OF_SERVICE'))::int capacity_limit,
+          COALESCE(ic.sell_limit,COUNT(rm.id) FILTER (WHERE rm.active AND rm.housekeeping_status<>'OUT_OF_SERVICE'))::int capacity_limit,
           (SELECT COUNT(*)::int FROM reservation_type_nights n WHERE n.property_id=p.id AND n.room_type_id=rt.id AND n.stay_date=p.business_date) sold,
-          (SELECT COALESCE(SUM(bi.current_rooms-bi.picked_up),0)::int FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=p.id AND bi.room_type_id=rt.id AND bi.stay_date=p.business_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')) held
+          (SELECT COALESCE(SUM(bi.current_rooms-bi.picked_up),0)::int FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=p.id AND bi.room_type_id=rt.id AND bi.stay_date=p.business_date AND bb.deduct_inventory AND bb.status IN ('TENTATIVE','DEFINITE')) held
         FROM properties p JOIN room_types rt ON rt.property_id=p.id LEFT JOIN rooms rm ON rm.room_type_id=rt.id LEFT JOIN inventory_controls ic ON ic.property_id=p.id AND ic.room_type_id=rt.id AND ic.stay_date=p.business_date
-        WHERE p.id='prop-seoul' AND rt.active=1 AND COALESCE(ic.closed,0)=0
+        WHERE p.id='prop-seoul' AND rt.active AND NOT COALESCE(ic.closed,false)
         GROUP BY p.id,p.business_date,rt.id,ic.sell_limit ORDER BY rt.id LIMIT 1`;
       const [guest]=await transaction`SELECT id FROM guests WHERE property_id='prop-seoul' LIMIT 1`;
-      const [ratePlan]=await transaction`SELECT code FROM rate_plans WHERE property_id='prop-seoul' AND active=1 ORDER BY CASE WHEN code='BAR' THEN 0 ELSE 1 END,code LIMIT 1`;
+      const [ratePlan]=await transaction`SELECT code FROM rate_plans WHERE property_id='prop-seoul' AND active ORDER BY CASE WHEN code='BAR' THEN 0 ELSE 1 END,code LIMIT 1`;
       if(!target||!guest||!ratePlan)throw new Error("inventory smoke prerequisites are missing");
       const remaining=Math.max(0,Number(target.capacity_limit)-Number(target.sold)-Number(target.held));
       const runId=crypto.randomUUID();
@@ -93,7 +93,7 @@ try{
   let accountingImmutable=false;
   try{
     await sql.begin(async transaction=>{
-      const accounts=await transaction`SELECT id FROM accounting_accounts WHERE property_id='prop-seoul' AND active=1 ORDER BY code LIMIT 2`;
+      const accounts=await transaction`SELECT id FROM accounting_accounts WHERE property_id='prop-seoul' AND active ORDER BY code LIMIT 2`;
       if(accounts.length<2)throw new Error("starter accounting accounts are missing");
       const now=new Date().toISOString();
       await transaction`INSERT INTO accounting_journal_entries(id,property_id,entry_no,business_date,entry_type,source_type,source_id,description,vendor,status,reversal_of_id,created_at,created_by) VALUES (${journalId},'prop-seoul',${`SMOKE-BAL-${crypto.randomUUID()}`},'2099-12-30','ADJUSTMENT','SMOKE',NULL,'rollback-only balanced journal',NULL,'POSTED',NULL,${now},'smoke')`;

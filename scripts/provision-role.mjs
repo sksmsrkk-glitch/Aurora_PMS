@@ -14,8 +14,8 @@ const sql=postgres(directUrl,{max:1,prepare:false,ssl:"require",connect_timeout:
 try {
   await sql`
     INSERT INTO role_assignments(id,property_id,email,role,active,created_at)
-    VALUES (${crypto.randomUUID()},${propertyId},${email},${role},1,${new Date().toISOString()})
-    ON CONFLICT(property_id,email) DO UPDATE SET role=excluded.role,active=1
+    VALUES (${crypto.randomUUID()},${propertyId},${email},${role},true,${new Date().toISOString()})
+    ON CONFLICT(property_id,email) DO UPDATE SET role=excluded.role,active=true
   `;
   console.log(`Provisioned ${role} for ${email} on ${propertyId}.`);
 } finally { await sql.end({timeout:5}); }

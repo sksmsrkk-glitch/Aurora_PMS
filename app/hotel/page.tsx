@@ -2,26 +2,27 @@
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getWebsiteContent } from "../api/booking/website-service";
+import { connection } from "next/server";
 import HotelSearchForm from "./HotelSearchForm";
 import { hotelStructuredData, serializeJsonLd } from "./seo";
+import { formatMoney, seoulDateAfter } from "../../lib/format";
+import { getCachedWebsiteContent } from "./content";
 
-export const dynamic = "force-dynamic";
+// Published CMS content is refreshed at most one minute after an administrator
+// changes it without forcing every public request through a server render.
+export const revalidate = 60;
 
-function dateAfter(days: number) {
-  const date = new Date(Date.now() + days * 86_400_000);
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
-}
-
-const money = (value: number) => new Intl.NumberFormat("ko-KR", { style: "currency", currency: "KRW", maximumFractionDigits: 0 }).format(value);
+const money = formatMoney;
 
 export default async function AuroraHotelPage() {
-  const content = await getWebsiteContent();
+  // Database-backed CMS rendering starts on the first request, so a release can
+  // build before its matching migration is promoted. The projection itself is
+  // cached for 60 seconds by getCachedWebsiteContent.
+  await connection();
+  const content = await getCachedWebsiteContent();
   if (!content.published) notFound();
-  const arrival = dateAfter(1);
-  const departure = dateAfter(2);
+  const arrival = seoulDateAfter(1);
+  const departure = seoulDateAfter(2);
   const hero = content.hotelMedia.find((item) => item.role === "HERO") || content.hotelMedia[0];
   const { settings } = content;
 

@@ -3,15 +3,16 @@
 /** Administrative room-type and physical-room master editor. */
 
 import { useMemo, useState } from "react";
+import { formatMoney, safeStringArray } from "../lib/format";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
 
-type RoomType={id:string;code:string;name:string;base_rate:number;capacity:number;description?:string;active?:number|boolean;version:number;physical:number};
-type Room={id:string;number:string;floor:number;room_type_id:string;room_type_code:string;room_type_name:string;front_desk_status:string;housekeeping_status:string;features?:string;active?:number|boolean;version?:number};
+type RoomType={id:string;code:string;name:string;base_rate:number;capacity:number;description?:string;active?:boolean;version:number;physical:number};
+type Room={id:string;number:string;floor:number;room_type_id:string;room_type_code:string;room_type_name:string;front_desk_status:string;housekeeping_status:string;features?:unknown;active?:boolean;version?:number};
 type Editor={kind:"newType"|"editType"|"newRoom"|"bulkRooms"|"editRoom";item?:RoomType|Room}|null;
-const money=(value:number)=>new Intl.NumberFormat("ko-KR",{style:"currency",currency:"KRW",maximumFractionDigits:0}).format(value);
-const isActive=(value:number|boolean|undefined)=>value!==0&&value!==false;
-function featureText(value?:string){try{const parsed=JSON.parse(value||"[]");return Array.isArray(parsed)?parsed.join(", "):String(value||"");}catch{return String(value||"");}}
+const money=formatMoney;
+const isActive=(value:boolean|undefined)=>value!==false;
+const featureText=(value:unknown)=>safeStringArray(value,20).join(", ");
 
 export default function RoomMaster({types,rooms,canAdmin}:{types:RoomType[];rooms:Room[];canAdmin:boolean}){
   const {busy,act}=usePmsActions();

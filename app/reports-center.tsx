@@ -3,20 +3,21 @@
 /** Filterable operational reports with CSV/XLSX export controls. */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatMoney, formatNumber } from "../lib/format";
 import { downloadReportWorkbook, type ExportReport } from "./xlsx-export";
 
 type CatalogItem={key:string;label:string;group:string;description:string};
 type Column={key:string;label:string;type?:string};
 type ReportData={catalog:readonly CatalogItem[];report:CatalogItem;title:string;description:string;generatedAt:string;filters:Filters;columns:Column[];rows:Array<Record<string,unknown>>;summary:Array<{label:string;value:number|string;format?:string}>;pagination:{page:number;pageSize:number;total:number;totalPages:number};export:{allowed:boolean;maxRows:number;masked:boolean};exportId?:string};
 type Filters={q:string;from:string;to:string;status:string;source:string;roomTypeId:string};
-type RoomType={id:string;code:string;name:string;active?:number|boolean};
+type RoomType={id:string;code:string;name:string;active?:boolean};
 
 const catalogFallback:CatalogItem[]=[
   {key:"reservations",label:"예약 상세",group:"예약",description:"예약과 고객, 객실, 채널, 잔액"},{key:"occupancy",label:"점유율 · ADR · RevPAR",group:"매출",description:"일자·타입별 핵심 영업 지표"},{key:"financials",label:"정산 · 전표",group:"정산",description:"매출·결제·환불 원장"},{key:"accounting_journal",label:"회계 분개장 · 손익",group:"회계",description:"차변·대변과 매출·비용·손익"},{key:"channel_settlements",label:"채널 판매가 · 입금가",group:"회계",description:"수수료·입금가 계약 정산"},{key:"ar",label:"매출채권 · 미수금",group:"정산",description:"청구와 미수 잔액"},{key:"housekeeping",label:"객실 · 하우스키핑",group:"객실",description:"객실 및 청소 작업"},{key:"groups",label:"그룹 · 블록",group:"세일즈",description:"블록 할당과 픽업"},{key:"channels",label:"채널 · 인터페이스",group:"연동",description:"OTA 송수신 결과"},{key:"audit",label:"감사 로그",group:"감사",description:"사용자 변경 이력"},{key:"room_inventory",label:"객실 마스터",group:"객실",description:"타입과 객실 현황"},
 ];
 const statusOptions:Record<string,Array<[string,string]>>={reservations:[["DUE_IN","도착 예정"],["IN_HOUSE","투숙 중"],["CHECKED_OUT","체크아웃"],["CANCELLED","취소"],["NO_SHOW","노쇼"]],financials:[["CHARGE","매출"],["PAYMENT","결제"],["REFUND","환불"],["CHARGE_REVERSAL","매출 반대전표"],["PAYMENT_REVERSAL","결제 반대전표"]],accounting_journal:[["REVENUE","매출"],["EXPENSE","비용"],["ADJUSTMENT","조정"],["CHANNEL_SETTLEMENT","채널 정산"],["REVERSAL","반대전표"]],channel_settlements:[["ACCRUED","정산 대기"],["PAID","입금·지급 완료"],["HELD","보류"],["VOID","무효"]],ar:[["OPEN","미수"],["PAID","완납"]],housekeeping:[["DIRTY","청소 필요"],["CLEAN","청소 완료"],["INSPECTED","점검 완료"],["OUT_OF_SERVICE","판매 중지"]],groups:[["TENTATIVE","잠정"],["DEFINITE","확정"],["CUTOFF","컷오프"],["CANCELLED","취소"]],channels:[["ACKED","성공"],["FAILED","실패"]],room_inventory:[["DIRTY","청소 필요"],["CLEAN","청소 완료"],["INSPECTED","점검 완료"],["OUT_OF_SERVICE","판매 중지"]]};
-const money=(value:unknown)=>new Intl.NumberFormat("ko-KR",{style:"currency",currency:"KRW",maximumFractionDigits:0}).format(Number(value)||0);
-const number=(value:unknown)=>new Intl.NumberFormat("ko-KR").format(Number(value)||0);
+const money=formatMoney;
+const number=formatNumber;
 const cellValue=(value:unknown,type?:string)=>value==null||value===""?"—":type==="currency"?money(value):type==="percent"?`${number(value)}%`:type==="number"?number(value):String(value);
 
 export default function ReportsCenter({businessDate,roomTypes}:{businessDate:string;roomTypes:RoomType[]}){
@@ -44,7 +45,7 @@ export default function ReportsCenter({businessDate,roomTypes}:{businessDate:str
         <label><span>종료일</span><input type="date" value={filters.to} onChange={event=>setFilters({...filters,to:event.target.value})}/></label>
         <label><span>상태</span><select value={filters.status} onChange={event=>setFilters({...filters,status:event.target.value})}><option value="">전체 상태</option>{statuses.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
         <label><span>채널 / 사용자</span><input value={filters.source} onChange={event=>setFilters({...filters,source:event.target.value})} placeholder="예: Booking.com"/></label>
-        <label><span>객실 타입</span><select value={filters.roomTypeId} onChange={event=>setFilters({...filters,roomTypeId:event.target.value})}><option value="">전체 타입</option>{roomTypes.filter(type=>type.active!==0&&type.active!==false).map(type=><option key={type.id} value={type.id}>{type.code} · {type.name}</option>)}</select></label>
+        <label><span>객실 타입</span><select value={filters.roomTypeId} onChange={event=>setFilters({...filters,roomTypeId:event.target.value})}><option value="">전체 타입</option>{roomTypes.filter(type=>type.active!==false).map(type=><option key={type.id} value={type.id}>{type.code} · {type.name}</option>)}</select></label>
         <button className="secondary" type="button" onClick={resetFilters}>초기화</button><button className="primary" type="submit">조회</button>
       </form>
       {error&&<div className="report-error" role="alert">{error}</div>}

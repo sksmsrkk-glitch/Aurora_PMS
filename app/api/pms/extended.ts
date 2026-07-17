@@ -70,8 +70,8 @@ function requiredCmsText(value: string | undefined, label: string, maximum: numb
 export async function loadWebsiteAdmin(db: PmsDatabase, propertyId: string) {
   const [settings, rooms, media] = await db.batch([
     db.prepare("SELECT * FROM website_settings WHERE property_id=? LIMIT 1").bind(propertyId),
-    db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rt.description,rt.active,rw.published,rw.display_order,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.version website_version FROM room_types rt LEFT JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id=? ORDER BY COALESCE(rw.published,0) DESC,COALESCE(rw.display_order,9999),rt.code").bind(propertyId),
-    db.prepare("SELECT * FROM website_media WHERE property_id=? AND active=1 ORDER BY scope,room_type_id,sort_order,created_at").bind(propertyId),
+    db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rt.description,rt.active,rw.published,rw.display_order,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.version website_version FROM room_types rt LEFT JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id=? ORDER BY COALESCE(rw.published,false) DESC,COALESCE(rw.display_order,9999),rt.code").bind(propertyId),
+    db.prepare("SELECT * FROM website_media WHERE property_id=? AND active ORDER BY scope,room_type_id,sort_order,created_at").bind(propertyId),
   ]);
   return { settings: settings.results[0] || null, rooms: rooms.results, media: media.results };
 }
@@ -144,12 +144,12 @@ export async function loadInventoryCalendar(
     db.prepare("SELECT * FROM properties WHERE id=? LIMIT 1").bind(propertyId),
     db
       .prepare(
-        "SELECT * FROM room_types WHERE property_id=? AND active=1 ORDER BY code",
+        "SELECT * FROM room_types WHERE property_id=? AND active ORDER BY code",
       )
       .bind(propertyId),
     db
       .prepare(
-        "SELECT room_type_id,COUNT(*) physical FROM rooms WHERE property_id=? AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE' GROUP BY room_type_id",
+        "SELECT room_type_id,COUNT(*) physical FROM rooms WHERE property_id=? AND active AND housekeeping_status<>'OUT_OF_SERVICE' GROUP BY room_type_id",
       )
       .bind(propertyId),
     db
@@ -164,7 +164,7 @@ export async function loadInventoryCalendar(
       .bind(propertyId, from, to),
     db
       .prepare(
-        "SELECT m.*,c.provider,c.name connection_name,rt.code room_type_code FROM channel_mappings m JOIN channel_connections c ON c.id=m.connection_id JOIN room_types rt ON rt.id=m.room_type_id WHERE m.property_id=? AND m.active=1 AND c.status='ACTIVE' ORDER BY c.provider,rt.code,m.rate_plan",
+        "SELECT m.*,c.provider,c.name connection_name,rt.code room_type_code FROM channel_mappings m JOIN channel_connections c ON c.id=m.connection_id JOIN room_types rt ON rt.id=m.room_type_id WHERE m.property_id=? AND m.active AND c.status='ACTIVE' ORDER BY c.provider,rt.code,m.rate_plan",
       )
       .bind(propertyId),
     db
@@ -372,7 +372,7 @@ function audit(
       action,
       entityType,
       entityId,
-      JSON.stringify(after),
+      after,
       now,
     );
 }
@@ -408,7 +408,7 @@ async function nextJournalNo(db: PmsDatabase, propertyId: string, businessDate: 
 async function accountByCode(db: PmsDatabase, propertyId: string, code: string) {
   const row = await db
     .prepare(
-      "SELECT * FROM accounting_accounts WHERE property_id=? AND code=? AND active=1",
+      "SELECT * FROM accounting_accounts WHERE property_id=? AND code=? AND active",
     )
     .bind(propertyId, code)
     .first<Record<string, unknown>>();
@@ -527,7 +527,7 @@ export async function handleExtendedAction(
       email: requiredCmsText(body.email, "이메일", 254),
       checkinTime: /^\d{2}:\d{2}$/u.test(body.checkinTime || "") ? body.checkinTime : "15:00",
       checkoutTime: /^\d{2}:\d{2}$/u.test(body.checkoutTime || "") ? body.checkoutTime : "11:00",
-      published: body.published === "true" ? 1 : 0,
+      published: body.published === "true",
     };
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(values.email)) throw new PmsExtendedError("홈페이지 문의 이메일을 확인하세요.");
     const statements: PmsPreparedStatement[] = [
@@ -539,7 +539,7 @@ export async function handleExtendedAction(
     return true;
   }
   if (body.action === "update_room_type_website") {
-    const roomType = await db.prepare("SELECT * FROM room_types WHERE id=? AND property_id=? AND active=1").bind(body.roomTypeId,propertyId).first<Record<string, unknown>>();
+    const roomType = await db.prepare("SELECT * FROM room_types WHERE id=? AND property_id=? AND active").bind(body.roomTypeId,propertyId).first<Record<string, unknown>>();
     if (!roomType) throw new PmsExtendedError("활성 객실 타입을 찾지 못했습니다.", 404);
     const current = await db.prepare("SELECT * FROM room_type_website WHERE property_id=? AND room_type_id=?").bind(propertyId,body.roomTypeId).first<Record<string, unknown>>();
     if (current && Number(body.version) !== Number(current.version)) throw new PmsExtendedError("다른 관리자가 먼저 객실 콘텐츠를 수정했습니다.", 409);
@@ -549,10 +549,10 @@ export async function handleExtendedAction(
       shortDescription:requiredCmsText(body.shortDescription,"짧은 객실 소개",300),
       longDescription:requiredCmsText(body.longDescription,"상세 객실 소개",2000),
       displayOrder:Math.trunc(asNumber(body.displayOrder||"0","노출 순서")),
-      published:body.published==="true"?1:0,
+      published:body.published==="true",
     };
     const statements:PmsPreparedStatement[]=[
-      db.prepare("INSERT INTO room_type_website(property_id,room_type_id,published,display_order,marketing_name,short_description,long_description,amenities_json,version,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(property_id,room_type_id) DO UPDATE SET published=excluded.published,display_order=excluded.display_order,marketing_name=excluded.marketing_name,short_description=excluded.short_description,long_description=excluded.long_description,amenities_json=excluded.amenities_json,version=room_type_website.version+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by").bind(propertyId,body.roomTypeId,values.published,values.displayOrder,values.marketingName,values.shortDescription,values.longDescription,JSON.stringify(amenities),now,actor),
+      db.prepare("INSERT INTO room_type_website(property_id,room_type_id,published,display_order,marketing_name,short_description,long_description,amenities_json,version,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(property_id,room_type_id) DO UPDATE SET published=excluded.published,display_order=excluded.display_order,marketing_name=excluded.marketing_name,short_description=excluded.short_description,long_description=excluded.long_description,amenities_json=excluded.amenities_json,version=room_type_website.version+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by").bind(propertyId,body.roomTypeId,values.published,values.displayOrder,values.marketingName,values.shortDescription,values.longDescription,amenities,now,actor),
       audit(db,propertyId,actor,"UPDATE_ROOM_WEBSITE","room_type_website",body.roomTypeId,{...values,amenities},now),
     ];
     const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);
@@ -562,13 +562,13 @@ export async function handleExtendedAction(
   if (body.action === "upload_website_media") {
     const scope=body.scope==="ROOM_TYPE"?"ROOM_TYPE":"HOTEL",role=["HERO","GALLERY","CARD"].includes(body.role)?body.role:"GALLERY";
     const roomTypeId=scope==="ROOM_TYPE"?body.roomTypeId:null;
-    if (roomTypeId&&!await db.prepare("SELECT id FROM room_types WHERE id=? AND property_id=? AND active=1").bind(roomTypeId,propertyId).first()) throw new PmsExtendedError("이미지를 연결할 객실 타입을 찾지 못했습니다.");
+    if (roomTypeId&&!await db.prepare("SELECT id FROM room_types WHERE id=? AND property_id=? AND active").bind(roomTypeId,propertyId).first()) throw new PmsExtendedError("이미지를 연결할 객실 타입을 찾지 못했습니다.");
     const altText=requiredCmsText(body.altText,"이미지 대체 설명",180);
     const uploaded=await uploadWebsiteObject(body.dataUrl||"",body.filename||"image",propertyId);
     const id=crypto.randomUUID(),sortOrder=Math.trunc(asNumber(body.sortOrder||"0","이미지 순서"));
     try {
       const statements:PmsPreparedStatement[]=[
-        db.prepare("INSERT INTO website_media(id,property_id,scope,room_type_id,role,object_path,public_url,alt_text,sort_order,active,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)").bind(id,propertyId,scope,roomTypeId,role,uploaded.objectPath,uploaded.publicUrl,altText,sortOrder,now,actor),
+        db.prepare("INSERT INTO website_media(id,property_id,scope,room_type_id,role,object_path,public_url,alt_text,sort_order,active,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,true,?,?)").bind(id,propertyId,scope,roomTypeId,role,uploaded.objectPath,uploaded.publicUrl,altText,sortOrder,now,actor),
         audit(db,propertyId,actor,"UPLOAD_WEBSITE_MEDIA","website_media",id,{scope,roomTypeId,role,altText,sortOrder},now),
       ];
       const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);
@@ -580,7 +580,7 @@ export async function handleExtendedAction(
     return true;
   }
   if (body.action === "delete_website_media") {
-    const media=await db.prepare("SELECT * FROM website_media WHERE id=? AND property_id=? AND active=1").bind(body.mediaId,propertyId).first<Record<string,unknown>>();
+    const media=await db.prepare("SELECT * FROM website_media WHERE id=? AND property_id=? AND active").bind(body.mediaId,propertyId).first<Record<string,unknown>>();
     if(!media)throw new PmsExtendedError("삭제할 홈페이지 이미지를 찾지 못했습니다.",404);
     await deleteWebsiteObject(String(media.object_path));
     const statements:PmsPreparedStatement[]=[
@@ -601,12 +601,12 @@ export async function handleExtendedAction(
     if(body.ratePlanId&&!current)throw new PmsExtendedError("요금제를 찾지 못했습니다.",404);
     if(current&&Number(body.version)!==Number(current.version))throw new PmsExtendedError("다른 관리자가 요금제를 먼저 수정했습니다.",409);
     if(current&&code!==String(current.code))throw new PmsExtendedError("사용 이력이 있는 요금제 코드는 변경할 수 없습니다.",409);
-    const ratePlanId=String(current?.id||crypto.randomUUID()),active=body.active==="false"?0:1,values={code,name,description,currency,pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active};
+    const ratePlanId=String(current?.id||crypto.randomUUID()),active=body.active!=="false",values={code,name,description,currency,pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active};
     const statements:PmsPreparedStatement[]=current?[
       db.prepare("UPDATE rate_plans SET name=?,description=?,currency=?,market_segment=?,meal_plan=?,cancellation_policy=?,guarantee_policy=?,pricing_model=?,adjustment=?,min_stay=?,max_stay=?,valid_from=?,valid_to=?,active=?,version=version+1,updated_at=?,updated_by=? WHERE id=? AND property_id=? AND version=?").bind(name,description,currency,body.marketSegment||"TRANSIENT",body.mealPlan||"ROOM_ONLY",body.cancellationPolicy||"FLEXIBLE",body.guaranteePolicy||"CARD_GUARANTEE",pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active,now,actor,ratePlanId,propertyId,current.version),
     ]:[
       db.prepare("INSERT INTO rate_plans(id,property_id,code,name,description,currency,market_segment,meal_plan,cancellation_policy,guarantee_policy,pricing_model,adjustment,min_stay,max_stay,valid_from,valid_to,active,version,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)").bind(ratePlanId,propertyId,code,name,description,currency,body.marketSegment||"TRANSIENT",body.mealPlan||"ROOM_ONLY",body.cancellationPolicy||"FLEXIBLE",body.guaranteePolicy||"CARD_GUARANTEE",pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active,now,now,actor,actor),
-      db.prepare("INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by) SELECT ?,?,id,base_rate,1,1,?,? FROM room_types WHERE property_id=? AND active=1 ON CONFLICT(property_id,rate_plan_id,room_type_id) DO NOTHING").bind(propertyId,ratePlanId,now,actor,propertyId),
+      db.prepare("INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by) SELECT ?,?,id,base_rate,true,1,?,? FROM room_types WHERE property_id=? AND active ON CONFLICT(property_id,rate_plan_id,room_type_id) DO NOTHING").bind(propertyId,ratePlanId,now,actor,propertyId),
     ];
     statements.push(audit(db,propertyId,actor,current?"UPDATE_RATE_PLAN":"CREATE_RATE_PLAN","rate_plan",ratePlanId,{...values,version:Number(current?.version||0)+1},now));
     const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);await db.batch(statements);return true;
@@ -635,7 +635,7 @@ export async function handleExtendedAction(
     const typeRows = (
       await db
         .prepare(
-          `SELECT rt.*,COUNT(CASE WHEN rm.active=1 AND rm.housekeeping_status<>'OUT_OF_SERVICE' THEN 1 END) physical FROM room_types rt LEFT JOIN rooms rm ON rm.room_type_id=rt.id WHERE rt.property_id=? AND rt.id IN (${selectedTypes.map(() => "?").join(",")}) GROUP BY rt.id`,
+          `SELECT rt.*,COUNT(CASE WHEN rm.active AND rm.housekeeping_status<>'OUT_OF_SERVICE' THEN 1 END) physical FROM room_types rt LEFT JOIN rooms rm ON rm.room_type_id=rt.id WHERE rt.property_id=? AND rt.id IN (${selectedTypes.map(() => "?").join(",")}) GROUP BY rt.id`,
         )
         .bind(propertyId, ...selectedTypes)
         .all<Record<string, unknown>>()
@@ -669,13 +669,13 @@ export async function handleExtendedAction(
           Number(row.reserved),
         ]),
       );
-    const ratePlan=body.ratePlanId?await db.prepare("SELECT * FROM rate_plans WHERE id=? AND property_id=? AND active=1").bind(body.ratePlanId,propertyId).first<Record<string,unknown>>():null;
+    const ratePlan=body.ratePlanId?await db.prepare("SELECT * FROM rate_plans WHERE id=? AND property_id=? AND active").bind(body.ratePlanId,propertyId).first<Record<string,unknown>>():null;
     if(body.ratePlanId&&!ratePlan)throw new PmsExtendedError("적용할 활성 요금제를 찾지 못했습니다.",404);
     const typeMap = new Map(typeRows.map((row) => [String(row.id), row])),
       statements: PmsPreparedStatement[] = [];
     for (const roomTypeId of selectedTypes) {
       const roomType=typeMap.get(roomTypeId)!;
-      if(ratePlan)statements.push(db.prepare("INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by) VALUES (?,?,?,?,1,1,?,?) ON CONFLICT(property_id,rate_plan_id,room_type_id) DO UPDATE SET active=1,updated_at=excluded.updated_at,updated_by=excluded.updated_by").bind(propertyId,ratePlan.id,roomTypeId,roomType.base_rate,now,actor));
+      if(ratePlan)statements.push(db.prepare("INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by) VALUES (?,?,?,?,true,1,?,?) ON CONFLICT(property_id,rate_plan_id,room_type_id) DO UPDATE SET active=true,updated_at=excluded.updated_at,updated_by=excluded.updated_by").bind(propertyId,ratePlan.id,roomTypeId,roomType.base_rate,now,actor));
       for (const stayDate of dates) {
         const prior = current.get(`${roomTypeId}:${stayDate}`),
           type = typeMap.get(roomTypeId)!;
@@ -701,28 +701,20 @@ export async function handleExtendedAction(
             : Math.trunc(asNumber(body.minStay, "최소 숙박", 1));
         const closed =
             body.closed === "" || body.closed == null
-              ? Number(prior?.closed ?? 0)
-              : body.closed === "true"
-                ? 1
-                : 0,
+              ? Boolean(prior?.closed)
+              : body.closed === "true",
           cta =
             body.cta === "" || body.cta == null
-              ? Number(prior?.close_to_arrival ?? 0)
-              : body.cta === "true"
-                ? 1
-                : 0,
+              ? Boolean(prior?.close_to_arrival)
+              : body.cta === "true",
           ctd =
             body.ctd === "" || body.ctd == null
-              ? Number(prior?.close_to_departure ?? 0)
-              : body.ctd === "true"
-                ? 1
-                : 0,
+              ? Boolean(prior?.close_to_departure)
+              : body.ctd === "true",
           websiteClosed =
             body.websiteClosed === "" || body.websiteClosed == null
-              ? Number(prior?.website_closed ?? 0)
-              : body.websiteClosed === "true"
-                ? 1
-                : 0;
+              ? Boolean(prior?.website_closed)
+              : body.websiteClosed === "true";
         statements.push(
           db
             .prepare(
@@ -753,7 +745,7 @@ export async function handleExtendedAction(
     if (body.mappingId) {
       const mapping = await db
         .prepare(
-          "SELECT * FROM channel_mappings WHERE id=? AND property_id=? AND active=1",
+          "SELECT * FROM channel_mappings WHERE id=? AND property_id=? AND active",
         )
         .bind(body.mappingId, propertyId)
         .first<Record<string, unknown>>();
@@ -919,13 +911,13 @@ export async function handleExtendedAction(
     const amount = asNumber(body.amount, "전표 금액", 0.01),
       debit = await db
         .prepare(
-          "SELECT * FROM accounting_accounts WHERE id=? AND property_id=? AND active=1",
+          "SELECT * FROM accounting_accounts WHERE id=? AND property_id=? AND active",
         )
         .bind(body.debitAccountId, propertyId)
         .first<Record<string, unknown>>(),
       credit = await db
         .prepare(
-          "SELECT * FROM accounting_accounts WHERE id=? AND property_id=? AND active=1",
+          "SELECT * FROM accounting_accounts WHERE id=? AND property_id=? AND active",
         )
         .bind(body.creditAccountId, propertyId)
         .first<Record<string, unknown>>();

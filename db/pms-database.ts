@@ -126,7 +126,7 @@ class PostgresDatabase implements PmsDatabase {
     const normalized = email.trim().toLowerCase();
     if (!normalized || normalized.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) return [];
     const result = await this.executeRaw<{ property_id: string; role: string }>(
-      "SELECT property_id,role FROM role_assignments WHERE email=? AND active=1 ORDER BY created_at",
+      "SELECT property_id,role FROM role_assignments WHERE email=? AND active ORDER BY created_at",
       [normalized],
       this.client,
     );

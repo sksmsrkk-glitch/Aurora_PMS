@@ -1,8 +1,6 @@
-/** Root metadata, security nonce bridge, fonts and global visual system. */
+/** Minimal document root shared by the isolated PMS and public hotel layouts. */
 import type { Metadata } from "next";
-import { AuroraQueryProvider } from "./query-provider";
 import { publicSiteUrl } from "./hotel/seo";
-import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: publicSiteUrl(),
@@ -15,11 +13,7 @@ export const metadata: Metadata = {
 export default function RootLayout({children}:{children:React.ReactNode}) {
   return (
     <html lang="ko">
-      <head>
-        <link rel="preconnect" href="https://static.toss.im" crossOrigin="anonymous" />
-        <link rel="stylesheet" href="https://static.toss.im/tps/main.css" />
-      </head>
-      <body><AuroraQueryProvider>{children}</AuroraQueryProvider></body>
+      <body>{children}</body>
     </html>
   );
 }
