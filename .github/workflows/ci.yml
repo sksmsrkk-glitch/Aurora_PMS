@@ -56,7 +56,11 @@ jobs:
         run: npm run test:unit
       - name: Prepare isolated PostgreSQL
         run: npm run db:test:bootstrap
-      - name: Apply every migration to an empty database
+      - name: Apply historical migrations through RPC removal
+        env:
+          PMS_MIGRATION_MAX: 202607170009_remove_arbitrary_sql_rpc
+        run: npm run db:supabase:migrate
+      - name: Upgrade the populated database through current migrations
         run: npm run db:supabase:migrate
       - name: PostgreSQL integration and concurrency tests
         run: npm run test:integration

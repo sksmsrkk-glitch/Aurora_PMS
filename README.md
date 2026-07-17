@@ -1335,7 +1335,7 @@ npm run db:supabase:smoke
 3. Next.js production build와 TypeScript
 4. unit/behavior tests
 5. 격리 PostgreSQL 17 service에 Supabase 호환 role/storage bootstrap
-6. `supabase/migrations/` 전체 history + seed를 빈 DB에 적용
+6. 빈 DB를 `202607170009`까지 구축·seed한 뒤 현재 migration으로 업그레이드해 fresh install과 populated upgrade 경로를 함께 검증
 7. `AURORA_REQUIRE_POSTGRES_TESTS=true` integration/concurrency tests
 
 CI는 production 또는 staging Supabase secret을 사용하지 않습니다. 각 job의 임시 DB는 job 종료 시 폐기되므로 테스트 fixture가 운영 데이터에 남지 않습니다. GitHub 저장소 설정에서는 `Lint, build, behavior and PostgreSQL tests` check를 `main` 병합 필수 status check로 지정해야 합니다.
