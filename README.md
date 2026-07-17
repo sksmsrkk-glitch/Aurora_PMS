@@ -381,6 +381,34 @@ Aurora는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사용
 - 영업일별 중복 객실료 전기 차단
 - 조건 충족 시 객실료 전기, 블록 cutoff, 영업일 전환을 원자 실행
 
+### 전역 검색·버튼·오버레이 UX 규약
+
+Aurora PMS의 대량 목록 검색은 공용 `ListSearch` 컴포넌트를 사용합니다. 입력 즉시 클라이언트 목록을 필터링하고 현재 결과 건수를 `aria-live`로 알리며, 검색어가 있을 때만 지우기 버튼을 노출합니다. 서버 집계가 필요한 리포트는 필터 입력과 `조회`를 분리하고 `초기화`로 영업일 기본값을 복원합니다.
+
+| 화면 | 검색·필터 대상 | 검색 결과와 빈 상태 |
+| --- | --- | --- |
+| 프런트 데스크 | 고객명, 예약번호, 객실번호 | 전체/도착/재실 상태와 조합, 결과 0건 안내 |
+| 재고 & 요금 | 객실 타입 코드·이름 | 선택 기간은 유지하고 캘린더 행만 즉시 축소 |
+| 홈페이지 관리 | 타입 코드·객실명·홈페이지 노출 상태 | 편집 대상 목록과 결과 건수 동기화 |
+| 그룹 & 세일즈 | 블록 코드·명칭·계정·상태·일자, 세일즈 계정·외부 ID·신용 상태 | 블록과 계정 검색 상태를 독립 관리 |
+| 폴리오 & AR | 고객·예약번호·폴리오 창·청구서 | 폴리오와 AR 양쪽의 합산 결과 건수 표시 |
+| 회계 & 손익 | 전표번호·적요·거래처 | 총계정원장 행과 결과 건수 동기화 |
+| 채널 허브 | 채널·연결명·계약 유형·계약 상태 | 상업 계약 카드와 미설정 계약을 함께 검색 |
+| 룸 & 하우스키핑 | 객실번호·타입·층·담당자 | 청소 상태 필터와 조합 가능 |
+| 리포트 센터 | 키워드·기간·상태·채널/사용자·객실 타입 | 11종 서버 리포트에 동일 필터 계약 적용 |
+| 객실 마스터 | 타입 코드·명칭·설명 또는 객실번호·타입·층 | 타입/실물 객실 탭에 맞춰 placeholder와 건수 전환 |
+
+팝업과 Drawer는 다음 접근성·가시성 규약을 공유합니다.
+
+1. 열기 직전 포커스를 저장하고, 팝업이 열리면 첫 편집 필드로 포커스를 이동합니다.
+2. 편집 필드가 없는 안내 팝업만 닫기 버튼 또는 dialog 자체를 포커스 fallback으로 사용합니다.
+3. `Tab`/`Shift+Tab`은 최상단 팝업 안에서 순환하고 `Escape`는 중첩된 최상단 팝업 하나만 닫습니다.
+4. 닫힌 뒤 포커스는 해당 팝업을 연 버튼으로 복원됩니다. 중첩 팝업도 각 origin을 별도로 보존합니다.
+5. 제목과 닫기 버튼에는 dialog label과 `aria-label`을 보강하고, 배경 클릭은 최상단 overlay만 닫습니다.
+6. 긴 폼은 본문만 스크롤하고 제목과 저장/취소 action bar는 고정합니다. 작은 객실 타입 폼은 콘텐츠 높이만 차지합니다.
+7. 760px 이하에서는 중앙 모달을 최대 `92dvh` 하단 시트로 전환하고 safe-area를 포함한 action bar를 항상 화면 안에 둡니다.
+8. CSP는 Production에서 `unsafe-eval`을 허용하지 않습니다. React 개발 진단이 QA 클릭을 방해하지 않도록 로컬 development에서만 제한적으로 추가합니다.
+
 ## 업무 도메인 상세
 
 ### 예약 상태 모델
@@ -1258,7 +1286,7 @@ PMS_BASE_URL=http://localhost:3000 npm run qa:website
 
 | 환경 | 결과 |
 | --- | --- |
-| 로컬 Next.js + 실제 Supabase | 24/24 checkpoints 통과 |
+| 로컬 Next.js Production build + 실제 Supabase | 24/24 checkpoints 통과, run `O8ZC601U` |
 | Vercel Seoul Production + 실제 Supabase | 24/24 checkpoints 통과, run `O3NBB67I` |
 | Node test suite | 26/26 tests 통과, production build·TypeScript 포함 |
 | 홈페이지 CMS E2E | 공개 projection, 동일 콘텐츠 version 저장, 잘못된 날짜 400, WEB OFF 제외·복원, Storage upload/public read/delete 통과 |
@@ -1268,6 +1296,8 @@ PMS_BASE_URL=http://localhost:3000 npm run qa:website
 | 500객실 경쟁 | 동시 응답 200/409, 최종 500실, 부분 commit 0, replay header true, QA 객실 정리 완료 |
 | 직접 예약 E2E | 실시간 조회, 예약 201, 동일 key 200, 취소 200, 중복 취소 200, 재고 원복 |
 | 반응형 브라우저 QA | 1440px desktop·390px mobile, 가로 scroll 0, 홈페이지 검색 날짜 자동 보정, 공개 객실 3개, CMS 3개 탭·16개 기본 필드, 재고 WEB 노출 selector, 콘솔 오류 0 |
+| PMS 헤드리스 UI 전수 QA | 13개 업무 화면 가로 overflow 0, 10개 업무 검색 영역 필터·초기화 정상, 17개 dialog/drawer 포커스·Escape·action bar 정상, 객실 타입 modal 860px→416px, 모바일 modal 최대 92dvh |
+| 리포트 브라우저 QA | 11/11 서버 리포트 오류 0, 키워드 0건·초기화 복원, CSV `Aurora_room_inventory_2026-07-16.csv`, XLSX `Aurora_객실_마스터_2026-07-16.xlsx` 실제 다운로드 |
 | Core benchmark | Vercel `icn1`, 200 requests, concurrency 10, 실패 0, 252.04 req/s, p50 36.13ms, p95 53.20ms, p99 96.01ms |
 | Security | health 200, CSP/HSTS/DENY/nosniff, cross-origin write 403, production dependency vulnerability 0 |
 
@@ -1547,6 +1577,7 @@ Aurora_PMS/
 
 | Commit | 작업 |
 | --- | --- |
+| 2026-07-17 search & overlay audit | 13개 PMS 화면 헤드리스 재검증, 공용 목록 검색·빈 상태·결과 건수, 리포트 초기화, 중첩 dialog 포커스 복원, sticky action bar, 객실 modal 높이 충돌 제거, 모바일 390px QA, 개발 CSP 보정 |
 | 2026-07-17 website CMS release | 호텔/객실 소개 CMS, Supabase Storage 이미지, 객실 게시·정렬·편의시설, 재고 WEB OFF, 날짜 검색 보정, 모바일 UI, CMS/Storage E2E와 전체 코드 주석 감사 |
 | 2026-07-17 release | Supabase Auth/RBAC/property scope, 74 FK, 회계 경쟁 guard, 500객실 원자 batch, core 성능, 보안·health, 호텔 홈페이지·직접 예약 엔진, 확장 QA 문서 |
 | `aac1007` | Toss 공식 CDN stylesheet 연결, 모든 요소의 Product Sans 강제 통일, font delivery 회귀 테스트 |

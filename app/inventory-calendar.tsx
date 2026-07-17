@@ -3,6 +3,7 @@
 /** Multi-channel rate and inventory calendar, including direct-web controls. */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ListSearch } from "./list-search";
 
 type ChannelRate = {
   mapping_id: string;
@@ -87,6 +88,7 @@ export default function RevenueInventoryCalendar({
     [data, setData] = useState<InventoryData | null>(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
+    [typeQuery, setTypeQuery] = useState(""),
     [editor, setEditor] = useState<Editor>(null);
   const load = useCallback(async () => {
     setLoading(true);
@@ -123,6 +125,10 @@ export default function RevenueInventoryCalendar({
     () => `190px repeat(${data?.dates.length || 1}, 132px)`,
     [data?.dates.length],
   );
+  const visibleTypes = useMemo(() => {
+    const keyword = typeQuery.trim().toLocaleLowerCase("ko-KR");
+    return data?.types.filter((type) => !keyword || `${type.code} ${type.name}`.toLocaleLowerCase("ko-KR").includes(keyword)) || [];
+  }, [data, typeQuery]);
   return (
     <>
       <section className="panel inventory-workspace">
@@ -179,9 +185,10 @@ export default function RevenueInventoryCalendar({
               ＋ 기간 벌크 설정
             </button>
           )}
+          {data&&<ListSearch value={typeQuery} onChange={setTypeQuery} label="재고 객실 타입 검색" placeholder="객실 코드·타입명" count={visibleTypes.length} className="inventory-type-search"/>}
           <em>
             {data
-              ? `${data.range.days.toLocaleString()}일 · ${data.types.length}개 타입`
+              ? `${data.range.days.toLocaleString()}일 · ${visibleTypes.length}/${data.types.length}개 타입`
               : "조회 중"}
           </em>
         </form>
@@ -219,7 +226,7 @@ export default function RevenueInventoryCalendar({
                     </span>
                   </div>
                 ))}
-                {data.types.map((type) => (
+                {visibleTypes.map((type) => (
                   <InventoryRow
                     key={type.id}
                     type={type}
@@ -229,6 +236,7 @@ export default function RevenueInventoryCalendar({
                     edit={(cell) => setEditor({ mode: "bulk", type, cell })}
                   />
                 ))}
+                {visibleTypes.length===0&&<div className="inventory-filter-empty">검색 조건에 맞는 객실 타입이 없습니다.</div>}
               </div>
             </div>
           )

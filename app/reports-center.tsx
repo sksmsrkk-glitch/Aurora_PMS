@@ -28,6 +28,7 @@ export default function ReportsCenter({businessDate,roomTypes}:{businessDate:str
   useEffect(()=>{const controller=new AbortController();void load(controller.signal);return()=>controller.abort();},[load]);
   function changeReport(key:string){setReportKey(key);setPage(1);setFilters(current=>({...current,status:"",source:"",roomTypeId:""}));setApplied(current=>({...current,status:"",source:"",roomTypeId:""}));}
   function search(event:React.FormEvent){event.preventDefault();setPage(1);setApplied(filters);}
+  function resetFilters(){const reset={q:"",from:businessDate,to:businessDate,status:"",source:"",roomTypeId:""};setFilters(reset);setApplied(reset);setPage(1);}
   async function exportRows(format:"XLSX"|"CSV"){
     setExporting(format);setError("");try{const response=await fetch("/api/pms",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action:"export_report",format,report:reportKey,...applied})});const json=await response.json() as ReportData&{error?:string};if(!response.ok)throw new Error(json.error||"내보내기를 생성하지 못했습니다.");if(format==="XLSX")downloadReportWorkbook(json as ExportReport);else downloadCsv(json);setData(current=>current?{...current,exportId:json.exportId}:current);}catch(reason){setError(reason instanceof Error?reason.message:"내보내기를 생성하지 못했습니다.");}finally{setExporting("");}
   }
@@ -44,7 +45,7 @@ export default function ReportsCenter({businessDate,roomTypes}:{businessDate:str
         <label><span>상태</span><select value={filters.status} onChange={event=>setFilters({...filters,status:event.target.value})}><option value="">전체 상태</option>{statuses.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
         <label><span>채널 / 사용자</span><input value={filters.source} onChange={event=>setFilters({...filters,source:event.target.value})} placeholder="예: Booking.com"/></label>
         <label><span>객실 타입</span><select value={filters.roomTypeId} onChange={event=>setFilters({...filters,roomTypeId:event.target.value})}><option value="">전체 타입</option>{roomTypes.filter(type=>type.active!==0&&type.active!==false).map(type=><option key={type.id} value={type.id}>{type.code} · {type.name}</option>)}</select></label>
-        <button className="primary" type="submit">조회</button>
+        <button className="secondary" type="button" onClick={resetFilters}>초기화</button><button className="primary" type="submit">조회</button>
       </form>
       {error&&<div className="report-error" role="alert">{error}</div>}
       <div className="report-summary">{(data?.summary||[]).map(item=><article key={item.label}><span>{item.label}</span><strong>{item.format==="currency"?money(item.value):item.format==="percent"?`${number(item.value)}%`:number(item.value)}</strong></article>)}</div>
