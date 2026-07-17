@@ -64,6 +64,46 @@ test("operational dates and timestamps use native PostgreSQL types", { skip }, a
   }
 });
 
+test("rate plans are relational and drive direct-booking nightly prices", { skip }, async () => {
+  const sql = client(2);
+  const stayDate = "2031-09-01";
+  const departure = "2031-09-02";
+  const rate = 345678;
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  try {
+    const [plan] = await sql`SELECT id FROM rate_plans WHERE property_id='prop-seoul' AND code='WEB-DIRECT'`;
+    assert.ok(plan?.id);
+    await sql`
+      INSERT INTO rate_plan_calendar(
+        id,property_id,rate_plan_id,room_type_id,stay_date,sell_rate,closed,
+        min_stay,close_to_arrival,close_to_departure,version,updated_at,updated_by
+      ) VALUES (
+        ${`it-rate-${crypto.randomUUID()}`},'prop-seoul',${plan.id},'rt-dlx',
+        ${stayDate},${rate},0,1,0,0,1,now(),'integration-test'
+      )
+      ON CONFLICT(property_id,rate_plan_id,room_type_id,stay_date)
+      DO UPDATE SET sell_rate=excluded.sell_rate,closed=0,updated_at=now(),updated_by='integration-test'
+    `;
+    process.env.DATABASE_URL = databaseUrl;
+    const { getAvailability } = await import("../app/api/booking/service.ts");
+    const availability = await getAvailability({ arrival: stayDate, departure, adults: 2, children: 0 });
+    const offer = availability.offers.find((item) => item.roomTypeId === "rt-dlx");
+    assert.equal(offer?.nights[0].rate, rate);
+    const [constraints] = await sql`
+      SELECT COUNT(*)::int count FROM pg_constraint
+      WHERE connamespace='public'::regnamespace AND convalidated
+        AND conname IN ('reservation_rate_plan_fk','reservation_rate_night_plan_fk','channel_mapping_rate_plan_fk')
+    `;
+    assert.equal(constraints.count, 3);
+  } finally {
+    await sql`DELETE FROM rate_plan_calendar WHERE property_id='prop-seoul' AND stay_date=${stayDate} AND updated_by='integration-test'`;
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    await sql.end({ timeout: 2 });
+  }
+});
+
 test("RLS tenant context hides and rejects cross-property access", { skip }, async () => {
   const sql = client(2);
   const suffix = crypto.randomUUID().slice(0, 8);
@@ -155,6 +195,14 @@ test("twenty parallel bookings for the last room allow exactly one night", { ski
     await sql`
       INSERT INTO room_types(id,property_id,code,name,base_rate,capacity)
       VALUES (${roomTypeId},${propertyId},'LAST','Last Room',100000,2)
+    `;
+    await sql`
+      INSERT INTO rate_plans(
+        id,property_id,code,name,currency,created_at,updated_at,created_by,updated_by
+      ) VALUES (
+        ${`it-plan-${suffix}`},${propertyId},'BAR','Concurrency BAR','KRW',
+        now(),now(),'integration-test','integration-test'
+      )
     `;
     await sql`
       INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status)

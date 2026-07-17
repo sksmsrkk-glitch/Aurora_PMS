@@ -31,7 +31,7 @@ try{
       (SELECT COUNT(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('pms_execute','pms_batch','pms_execute_statement','pms_render_sql')) arbitrary_sql_functions,
       (SELECT COUNT(*)::int FROM role_assignments WHERE id IN ('role-local-admin','role-local-pms-admin')) seeded_admins
   `;
-  if(catalog.tables<51||catalog.rls_tables<51||catalog.triggers<29||Number(catalog.required_triggers)!==9||catalog.foreign_keys<79||catalog.migrations<14||Number(catalog.arbitrary_sql_functions)!==0||Number(catalog.seeded_admins)!==0)throw new Error("Supabase catalog verification failed");
+  if(catalog.tables<54||catalog.rls_tables<54||catalog.triggers<29||Number(catalog.required_triggers)!==9||catalog.foreign_keys<86||catalog.migrations<16||Number(catalog.arbitrary_sql_functions)!==0||Number(catalog.seeded_admins)!==0)throw new Error("Supabase catalog verification failed");
 
   const [website]=await sql`
     SELECT

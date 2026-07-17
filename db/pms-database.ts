@@ -53,6 +53,7 @@ const tenantTables = [
   "channel_rate_overrides", "channel_settlements", "accounting_accounts",
   "accounting_journal_entries", "accounting_journal_lines", "website_settings",
   "room_type_website", "website_media", "role_assignments",
+  "rate_plans", "rate_plan_room_types", "rate_plan_calendar",
 ] as const;
 const tenantTablePattern = new RegExp(`\\b(?:${tenantTables.join("|")})\\b`, "iu");
 
@@ -210,6 +211,17 @@ export function getPmsDatabase(bindings: PmsRuntimeBindings): PmsDatabase {
       idle_timeout: 20,
       max_lifetime: 60 * 15,
       ssl: localDatabase ? false : "require",
+      // A hotel business/stay date has no timezone. Returning PostgreSQL DATE as
+      // YYYY-MM-DD prevents UTC Date objects from corrupting map keys or moving a
+      // stay date when a server/client timezone differs.
+      types: {
+        dateOnly: {
+          to: 1082,
+          from: [1082],
+          serialize: (value: unknown) => String(value).slice(0, 10),
+          parse: (value: string) => value,
+        },
+      },
       transform: { undefined: null },
     });
     postgresUrl = databaseUrl;

@@ -13,6 +13,7 @@ const PUBLIC_PROPERTY_ID = process.env.AURORA_PUBLIC_PROPERTY_ID || "prop-seoul"
 type PropertyRow = { id: string; name: string; currency: string; business_date: string };
 type RoomTypeRow = { id: string; code: string; name: string; marketing_name: string; short_description: string; amenities_json: string; image_url: string | null; base_rate: number; capacity: number; physical: number };
 type ControlRow = { room_type_id: string; stay_date: string; sell_limit: number | null; closed: number; website_closed: number; min_stay: number; close_to_arrival: number; close_to_departure: number; price_override: number | null };
+type PlanControlRow = { room_type_id: string; stay_date: string; sell_rate: number; closed: number; min_stay: number; close_to_arrival: number; close_to_departure: number };
 type CountRow = { room_type_id: string; stay_date: string; count: number };
 
 export type PublicNight = { date: string; rate: number; available: number };
@@ -105,10 +106,11 @@ function controlKey(roomTypeId: string, stayDate: string) {
  * blocks; website_closed is evaluated separately from the global stop-sell.
  */
 async function availabilityRows(db: PmsDatabase, arrival: string, departure: string) {
-  const [propertyResult, typesResult, controlsResult, soldResult, heldResult] = await db.batch([
+  const [propertyResult, typesResult, controlsResult, planResult, soldResult, heldResult] = await db.batch([
     db.prepare("SELECT id,name,currency,business_date FROM properties WHERE id=pms_current_property_id() LIMIT 1"),
     db.prepare("SELECT rt.id,rt.code,rt.name,rw.marketing_name,rw.short_description,rw.amenities_json,rt.base_rate,rt.capacity,COUNT(r.id) physical,(SELECT wm.public_url FROM website_media wm WHERE wm.property_id=rt.property_id AND wm.room_type_id=rt.id AND wm.active=1 ORDER BY CASE wm.role WHEN 'CARD' THEN 0 WHEN 'HERO' THEN 1 ELSE 2 END,wm.sort_order LIMIT 1) image_url FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id LEFT JOIN rooms r ON r.room_type_id=rt.id AND r.property_id=rt.property_id AND r.active=1 AND r.housekeeping_status<>'OUT_OF_SERVICE' WHERE rt.property_id=pms_current_property_id() AND rt.active=1 AND rw.published=1 GROUP BY rt.id,rt.code,rt.name,rw.marketing_name,rw.short_description,rw.amenities_json,rt.base_rate,rt.capacity,rw.display_order ORDER BY rw.display_order,rt.base_rate"),
     db.prepare("SELECT room_type_id,stay_date,sell_limit,closed,website_closed,min_stay,close_to_arrival,close_to_departure,price_override FROM inventory_controls WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<=?").bind(arrival, departure),
+    db.prepare("SELECT rpc.room_type_id,rpc.stay_date,rpc.sell_rate,rpc.closed,rpc.min_stay,rpc.close_to_arrival,rpc.close_to_departure FROM rate_plan_calendar rpc JOIN rate_plans rp ON rp.id=rpc.rate_plan_id AND rp.property_id=rpc.property_id WHERE rpc.property_id=pms_current_property_id() AND rp.code='WEB-DIRECT' AND rp.active=1 AND rpc.stay_date>=? AND rpc.stay_date<=?").bind(arrival,departure),
     db.prepare("SELECT room_type_id,stay_date,COUNT(*) count FROM reservation_type_nights WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<? GROUP BY room_type_id,stay_date").bind(arrival, departure),
     db.prepare("SELECT bi.room_type_id,bi.stay_date,COALESCE(SUM(bi.current_rooms-bi.picked_up),0) count FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id AND bb.property_id=bi.property_id WHERE bi.property_id=pms_current_property_id() AND bi.stay_date>=? AND bi.stay_date<? AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE') GROUP BY bi.room_type_id,bi.stay_date").bind(arrival, departure),
   ]);
@@ -116,6 +118,7 @@ async function availabilityRows(db: PmsDatabase, arrival: string, departure: str
     property: propertyResult.results[0] as PropertyRow | undefined,
     roomTypes: typesResult.results as RoomTypeRow[],
     controls: controlsResult.results as ControlRow[],
+    planControls: planResult.results as PlanControlRow[],
     sold: soldResult.results as CountRow[],
     held: heldResult.results as CountRow[],
   };
@@ -133,6 +136,7 @@ export async function getAvailability(input: { arrival: string; departure: strin
   if (input.arrival < rows.property.business_date) throw new BookingError("호텔 영업일보다 이전 날짜는 예약할 수 없습니다.", 400, "PAST_BUSINESS_DATE");
 
   const controls = new Map(rows.controls.map((row) => [controlKey(String(row.room_type_id), String(row.stay_date)), row]));
+  const planControls = new Map(rows.planControls.map((row) => [controlKey(String(row.room_type_id), String(row.stay_date)), row]));
   const sold = new Map(rows.sold.map((row) => [controlKey(String(row.room_type_id), String(row.stay_date)), Number(row.count)]));
   const held = new Map(rows.held.map((row) => [controlKey(String(row.room_type_id), String(row.stay_date)), Number(row.count)]));
   const offers: PublicRoomOffer[] = [];
@@ -144,19 +148,22 @@ export async function getAvailability(input: { arrival: string; departure: strin
     if (adults + children > Number(roomType.capacity) || Number(roomType.physical) < 1) continue;
     const arrivalControl = controls.get(controlKey(roomType.id, input.arrival));
     const departureControl = controls.get(controlKey(roomType.id, input.departure));
-    const minimumStay = Math.max(1, ...dates.map((date) => Number(controls.get(controlKey(roomType.id, date))?.min_stay ?? 1)));
-    if (Number(arrivalControl?.close_to_arrival ?? 0) === 1 || Number(departureControl?.close_to_departure ?? 0) === 1 || dates.length < minimumStay) continue;
+    const arrivalPlan = planControls.get(controlKey(roomType.id, input.arrival));
+    const departurePlan = planControls.get(controlKey(roomType.id, input.departure));
+    const minimumStay = Math.max(1, ...dates.flatMap((date) => [Number(controls.get(controlKey(roomType.id, date))?.min_stay ?? 1),Number(planControls.get(controlKey(roomType.id, date))?.min_stay ?? 1)]));
+    if (Number(arrivalControl?.close_to_arrival ?? 0) === 1 || Number(arrivalPlan?.close_to_arrival ?? 0) === 1 || Number(departureControl?.close_to_departure ?? 0) === 1 || Number(departurePlan?.close_to_departure ?? 0) === 1 || dates.length < minimumStay) continue;
 
     let closed = false;
     const nights = dates.map((date) => {
       const key = controlKey(roomType.id, date);
       const control = controls.get(key);
+      const planControl = planControls.get(key);
       const physical = Number(roomType.physical);
       const sellLimit = control?.sell_limit == null ? physical : Math.min(physical, Number(control.sell_limit));
       const available = Math.max(0, sellLimit - Number(sold.get(key) ?? 0) - Number(held.get(key) ?? 0));
       // The direct-channel switch is independent from the global/OTA stop-sell.
-      if (Number(control?.closed ?? 0) === 1 || Number(control?.website_closed ?? 0) === 1 || available < 1) closed = true;
-      return { date, rate: Number(control?.price_override ?? roomType.base_rate), available };
+      if (Number(control?.closed ?? 0) === 1 || Number(planControl?.closed ?? 0) === 1 || Number(control?.website_closed ?? 0) === 1 || available < 1) closed = true;
+      return { date, rate: Number(planControl?.sell_rate ?? control?.price_override ?? roomType.base_rate), available };
     });
     if (closed) continue;
     const total = nights.reduce((sum, night) => sum + night.rate, 0);

@@ -5,6 +5,7 @@ import { readdir } from "node:fs/promises";
 import {
   PmsSchemaNotReadyError,
   REQUIRED_SCHEMA_VERSION,
+  REQUIRED_TENANT_POLICY_COUNT,
   verifyPmsSchemaContract,
 } from "../db/schema-contract.ts";
 
@@ -32,7 +33,7 @@ test("runtime contract accepts the hardened migration and tenant role", async ()
       migration_ready: true,
       role_ready: true,
       role_member: true,
-      policy_count: 49,
+      policy_count: REQUIRED_TENANT_POLICY_COUNT,
     })),
   );
 });

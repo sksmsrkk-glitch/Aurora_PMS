@@ -8,7 +8,7 @@ export type ActionDomain =
 const actionCapability = {
   create_reservation:"RESERVATION_WRITE",edit_reservation:"RESERVATION_WRITE",cancel_reservation:"RESERVATION_WRITE",assign_room:"RESERVATION_WRITE",
   mark_no_show:"STAY_WRITE",check_in:"STAY_WRITE",check_out:"STAY_WRITE",move_room:"STAY_WRITE",
-  update_inventory_control:"INVENTORY_WRITE",bulk_update_inventory_controls:"INVENTORY_WRITE",
+  update_inventory_control:"INVENTORY_WRITE",bulk_update_inventory_controls:"INVENTORY_WRITE",upsert_rate_plan:"INVENTORY_WRITE",
   create_account_profile:"GROUP_WRITE",create_business_block:"GROUP_WRITE",update_block_inventory:"GROUP_WRITE",add_rooming_entry:"GROUP_WRITE",cutoff_block:"GROUP_WRITE",pickup_rooming_entry:"GROUP_PICKUP",
   post_payment:"FOLIO_WRITE",post_charge:"FOLIO_WRITE",create_folio_window:"FOLIO_WRITE",create_routing_rule:"FOLIO_WRITE",split_folio_entry:"FOLIO_WRITE",reverse_folio_entry:"FOLIO_WRITE",refund_payment:"FOLIO_WRITE",
   transfer_to_ar:"AR_WRITE",post_ar_payment:"AR_WRITE",housekeeping:"HOUSEKEEPING_WRITE",
@@ -25,7 +25,7 @@ export type PmsAction = keyof typeof actionCapability;
 const domainActions: Record<ActionDomain, readonly PmsAction[]> = {
   reservation:["create_reservation","edit_reservation","cancel_reservation","assign_room","mark_no_show","check_in","check_out","move_room"],
   rooms:["create_room_type","update_room_type","create_room","update_room","bulk_create_rooms","housekeeping"],
-  inventory:["update_inventory_control","bulk_update_inventory_controls"],
+  inventory:["update_inventory_control","bulk_update_inventory_controls","upsert_rate_plan"],
   groups:["create_account_profile","create_business_block","update_block_inventory","add_rooming_entry","cutoff_block","pickup_rooming_entry"],
   finance:["post_payment","post_charge","create_folio_window","create_routing_rule","split_folio_entry","reverse_folio_entry","refund_payment","transfer_to_ar","post_ar_payment"],
   integrations:["create_channel_connection","create_channel_mapping","upsert_channel_contract","queue_ari_delta","dispatch_ari_update","ingest_channel_message","replay_channel_message","dispatch_outbox_event"],
@@ -47,7 +47,8 @@ const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
   move_room:["reservationId","roomId","expectedVersion","reason"],mark_no_show:["reservationId"],check_in:["reservationId"],check_out:["reservationId"],
   create_room_type:["code","name","baseRate","capacity"],update_room_type:["roomTypeId","code","name","baseRate","capacity","expectedVersion"],
   create_room:["roomTypeId","number","floor"],update_room:["roomId","roomTypeId","number","floor","expectedVersion"],bulk_create_rooms:["roomTypeId","startNumber","count","floor"],
-  update_inventory_control:["roomTypeId","stayDate"],bulk_update_inventory_controls:["roomTypeId","from","to"],
+  update_inventory_control:["roomTypeId","stayDate"],bulk_update_inventory_controls:["roomTypeIds","from","to"],
+  upsert_rate_plan:["code","name","currency","pricingModel"],
   create_account_profile:["name","type"],create_business_block:["name","arrivalDate","departureDate"],
   update_block_inventory:["blockId","roomTypeId","stayDate"],add_rooming_entry:["blockId","firstName","lastName","arrivalDate","departureDate","roomTypeId"],
   pickup_rooming_entry:["entryId"],cutoff_block:["blockId"],post_payment:["reservationId","amount"],post_charge:["reservationId","amount"],

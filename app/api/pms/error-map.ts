@@ -22,6 +22,7 @@ const mappings:readonly [RegExp,MappedPmsError][]=[
   [/ar ledger entries are immutable|folio details are immutable/iu,{status:409,error:"확정 원장은 수정·삭제할 수 없습니다. 반대전표를 사용하세요."}],
   [/channel_connection_provider_property_uq|channel_connections\.property_id/iu,{status:409,error:"같은 채널과 외부 호텔 ID의 연결이 이미 있습니다."}],
   [/channel_mapping_external_uq|channel_mappings\.connection_id/iu,{status:409,error:"같은 외부 객실·요금 매핑이 이미 있습니다."}],
+  [/rate_plan_property_code_uq|reservation_rate_plan_fk|channel_mapping_rate_plan_fk/iu,{status:409,error:"요금제 코드가 중복되었거나 연결된 요금제를 찾을 수 없습니다."}],
   [/stale channel revision/iu,{status:409,error:"이미 처리한 revision보다 오래된 채널 메시지입니다."}],
   [/integration attempts are immutable/iu,{status:409,error:"연동 시도 원장은 수정·삭제할 수 없습니다."}],
   [/pay or void accrued settlements/iu,{status:409,error:"정산 대기 건을 완료 또는 무효 처리한 뒤 계약 조건을 변경하세요."}],
