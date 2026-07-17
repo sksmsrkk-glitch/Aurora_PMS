@@ -68,9 +68,11 @@
 2. 특정 날짜만 검색에서 사라지면 `inventory_controls.closed`와 `website_closed`, CTA/CTD/MLOS를 같은 타입·날짜로 확인합니다.
 3. 공개 가격은 `inventory_controls.price_override` 또는 `room_types.base_rate`이며 CMS에 별도 가격 복사본을 만들지 않습니다.
 4. 이미지가 깨지면 `website_media.object_path/public_url/active`와 `storage.buckets.id='hotel-media'`, 실제 object 존재를 확인합니다.
-5. Storage object만 직접 지우거나 DB metadata만 직접 삭제하지 말고 `delete_website_media` action을 사용합니다.
-6. 편집 저장 `409`는 version 충돌이므로 `GET /api/pms?view=website`로 최신 값을 읽고 다시 편집합니다.
-7. 변경 후 `npm run qa:website`로 공개 HTML, availability, WEB OFF 복원과 이미지 lifecycle을 재검증합니다.
+5. 히어로가 예상 이미지와 다르면 `hero_media_id`가 같은 property의 활성 `HOTEL` media인지 확인하고, 없으면 `role='HERO'`, 첫 호텔 이미지 순서로 fallback됨을 확인합니다.
+6. 메뉴가 사라지면 `navigation_json`이 세 고정 ID를 중복 없이 포함하고 최소 하나가 `enabled=true`인지 확인합니다. 임의 href는 저장할 수 없습니다.
+7. Storage object만 직접 지우거나 DB metadata만 직접 삭제하지 말고 `delete_website_media` action을 사용합니다.
+8. 편집 저장 `409`는 version 충돌이므로 `GET /api/pms?view=website`로 최신 값을 읽고 다시 편집합니다.
+9. 변경 후 `npm run qa:website`로 visual settings, hero 선택·복원, 공개 HTML, availability, WEB OFF 복원과 이미지 lifecycle을 재검증합니다.
 
 ### 4. 폴리오·AR·회계 불일치
 

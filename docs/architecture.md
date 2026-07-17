@@ -88,7 +88,8 @@ sequenceDiagram
 | `app/pms-action-context.tsx` | 모든 workspace가 공유하는 command/busy Context; prop drilling 제거 |
 | `app/query-provider.tsx` | TanStack Query client와 읽기 모델 cache lifecycle |
 | `app/hotel/page.tsx` | Aurora 호텔 공개 홈페이지, 객실·경험·위치·예약 검색 진입점 |
-| `app/homepage-manager.tsx` | 호텔 소개, 객실 콘텐츠·게시, 타입 생성, 이미지 업로드·삭제 Website Studio |
+| `app/homepage-manager.tsx` | 반응형 실시간 미리보기, 히어로·메뉴·섹션 visual controls, 객실 콘텐츠·게시, 타입 생성, 이미지 업로드·삭제 Website Studio |
+| `app/website-editor-contract.ts` | 에디터·명령 경계·공개 renderer가 공유하는 메뉴 allowlist, CTA·색상·layout 정규화 |
 | `app/hotel/book/BookingClient.tsx` | 실시간 객실 검색, 예약자 입력, 멱등 예약 확정, 기존 예약 취소 |
 | `app/inventory-calendar.tsx` | 최대 730일 캘린더, 타입·요일 벌크 재고, 호텔·채널 판매가와 입금가 |
 | `app/accounting-center.tsx` | 매출·비용·손익, 복식부기 분개, 반대전표, 채널 정산 |

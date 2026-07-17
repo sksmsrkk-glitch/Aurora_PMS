@@ -67,7 +67,12 @@ const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
 const dateField=/^(?:arrivalDate|departureDate|stayDate|startDate|endDate|businessDate|dueDate|validFrom|validTo|from|to)$/u;
 const isoDate=z.string().regex(/^\d{4}-\d{2}-\d{2}$/u,"YYYY-MM-DD 형식이 필요합니다.");
 const scalar=z.union([z.string().trim().min(1).max(20_000),z.number().finite(),z.boolean()]);
-function fieldSchema(field:string){return dateField.test(field)?isoDate:scalar;}
+function fieldSchema(field:string){
+  // A decoded image is capped again at 3MB in the storage boundary. This larger
+  // transport cap only accounts for base64 expansion and the data-URL prefix.
+  if(field==="dataUrl")return z.string().min(32).max(4_200_000).regex(/^data:image\/(?:jpeg|png|webp);base64,/u,"지원하지 않는 이미지 형식입니다.");
+  return dateField.test(field)?isoDate:scalar;
+}
 
 export type ActionRegistration = {
   action:PmsAction;

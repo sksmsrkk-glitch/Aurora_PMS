@@ -6,6 +6,14 @@
  */
 import { getPmsDatabase, scopePmsDatabase, type PmsRuntimeBindings } from "../../../db/pms-database";
 import { verifyPmsSchemaContract } from "../../../db/schema-contract";
+import {
+  boundedInteger,
+  normalizeAccentColor,
+  normalizeHeroCtaHref,
+  normalizeHeroLayout,
+  normalizeWebsiteNavigation,
+  type WebsiteNavigationItem,
+} from "../../website-editor-contract";
 
 const bindings: PmsRuntimeBindings = {
   DATABASE_URL: process.env.DATABASE_URL,
@@ -54,6 +62,15 @@ export type WebsiteContent = {
     email: string;
     checkinTime: string;
     checkoutTime: string;
+    heroMediaId: string | null;
+    heroLayout: "LEFT" | "CENTER" | "SPLIT";
+    heroOverlay: number;
+    heroHeight: number;
+    heroCtaLabel: string;
+    heroCtaHref: string;
+    bookingCtaLabel: string;
+    themeAccent: string;
+    navigation: WebsiteNavigationItem[];
   };
   hotelMedia: WebsiteMedia[];
   rooms: WebsiteRoom[];
@@ -111,6 +128,15 @@ export async function getWebsiteContent(): Promise<WebsiteContent> {
       email: String(row.email),
       checkinTime: String(row.checkin_time),
       checkoutTime: String(row.checkout_time),
+      heroMediaId: row.hero_media_id == null ? null : String(row.hero_media_id),
+      heroLayout: normalizeHeroLayout(row.hero_layout),
+      heroOverlay: boundedInteger(row.hero_overlay, 60, 0, 90),
+      heroHeight: boundedInteger(row.hero_height, 720, 520, 960),
+      heroCtaLabel: String(row.hero_cta_label || "객실 둘러보기"),
+      heroCtaHref: normalizeHeroCtaHref(row.hero_cta_href),
+      bookingCtaLabel: String(row.booking_cta_label || "예약하기"),
+      themeAccent: normalizeAccentColor(row.theme_accent),
+      navigation: normalizeWebsiteNavigation(row.navigation_json),
     },
     hotelMedia: media.filter((item) => item.scope === "HOTEL"),
     rooms: roomResult.results.map((item) => {
