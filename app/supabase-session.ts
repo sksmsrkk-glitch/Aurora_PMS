@@ -52,6 +52,9 @@ function projectJwks() {
 }
 
 async function locallyVerifiedIdentity(accessToken: string) {
+  // Asymmetric JWTs are verified locally against the project's rotating JWKS with
+  // issuer, audience, algorithm, role, and expiry checks. Any verification/network
+  // failure falls back to Supabase Auth instead of trusting decoded token claims.
   const { url, secret } = authConfiguration();
   try {
     const header = decodeProtectedHeader(accessToken);
@@ -89,6 +92,9 @@ async function resolvedIdentity(accessToken: string) {
 }
 
 async function userForAccessToken(accessToken: string) {
+  // Cache keys are one-way token hashes so bearer credentials never become map keys
+  // visible in diagnostics. The inflight map coalesces verification bursts during
+  // parallel server-component and API requests from the same signed-in user.
   const cacheKey = createHash("sha256").update(accessToken).digest("base64url");
   const cached = identityCache.get(cacheKey);
   const now = Date.now();
@@ -129,6 +135,9 @@ function bearerToken(request: Request) {
 }
 
 export async function authenticateSupabaseRequest(request: Request): Promise<SupabaseIdentity | null> {
+  // Explicit bearer clients never fall back to browser cookies or refresh rotation:
+  // a bad API credential must fail as supplied. Browser sessions may rotate the
+  // httpOnly refresh cookie and immediately replace both session cookies.
   const bearer = bearerToken(request);
   const cookieStore = await cookies();
   const accessToken = bearer || cookieStore.get(ACCESS_COOKIE)?.value || null;
@@ -169,6 +178,9 @@ export async function signInWithPassword(email: string, password: string) {
 type MutableCookieStore = Awaited<ReturnType<typeof cookies>>;
 
 function setSessionCookies(cookieStore: MutableCookieStore, session: AuthSession) {
+  // httpOnly prevents JavaScript access, SameSite=Lax limits cross-site submission,
+  // Secure is mandatory in production, and the access cookie expires slightly
+  // before the JWT to leave room for refresh on the next request.
   const common = { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax" as const, path: "/" };
   cookieStore.set(ACCESS_COOKIE, session.access_token, { ...common, maxAge: Math.max(60, Number(session.expires_in || 3600) - 30) });
   cookieStore.set(REFRESH_COOKIE, session.refresh_token, { ...common, maxAge: 60 * 60 * 24 * 30 });

@@ -196,11 +196,15 @@ const schema = [
 ];
 
 async function ready(db: D1) {
+  // Share one initialization promise across concurrent requests. A failed attempt
+  // clears the latch so the next request can retry after a transient database error.
   if (!initialization) initialization = (db.dialect === "postgres" ? initializePostgres(db) : initialize(db)).catch(error => { initialization = null; throw error; });
   await initialization;
 }
 
 async function initializePostgres(db: D1) {
+  // Production schema changes are migration-owned. Runtime startup only verifies
+  // required tables/seed property and restores the local admin assignment safely.
   const tables = ["properties", "reservation_type_nights", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries", "website_settings", "room_type_website", "website_media"];
   const results = await db.batch([
     ...tables.map((table)=>db.prepare(`SELECT 1 FROM ${table} LIMIT 1`)),
@@ -212,6 +216,8 @@ async function initializePostgres(db: D1) {
 }
 
 async function initialize(db: D1) {
+  // D1/local development is self-bootstrapping for a zero-setup demo. The ensure*
+  // routines are idempotent legacy upgrades; Supabase never executes this DDL path.
   let propertyExists = false;
   try { propertyExists = Boolean(await db.prepare("SELECT id FROM properties WHERE id='prop-seoul' LIMIT 1").first()); await db.prepare("SELECT id FROM reservation_type_nights LIMIT 1").first(); await db.prepare("SELECT id FROM business_blocks LIMIT 1").first(); await db.prepare("SELECT id FROM folio_windows LIMIT 1").first(); await db.prepare("SELECT id FROM channel_connections LIMIT 1").first(); }
   catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
@@ -355,6 +361,9 @@ const principalCache = new Map<string,{expires:number;role:Role;propertyId:strin
 const principalInflight = new Map<string,Promise<{role:Role;propertyId:string}|null>>();
 
 async function principalFor(request: Request, db: D1): Promise<Principal | null> {
+  // Authentication establishes identity; role_assignments establishes the property
+  // scope. The requested property is accepted only when that same user has an active
+  // assignment, preventing a client-controlled header from crossing tenant bounds.
   const url = new URL(request.url), identity = await authenticateSupabaseRequest(request);
   let email = identity?.email || null, displayName = identity?.displayName || "";
   const localRequest = ["localhost", "127.0.0.1"].includes(url.hostname);
@@ -423,6 +432,10 @@ async function folioWindowFor(db:D1,reservationId:string,code:string,explicit?:s
 
 type ChannelPayload={connectionId:string;messageId:string;eventType:string;externalReservationId:string;revision:number;externalRoomTypeId?:string;externalRatePlanId?:string;firstName?:string;lastName?:string;email?:string;arrivalDate?:string;departureDate?:string;adults?:number;children?:number;nightlyRate?:number;currency?:string};
 async function processChannelMessage(db:D1,message:Record<string,unknown>,payload:ChannelPayload,actor:string,now:string) {
+  // Provider revisions must increase monotonically per external reservation. The
+  // reservation mutation, inventory-night replacement, link revision, delivery
+  // receipt, audit log, and outbox event commit together to make retries observable
+  // without applying an old OTA message over newer hotel state.
   const connection=await db.prepare("SELECT * FROM channel_connections WHERE id=? AND property_id='prop-seoul' AND status='ACTIVE'").bind(payload.connectionId).first<Record<string,unknown>>();if(!connection)throw new Error("channel connection unavailable");
   const link=await db.prepare("SELECT * FROM channel_reservation_links WHERE connection_id=? AND external_reservation_id=? AND property_id='prop-seoul'").bind(payload.connectionId,payload.externalReservationId).first<Record<string,unknown>>();
   const revision=Number(payload.revision),attemptNo=Number(message.attempts??0)+1,eventType=payload.eventType.toUpperCase();if(!Number.isInteger(revision)||revision<1)throw new Error("invalid channel revision");if(link&&revision<=Number(link.last_revision))throw new Error("stale channel revision");
@@ -459,6 +472,9 @@ async function stayControlError(db:D1, roomTypeId:string, arrival:string, depart
 }
 
 async function snapshot(db: D1, principal?: Principal | null) {
+  // The full snapshot is the compatibility contract for domain-heavy screens. It
+  // favors one batched round trip and a mutually consistent read model over many
+  // client requests that could observe different points in time.
   const [propertyResult,reservationResult,roomResult,actorCashierResult,openCashierResult,failedResult,auditResult,postingsResult,roomTypesResult,typeNightsResult,inventoryControlsResult,accountProfilesResult,blocksResult,blockInventoryResult,roomingResult,folioWindowsResult,folioEntriesResult,routingRulesResult,transactionCodesResult,arAccountsResult,arInvoicesResult,trialBalanceResult,channelConnectionsResult,channelContractsResult,channelMappingsResult,ariUpdatesResult,inboundMessagesResult,channelLinksResult,integrationAttemptsResult,outboxResult] = await db.batch([
     db.prepare("SELECT * FROM properties WHERE id='prop-seoul' LIMIT 1"),
     db.prepare(`SELECT r.*, g.first_name, g.last_name, g.vip_level, rm.number room_number, rt.code room_type_code, rt.name room_type_name, COALESCE(SUM(CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'PAYMENT' THEN -f.amount WHEN 'CHARGE_REVERSAL' THEN -f.amount WHEN 'PAYMENT_REVERSAL' THEN f.amount WHEN 'REFUND' THEN f.amount ELSE 0 END),0) balance FROM reservations r JOIN guests g ON g.id=r.guest_id JOIN room_types rt ON rt.id=r.room_type_id LEFT JOIN rooms rm ON rm.id=r.room_id LEFT JOIN folio_entries f ON f.reservation_id=r.id WHERE r.property_id='prop-seoul' GROUP BY r.id,g.id,rt.id,rm.id ORDER BY CASE r.status WHEN 'DUE_IN' THEN 1 WHEN 'IN_HOUSE' THEN 2 ELSE 3 END, r.eta`),
@@ -512,6 +528,9 @@ async function snapshot(db: D1, principal?: Principal | null) {
 }
 
 async function coreSnapshot(db:D1,principal:Principal) {
+  // The core projection deliberately omits finance, groups, and integrations for
+  // fast first paint; `completeness` prevents consumers from mistaking empty arrays
+  // for authoritative domain data.
   const [propertyResult,reservationResult,roomResult,actorCashierResult,openCashierResult,failedResult,auditResult,postingsResult,roomTypesResult,typeNightsResult,inventoryControlsResult]=await db.batch([
     db.prepare("SELECT * FROM properties WHERE id='prop-seoul' LIMIT 1"),
     db.prepare(`SELECT r.*, g.first_name, g.last_name, g.vip_level, rm.number room_number, rt.code room_type_code, rt.name room_type_name, COALESCE(SUM(CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'PAYMENT' THEN -f.amount WHEN 'CHARGE_REVERSAL' THEN -f.amount WHEN 'PAYMENT_REVERSAL' THEN f.amount WHEN 'REFUND' THEN f.amount ELSE 0 END),0) balance FROM reservations r JOIN guests g ON g.id=r.guest_id JOIN room_types rt ON rt.id=r.room_type_id LEFT JOIN rooms rm ON rm.id=r.room_id LEFT JOIN folio_entries f ON f.reservation_id=r.id WHERE r.property_id='prop-seoul' GROUP BY r.id,g.id,rt.id,rm.id ORDER BY CASE r.status WHEN 'DUE_IN' THEN 1 WHEN 'IN_HOUSE' THEN 2 ELSE 3 END, r.eta`),
@@ -536,6 +555,9 @@ async function coreSnapshot(db:D1,principal:Principal) {
 }
 
 type Snapshot = Awaited<ReturnType<typeof snapshot>>;
+// Caches are partitioned by property and principal because cashier state and
+// permissions are user-specific. Every successful mutation calls invalidateSnapshots
+// so the short TTL cannot serve stale inventory, balances, or authorization views.
 const snapshotCache = new Map<string,{expires:number,value:Promise<Snapshot>}>();
 const coreSnapshotCache = new Map<string,{expires:number,value:Promise<Awaited<ReturnType<typeof coreSnapshot>>>}>();
 const snapshotRepresentationCache = new Map<string,{expires:number,json:Promise<string>,gzip:Promise<ArrayBuffer>}>();
@@ -565,6 +587,8 @@ async function cachedCoreSnapshotResponse(db:D1,principal:Principal,request:Requ
 async function cachedReport(db:D1,params:URLSearchParams,principal:Principal){const key=`${principal.propertyId}:${principal.email}:${params.toString()}`,now=Date.now(),cached=reportCache.get(key);if(cached&&cached.expires>now)return cached.value;if(reportCache.size>200){for(const [cacheKey,item] of reportCache)if(item.expires<=now)reportCache.delete(cacheKey);if(reportCache.size>200)reportCache.clear();}const value=runReport(db,params,principal);reportCache.set(key,{expires:now+5000,value});try{return await value;}catch(error){reportCache.delete(key);throw error;}}
 
 export async function GET(request: Request) {
+  // All read models pass through authentication and the property-scoped adapter.
+  // `view` selects a bounded projection; no branch accepts a raw table or SQL name.
   const rootDb = getPmsDatabase(runtimeBindings);
   await ready(rootDb); const principal = await principalFor(request, rootDb);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
@@ -595,6 +619,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  // Mutation pipeline order is security-sensitive: authenticate, reject cross-origin
+  // requests, scope the database, authorize the action capability, validate the
+  // idempotency key, then execute the command and invalidate read caches.
   const rootDb = getPmsDatabase(runtimeBindings);
   await ready(rootDb); const principal = await principalFor(request, rootDb);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});

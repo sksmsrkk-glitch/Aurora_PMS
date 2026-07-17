@@ -2,6 +2,8 @@
 import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+// Property, room, guest, and reservation tables form the operational source of
+// truth. Night-level allocations—not arrival/departure summaries—enforce capacity.
 export const properties = sqliteTable("properties", {
   id: text("id").primaryKey(), name: text("name").notNull(), code: text("code").notNull(),
   timezone: text("timezone").notNull(), currency: text("currency").notNull(), businessDate: text("business_date").notNull(),
@@ -62,6 +64,9 @@ export const inventoryControls = sqliteTable("inventory_controls", {
 export const roomMoves = sqliteTable("room_moves", {
   id: text("id").primaryKey(), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), fromRoomId: text("from_room_id"), toRoomId: text("to_room_id").notNull(), moveDate: text("move_date").notNull(), reason: text("reason").notNull(), notes: text("notes").notNull().default(""), actor: text("actor").notNull(), createdAt: text("created_at").notNull(),
 }, (t) => [index("room_move_reservation_idx").on(t.propertyId, t.reservationId, t.createdAt)]);
+
+// Group blocks reserve type-level room nights before guest names exist. Pickup rows
+// bridge a rooming-list entry to inventory without double-deducting the same night.
 export const accountProfiles = sqliteTable("account_profiles", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), type:text("type").notNull(), name:text("name").notNull(), externalId:text("external_id"), email:text("email"), phone:text("phone"), negotiatedRateCode:text("negotiated_rate_code"), creditStatus:text("credit_status").notNull().default("CASH"), notes:text("notes").notNull().default(""), active:integer("active",{mode:"boolean"}).notNull().default(true), version:integer("version").notNull().default(1), createdAt:text("created_at").notNull(), updatedAt:text("updated_at").notNull(),
 }, (t)=>[uniqueIndex("account_profile_external_uq").on(t.propertyId,t.type,t.externalId),index("account_profile_search_idx").on(t.propertyId,t.type,t.name)]);
@@ -83,6 +88,9 @@ export const folioWindows = sqliteTable("folio_windows", {
 export const folioEntryDetails = sqliteTable("folio_entry_details", {
   entryId:text("entry_id").primaryKey(), propertyId:text("property_id").notNull(), reservationId:text("reservation_id").notNull(), folioWindowId:text("folio_window_id").notNull(), netAmount:real("net_amount").notNull(), taxAmount:real("tax_amount").notNull().default(0), serviceAmount:real("service_amount").notNull().default(0), currency:text("currency").notNull(), sourceEntryId:text("source_entry_id"), reason:text("reason"), createdAt:text("created_at").notNull(),
 },(t)=>[index("folio_detail_window_idx").on(t.folioWindowId,t.createdAt),index("folio_detail_source_idx").on(t.sourceEntryId)]);
+
+// Folio and AR records are accounting evidence. Corrections append linked reversal
+// entries; database triggers in executable migrations prevent update or deletion.
 export const folioRoutingRules = sqliteTable("folio_routing_rules", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), reservationId:text("reservation_id").notNull(), transactionCode:text("transaction_code").notNull(), targetWindowId:text("target_window_id").notNull(), active:integer("active",{mode:"boolean"}).notNull().default(true), createdAt:text("created_at").notNull(), createdBy:text("created_by").notNull(),
 },(t)=>[uniqueIndex("folio_routing_reservation_code_uq").on(t.reservationId,t.transactionCode),index("folio_routing_target_idx").on(t.targetWindowId,t.active)]);
@@ -104,6 +112,9 @@ export const channelConnections = sqliteTable("channel_connections", {
 export const channelMappings = sqliteTable("channel_mappings", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), connectionId:text("connection_id").notNull(), roomTypeId:text("room_type_id").notNull(), externalRoomTypeId:text("external_room_type_id").notNull(), ratePlan:text("rate_plan").notNull(), externalRatePlanId:text("external_rate_plan_id").notNull(), active:integer("active",{mode:"boolean"}).notNull().default(true), createdAt:text("created_at").notNull(), updatedAt:text("updated_at").notNull(),
 },(t)=>[uniqueIndex("channel_mapping_external_uq").on(t.connectionId,t.externalRoomTypeId,t.externalRatePlanId),index("channel_mapping_internal_idx").on(t.propertyId,t.roomTypeId,t.ratePlan)]);
+
+// Integration state separates outbound ARI revisions, inbound message receipts,
+// and delivery attempts so retries remain idempotent and fully auditable.
 export const ariUpdates = sqliteTable("ari_updates", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), connectionId:text("connection_id").notNull(), mappingId:text("mapping_id").notNull(), stayDate:text("stay_date").notNull(), revision:integer("revision").notNull(), available:integer("available").notNull(), closed:integer("closed",{mode:"boolean"}).notNull().default(false), minStay:integer("min_stay").notNull().default(1), closeToArrival:integer("close_to_arrival",{mode:"boolean"}).notNull().default(false), closeToDeparture:integer("close_to_departure",{mode:"boolean"}).notNull().default(false), rate:real("rate").notNull(), currency:text("currency").notNull(), payloadJson:text("payload_json").notNull(), status:text("status").notNull().default("PENDING"), attempts:integer("attempts").notNull().default(0), createdAt:text("created_at").notNull(), sentAt:text("sent_at"), lastError:text("last_error"),
 },(t)=>[uniqueIndex("ari_update_revision_uq").on(t.mappingId,t.stayDate,t.revision),index("ari_update_dispatch_idx").on(t.status,t.createdAt)]);
@@ -125,6 +136,9 @@ export const channelContracts = sqliteTable("channel_contracts", {
 export const channelRateOverrides = sqliteTable("channel_rate_overrides", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), connectionId:text("connection_id").notNull(), mappingId:text("mapping_id").notNull(), roomTypeId:text("room_type_id").notNull(), stayDate:text("stay_date").notNull(), sellRate:real("sell_rate").notNull(), netRate:real("net_rate"), currency:text("currency").notNull().default("KRW"), version:integer("version").notNull().default(1), updatedAt:text("updated_at").notNull(), updatedBy:text("updated_by").notNull(),
 },(t)=>[uniqueIndex("channel_rate_mapping_date_uq").on(t.mappingId,t.stayDate),index("channel_rate_calendar_idx").on(t.propertyId,t.roomTypeId,t.stayDate)]);
+
+// Commercial terms and rates are snapshotted into settlements before double-entry
+// posting; later contract edits cannot rewrite historical hotel revenue.
 export const channelSettlements = sqliteTable("channel_settlements", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), contractId:text("contract_id").notNull(), connectionId:text("connection_id").notNull(), reservationId:text("reservation_id"), businessDate:text("business_date").notNull(), contractType:text("contract_type").notNull(), commissionPercent:real("commission_percent").notNull().default(0), grossSellAmount:real("gross_sell_amount").notNull(), channelCostAmount:real("channel_cost_amount").notNull(), hotelNetAmount:real("hotel_net_amount").notNull(), currency:text("currency").notNull().default("KRW"), dueDate:text("due_date").notNull(), status:text("status").notNull().default("ACCRUED"), paidAt:text("paid_at"), createdAt:text("created_at").notNull(), createdBy:text("created_by").notNull(), updatedAt:text("updated_at").notNull(), updatedBy:text("updated_by").notNull(),
 },(t)=>[index("channel_settlement_due_idx").on(t.propertyId,t.status,t.dueDate)]);
@@ -134,12 +148,18 @@ export const accountingAccounts = sqliteTable("accounting_accounts", {
 export const accountingJournalEntries = sqliteTable("accounting_journal_entries", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), entryNo:text("entry_no").notNull(), businessDate:text("business_date").notNull(), entryType:text("entry_type").notNull(), sourceType:text("source_type").notNull(), sourceId:text("source_id"), description:text("description").notNull(), vendor:text("vendor"), status:text("status").notNull().default("POSTED"), reversalOfId:text("reversal_of_id"), createdAt:text("created_at").notNull(), createdBy:text("created_by").notNull(),
 },(t)=>[uniqueIndex("accounting_journal_no_uq").on(t.propertyId,t.entryNo),index("accounting_journal_date_idx").on(t.propertyId,t.businessDate,t.entryType)]);
+
+// Journal headers describe the event and immutable lines carry the debits/credits.
+// Reversal linkage preserves history instead of mutating a posted entry.
 export const accountingJournalLines = sqliteTable("accounting_journal_lines", {
   id:text("id").primaryKey(), propertyId:text("property_id").notNull(), journalEntryId:text("journal_entry_id").notNull(), accountId:text("account_id").notNull(), debit:real("debit").notNull().default(0), credit:real("credit").notNull().default(0), department:text("department"), channelConnectionId:text("channel_connection_id"), reservationId:text("reservation_id"), memo:text("memo"), createdAt:text("created_at").notNull(),
 },(t)=>[index("accounting_journal_line_entry_idx").on(t.journalEntryId),index("accounting_journal_line_account_idx").on(t.propertyId,t.accountId,t.createdAt)]);
 export const websiteSettings = sqliteTable("website_settings", {
   propertyId:text("property_id").primaryKey(),hotelName:text("hotel_name").notNull(),brandEyebrow:text("brand_eyebrow").notNull(),heroTitle:text("hero_title").notNull(),heroSubtitle:text("hero_subtitle").notNull(),overviewTitle:text("overview_title").notNull(),overviewBody:text("overview_body").notNull(),experienceTitle:text("experience_title").notNull(),experienceBody:text("experience_body").notNull(),locationTitle:text("location_title").notNull(),locationBody:text("location_body").notNull(),address:text("address").notNull(),phone:text("phone").notNull(),email:text("email").notNull(),checkinTime:text("checkin_time").notNull(),checkoutTime:text("checkout_time").notNull(),published:integer("published",{mode:"boolean"}).notNull().default(true),version:integer("version").notNull().default(1),updatedAt:text("updated_at").notNull(),updatedBy:text("updated_by").notNull(),
 });
+
+// Website publication metadata remains separate from the room master: operations
+// can sell a room internally while hiding its copy and media on the public site.
 export const roomTypeWebsite = sqliteTable("room_type_website", {
   propertyId:text("property_id").notNull(),roomTypeId:text("room_type_id").notNull(),published:integer("published",{mode:"boolean"}).notNull().default(false),displayOrder:integer("display_order").notNull().default(0),marketingName:text("marketing_name").notNull(),shortDescription:text("short_description").notNull(),longDescription:text("long_description").notNull(),amenitiesJson:text("amenities_json").notNull().default("[]"),version:integer("version").notNull().default(1),updatedAt:text("updated_at").notNull(),updatedBy:text("updated_by").notNull(),
 },(t)=>[uniqueIndex("room_type_website_uq").on(t.propertyId,t.roomTypeId),index("room_type_website_public_idx").on(t.propertyId,t.published,t.displayOrder)]);

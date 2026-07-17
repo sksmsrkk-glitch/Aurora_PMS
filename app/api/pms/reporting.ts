@@ -32,6 +32,9 @@ const sqlLike=(columns:string[])=>`(${columns.map(column=>`LOWER(COALESCE(${colu
 const searchBinds=(q:string,count:number)=>Array.from({length:count},()=>`%${q.toLowerCase()}%`);
 
 function parseParams(input:URLSearchParams,businessDate:string,overrides?:Partial<Params>):Params {
+  // Normalize every report through one filter contract. Interactive pages are
+  // capped at 100 rows, exports at 25,000, and date ranges at 367 days so a search
+  // cannot become an unbounded operational-database scan.
   const rawReport=input.get("report")||"reservations";
   const report=(reportCatalog.some(item=>item.key===rawReport)?rawReport:"reservations") as ReportKey;
   const from=input.get("from")||businessDate, to=input.get("to")||businessDate;
@@ -48,6 +51,8 @@ async function pageQuery(db:PmsDatabase,sql:string,binds:unknown[],params:Params
 async function scalarCount(db:PmsDatabase,sql:string,binds:unknown[]){const row=await db.prepare(sql).bind(...binds).first<{count:number}>();return Number(row?.count||0);}
 
 async function reservationsReport(db:PmsDatabase,p:Params,principal:ReportPrincipal){
+  // Export permission also controls guest contact visibility. Masking is applied
+  // before the response is built so restricted PII never reaches the browser.
   const where=["r.property_id='prop-seoul'","r.arrival_date<=?","r.departure_date>?"]; const binds:unknown[]=[p.to,p.from];
   if(p.q){where.push(sqlLike(["r.confirmation_no","g.first_name||' '||g.last_name","g.email","g.phone","rm.number","rt.code","r.notes"]));binds.push(...searchBinds(p.q,7));}
   if(p.status){where.push("r.status=?");binds.push(p.status);} if(p.source){where.push("r.source=?");binds.push(p.source);} if(p.roomTypeId){where.push("r.room_type_id=?");binds.push(p.roomTypeId);}
@@ -62,6 +67,8 @@ async function reservationsReport(db:PmsDatabase,p:Params,principal:ReportPrinci
 }
 
 async function occupancyReport(db:PmsDatabase,p:Params){
+  // Occupancy, ADR, and RevPAR share the same room-night denominator; deriving them
+  // together avoids discrepancies between dashboard totals and exported rows.
   const typeWhere=p.roomTypeId?"WHERE rt.id=?":"";const typeBinds=p.roomTypeId?[p.roomTypeId]:[];
   const qWhere=p.q?"WHERE LOWER(x.room_type||' '||x.room_type_name) LIKE ?":"";const binds:unknown[]=[p.from,p.to,...typeBinds,...(p.q?[`%${p.q.toLowerCase()}%`]:[])];
   const base=`WITH RECURSIVE dates(stay_date) AS (SELECT ? UNION ALL SELECT date(stay_date,'+1 day') FROM dates WHERE stay_date<?), physical AS (SELECT room_type_id,COUNT(*) rooms FROM rooms WHERE property_id='prop-seoul' AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE' GROUP BY room_type_id), sold AS (SELECT room_type_id,stay_date,COUNT(*) rooms FROM reservation_type_nights WHERE property_id='prop-seoul' GROUP BY room_type_id,stay_date), revenue AS (SELECT n.room_type_id,n.stay_date,SUM(CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'CHARGE_REVERSAL' THEN -f.amount ELSE 0 END) amount FROM reservation_type_nights n JOIN folio_entries f ON f.reservation_id=n.reservation_id AND f.business_date=n.stay_date AND f.code='ROOM' WHERE n.property_id='prop-seoul' GROUP BY n.room_type_id,n.stay_date), x AS (SELECT d.stay_date,rt.code room_type,rt.name room_type_name,COALESCE(p.rooms,0) available_rooms,COALESCE(s.rooms,0) sold_rooms,ROUND(CASE WHEN COALESCE(p.rooms,0)=0 THEN 0 ELSE COALESCE(s.rooms,0)*100.0/p.rooms END,2) occupancy,ROUND(COALESCE(r.amount,0),2) room_revenue,ROUND(CASE WHEN COALESCE(s.rooms,0)=0 THEN 0 ELSE COALESCE(r.amount,0)*1.0/s.rooms END,2) adr,ROUND(CASE WHEN COALESCE(p.rooms,0)=0 THEN 0 ELSE COALESCE(r.amount,0)*1.0/p.rooms END,2) revpar FROM dates d CROSS JOIN room_types rt LEFT JOIN physical p ON p.room_type_id=rt.id LEFT JOIN sold s ON s.room_type_id=rt.id AND s.stay_date=d.stay_date LEFT JOIN revenue r ON r.room_type_id=rt.id AND r.stay_date=d.stay_date ${typeWhere})`;
@@ -143,6 +150,9 @@ async function channelSettlementsReport(db:PmsDatabase,p:Params){
 }
 
 export async function runReport(db:PmsDatabase,input:URLSearchParams,principal:ReportPrincipal,overrides?:Partial<Params>){
+  // Report implementations return rows, total, and summary under identical filters.
+  // This dispatcher adds shared metadata and capability flags but never recomputes
+  // financial totals from the paginated subset.
   const businessDate=await propertyDate(db);const params=parseParams(input,businessDate,overrides);let result;
   switch(params.report){case"occupancy":result=await occupancyReport(db,params);break;case"financials":result=await financialReport(db,params);break;case"accounting_journal":result=await accountingJournalReport(db,params);break;case"channel_settlements":result=await channelSettlementsReport(db,params);break;case"ar":result=await arReport(db,params);break;case"housekeeping":result=await housekeepingReport(db,params);break;case"groups":result=await groupsReport(db,params);break;case"channels":result=await channelsReport(db,params);break;case"audit":result=await auditReport(db,params);break;case"room_inventory":result=await roomInventoryReport(db,params);break;default:result=await reservationsReport(db,params,principal);}
   const definition=reportCatalog.find(item=>item.key===params.report)!;const totalPages=Math.max(1,Math.ceil(result.total/params.pageSize));

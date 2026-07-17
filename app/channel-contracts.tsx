@@ -42,6 +42,8 @@ export default function ChannelContracts({
 }) {
   const [selected, setSelected] = useState<Connection | null>(null);
   const [query, setQuery] = useState("");
+  // Search starts from connections rather than contracts so a newly connected OTA
+  // with missing commercial terms remains visible and actionable.
   const visibleConnections = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase("ko-KR");
     return connections.filter((connection) => {
@@ -148,6 +150,9 @@ function ContractModal({
   close: () => void;
   save: (payload: Record<string, string>) => Promise<void>;
 }) {
+  // Contract type controls downstream accounting: commission recognizes gross
+  // revenue plus distribution cost/payable; net-rate requires an explicit per-night
+  // hotel deposit amount when rates are loaded into the inventory calendar.
   const [form, setForm] = useState({
       contractType: contract?.contract_type || "COMMISSION",
       commissionPercent: String(contract?.commission_percent || 15),

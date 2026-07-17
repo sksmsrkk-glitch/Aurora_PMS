@@ -53,6 +53,8 @@ async function database() {
   return db;
 }
 
+// Inventory and operational-lock invariants: these tests deliberately provoke the
+// indexes/triggers that arbitrate concurrent room and business-date changes.
 test("physical room inventory prevents double booking for the same night", async () => {
   const db = await database();
   db.prepare("INSERT INTO reservation_nights(property_id,reservation_id,room_id,stay_date) VALUES (?,?,?,?)").run("p1","r1","room-101","2026-08-01");
@@ -77,6 +79,8 @@ test("a business date can be closed exactly once", async () => {
   db.close();
 });
 
+// Financial evidence invariants: balances are derived from append-only events, and
+// corrections must be represented as reversals rather than update/delete operations.
 test("folio is append-only and its balance is charge minus payment", async () => {
   const db = await database();
   const insert = db.prepare("INSERT INTO folio_entries(id,property_id,reservation_id,kind,code,description,amount,business_date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)");
@@ -107,6 +111,8 @@ test("only one worker can consume a reservation state transition", async () => {
   db.close();
 });
 
+// Type-level capacity includes physical serviceability, stop-sell controls, and
+// inventory-deducting group holds—not only individually assigned room nights.
 test("room-type night inventory prevents overbooking and releases atomically", async () => {
   const db = await database();
   const room = db.prepare("INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,version) VALUES (?,?,?,?,?,?,?,?,?)");
@@ -172,6 +178,8 @@ test("AR transfer keeps guest plus receivable control total and ledger immutable
   assert.throws(()=>db.prepare("UPDATE ar_ledger_entries SET credit=1 WHERE id='l1'").run(),/ar ledger entries are immutable/);db.close();
 });
 
+// Integration evidence is monotonic and immutable so provider retries or replayed
+// webhook messages cannot silently overwrite a newer reservation or ARI revision.
 test("channel messages and ARI revisions are idempotent and delivery attempts immutable", async () => {
   const db=await database();
   db.prepare("INSERT INTO channel_connections(id,property_id,provider,external_property_id,name,environment,status,created_at,updated_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)").run("cc1","p1","BOOKING_COM","H1","Sandbox","SANDBOX","ACTIVE","2026-08-01","2026-08-01","admin");
@@ -192,6 +200,8 @@ test("report exports retain filters, row counts, format and requesting actor", a
   const row=db.prepare("SELECT * FROM report_exports WHERE id='ex1'").get();assert.equal(row.report_key,"occupancy");assert.equal(row.row_count,31);assert.equal(row.requested_by,"revenue@hotel.test");assert.equal(JSON.parse(row.filters_json).to,"2026-08-31");db.close();
 });
 
+// Extended commercial/accounting invariants preserve balanced journals and the
+// gross sell - channel cost = hotel net equation used by settlements and reports.
 test("double-entry accounting stays balanced and journal lines are immutable", async()=>{
   const db=await database(),account=db.prepare("INSERT INTO accounting_accounts(id,property_id,code,account_type,active) VALUES (?,?,?,?,1)");
   account.run("cash","p1","1100","ASSET");account.run("expense","p1","5200","EXPENSE");

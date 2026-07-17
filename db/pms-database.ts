@@ -22,6 +22,13 @@ export interface PmsDatabase {
   batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]): Promise<PmsResult<T>[]>;
 }
 
+/**
+ * Applies the authenticated property's scope to legacy SQL that still names the
+ * seed property. The identifier is deliberately restricted before interpolation;
+ * parameter binding cannot be used for a SQL literal that is embedded in existing
+ * statements. This is defense in depth—the API must still authorize the principal
+ * for the same property before obtaining this adapter.
+ */
 export function scopePmsDatabase(database: PmsDatabase, propertyId: string): PmsDatabase {
   if (!/^[A-Za-z0-9_-]{1,64}$/u.test(propertyId)) throw new Error("Invalid property scope");
   const quotedPropertyId = `'${propertyId}'`;
@@ -45,6 +52,11 @@ export type PmsRuntimeBindings = {
 
 type PostgresExecutor = postgres.Sql | postgres.TransactionSql;
 
+/**
+ * Converts D1-style positional placeholders without touching question marks in
+ * SQL string or identifier literals. A regular-expression replacement would
+ * corrupt notes, JSON paths, and other legitimate literal values.
+ */
 function replaceQuestionPlaceholders(query: string) {
   let index = 0;
   let singleQuoted = false;
@@ -84,6 +96,12 @@ function replaceQuestionPlaceholders(query: string) {
   return output;
 }
 
+/**
+ * Translates the intentionally small SQLite/D1 compatibility surface used by the
+ * PMS into PostgreSQL. Keep new rewrites explicit here: this is not a general SQL
+ * parser, and silently accepting unsupported dialect syntax is more dangerous than
+ * failing a deployment or test.
+ */
 export function toPostgresSql(query: string) {
   let sql = query.trim().replace(/;\s*$/u, "");
   const ignoresConflict = /\bINSERT\s+OR\s+IGNORE\s+INTO\b/iu.test(sql);
@@ -162,6 +180,8 @@ class PostgresDatabase implements PmsDatabase {
   async batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]) {
     if (!statements.length) return [];
 
+    // One database transaction preserves the all-or-nothing semantics expected
+    // by reservation, inventory, audit, outbox, and accounting command batches.
     return this.client.begin(async (transaction) => {
       const results: PmsResult<T>[] = [];
       for (const statement of statements) {
@@ -212,6 +232,8 @@ class SupabaseHttpDatabase implements PmsDatabase {
   }
 
   private async rpc<T>(name:"pms_execute"|"pms_batch",body:Record<string,unknown>):Promise<T> {
+    // The service credential stays on the server. Browser code never calls these
+    // privileged RPCs directly, and error bodies are reduced to diagnostic fields.
     const response=await fetch(`${this.url.replace(/\/$/u,"")}/rest/v1/rpc/${name}`,{
       method:"POST",
       headers:{
@@ -245,6 +267,8 @@ class SupabaseHttpDatabase implements PmsDatabase {
       if(!(statement instanceof SupabasePreparedStatement))throw new Error("Cannot mix database statement implementations in one batch");
       return {sql:toPostgresSql(statement.query),values:statement.values};
     });
+    // pms_batch owns the PostgreSQL transaction on the Supabase side; separating
+    // these into pms_execute calls would permit partially posted business commands.
     const response=await this.rpc<SupabaseRpcResult<T>[]>("pms_batch",{p_statements:payload});
     return response.map((item)=>{
       const results=Array.isArray(item.results)?item.results:[];
@@ -326,6 +350,9 @@ function processSetting(name:"SUPABASE_URL"|"SUPABASE_SECRET_KEY") {
 }
 
 export function getPmsDatabase(bindings: PmsRuntimeBindings): PmsDatabase {
+  // Prefer the server-only Supabase RPC path, then a direct pooled PostgreSQL URL,
+  // and finally the local/edge D1 binding. Every branch exposes identical batch
+  // semantics so domain services do not depend on their deployment environment.
   const supabaseUrl=bindings.SUPABASE_URL||processSetting("SUPABASE_URL");
   const supabaseSecretKey=bindings.SUPABASE_SECRET_KEY||processSetting("SUPABASE_SECRET_KEY");
   if(supabaseUrl&&supabaseSecretKey)return new SupabaseHttpDatabase(supabaseUrl,supabaseSecretKey);

@@ -89,6 +89,12 @@ function controlKey(roomTypeId: string, stayDate: string) {
   return `${roomTypeId}:${stayDate}`;
 }
 
+/**
+ * Loads every input needed for one authoritative availability projection in a
+ * single database batch. Sellable supply is physical in-service rooms capped by
+ * sell_limit, less committed reservation nights and inventory-deducting group
+ * blocks; website_closed is evaluated separately from the global stop-sell.
+ */
 async function availabilityRows(db: PmsDatabase, arrival: string, departure: string) {
   const [propertyResult, typesResult, controlsResult, soldResult, heldResult] = await db.batch([
     db.prepare("SELECT id,name,currency,business_date FROM properties WHERE id='prop-seoul' LIMIT 1"),
@@ -122,6 +128,9 @@ export async function getAvailability(input: { arrival: string; departure: strin
   const held = new Map(rows.held.map((row) => [controlKey(String(row.room_type_id), String(row.stay_date)), Number(row.count)]));
   const offers: PublicRoomOffer[] = [];
 
+  // An offer is valid only when every night satisfies occupancy, stay controls,
+  // direct-channel publication, and positive inventory. The minimum availability
+  // across all nights is what the booking engine may safely advertise.
   for (const roomType of rows.roomTypes) {
     if (adults + children > Number(roomType.capacity) || Number(roomType.physical) < 1) continue;
     const arrivalControl = controls.get(controlKey(roomType.id, input.arrival));
@@ -197,6 +206,9 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
   }
 
   const db = database();
+  // A retried browser request returns the original reservation instead of
+  // consuming another room. The unique booking_requests key is the final guard
+  // when concurrent requests pass this fast-path lookup at the same time.
   const existing = await db.prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id='prop-seoul' AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
   if (existing) return { reservationId: String(existing.id), confirmation: String(existing.confirmation_no), arrival: String(existing.arrival_date), departure: String(existing.departure_date), status: String(existing.status), duplicate: true };
 
@@ -212,6 +224,9 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
   const confirmation = `AUR-${arrival.replaceAll("-", "").slice(2)}-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
   const actor = "booking-engine@aurora.hotel";
   const average = Math.round(offer.total / offer.nights.length);
+  // Guest, reservation, per-night inventory/rates, idempotency receipt, audit,
+  // and outbox event form one atomic unit. Capacity constraints on the night rows
+  // reject a stale offer rather than allowing an oversell after the availability read.
   const statements: PmsPreparedStatement[] = [
     db.prepare("INSERT INTO guests(id,property_id,first_name,last_name,email,phone,vip_level,nationality,preferences,created_at) VALUES (?, 'prop-seoul', ?, ?, ?, ?, 'NONE', NULL, '[]', ?)").bind(guestId, firstName, lastName, normalizedEmail(email), phone, now),
     db.prepare("INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (?, ?, 'prop-seoul', ?, ?, NULL, ?, ?, 'DUE_IN', ?, ?, 'Aurora Web', 'WEB-DIRECT', ?, NULL, ?, 1, ?, ?)").bind(reservationId, confirmation, guestId, roomTypeId, arrival, departure, adults, children, average, specialRequests, now, now),
@@ -251,6 +266,9 @@ export async function cancelWebReservation(input: { confirmation?: unknown; emai
   }
   const now = new Date().toISOString();
   const actor = "booking-engine@aurora.hotel";
+  // Cancellation is an optimistic, atomic state transition. Releasing both room-
+  // and type-level night rows in the same batch makes inventory immediately agree
+  // with the reservation status while audit and integration consumers see one event.
   await db.batch([
     db.prepare("INSERT INTO reservation_transitions(id,property_id,reservation_id,from_status,to_status,actor,created_at) VALUES (?, 'prop-seoul', ?, 'DUE_IN', 'CANCELLED', ?, ?)").bind(crypto.randomUUID(), reservation.id, actor, now),
     db.prepare("UPDATE reservations SET status='CANCELLED',version=version+1,updated_at=? WHERE id=? AND property_id='prop-seoul' AND status='DUE_IN' AND version=?").bind(now, reservation.id, Number(reservation.version)),

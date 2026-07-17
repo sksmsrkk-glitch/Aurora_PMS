@@ -2,6 +2,9 @@
 import assert from "node:assert/strict";
 
 const baseUrl = (process.env.PMS_BASE_URL || "http://localhost:3000").replace(/\/$/, "");
+// Every run receives a compact namespace for records it creates. The workflow is
+// intentionally not a cleanup test: immutable ledger/audit records must remain, so
+// uniqueness and later inspection depend on this run identifier.
 const runId = `${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`.toUpperCase();
 const qaCode = `Q${runId}`.slice(0, 12);
 const roomPrefix = `Q${runId.slice(-5)}`;
@@ -20,6 +23,8 @@ const record = (name, detail = "OK") => {
 };
 
 async function request(path, options = {}) {
+  // Keep HTTP parsing and timing in one place so a non-JSON error page cannot be
+  // mistaken for a domain assertion failure later in the workflow.
   const started = performance.now();
   const headers = new Headers(options.headers);
   if (sessionCookie) headers.set("Cookie", sessionCookie);
@@ -53,6 +58,8 @@ async function snapshot() {
 }
 
 async function action(name, payload = {}, options = {}) {
+  // Mutations always carry a unique idempotency key unless a checkpoint supplies a
+  // stable key specifically to verify replay behavior.
   const idempotencyKey = options.idempotencyKey || `qa:${runId}:${name}:${crypto.randomUUID()}`;
   const result = await request("/api/pms", {
     method: "POST",
@@ -77,6 +84,8 @@ async function createReservation(lastName, roomTypeId, arrivalDate, departureDat
 }
 
 async function main() {
+  // First verify shell, authentication, and read projections before creating
+  // persistent QA data used by the remaining domain checkpoints.
   await authenticateIfConfigured();
   const page = await fetch(`${baseUrl}/`,{headers:sessionCookie?{Cookie:sessionCookie}:undefined});
   assert.equal(page.status, 200, "dashboard route failed");
@@ -103,6 +112,8 @@ async function main() {
   }
   record("CSV·Excel 내보내기 생성");
 
+  // Build isolated room master and inventory fixtures used by every later
+  // reservation, group, finance, and integration checkpoint.
   const createdType = await action("create_room_type", { code: qaCode, name: `QA 자동화 ${runId}`, baseRate: "110000", capacity: "2", description: "전체 기능 검증 전용 객실 타입" });
   let roomType = createdType.json.inventory.types.find((item) => item.code === qaCode);
   assert.ok(roomType);
@@ -167,6 +178,8 @@ async function main() {
   assert.equal(response.json.groups.blocks.find((item) => item.id === block.id).status, "CUTOFF");
   record("그룹 블록·할당·명단·픽업·Cutoff");
 
+  // Operational lifecycle assertions read the returned server snapshot rather than
+  // trusting submitted payloads, including append-only folio and AR transitions.
   if (!response.json.controls.openCashier) response = await action("open_cashier", { openingAmount: "0" });
   assert.ok(response.json.controls.openCashier);
   record("캐셔 개시");
@@ -230,6 +243,8 @@ async function main() {
   assert.equal(response.json.reservations.find((item) => item.id === created.reservation.id).status, "CANCELLED");
   record("노쇼·예약 취소·재고 복원");
 
+  // Validate channel terms, settlement accounting, monotonic inbound revisions,
+  // dead-letter replay, and transactional outbox delivery as one integration stage.
   response = await action("create_channel_connection", { provider: "QAOTA", externalPropertyId: `HOTEL-${runId}`, name: `QA OTA ${runId}` });
   const connection = response.json.integrations.connections.find((item) => item.external_property_id === `HOTEL-${runId}`);
   assert.ok(connection);
@@ -311,6 +326,8 @@ async function main() {
   assert.equal(response.json.integrations.outbox.find((item) => item.id === pendingEvent.id).status, "PUBLISHED");
   record("Transactional Outbox 장애 주입·재전송");
 
+  // An expected 409 is a positive control: the audit must refuse to close while
+  // operational blockers created by this workflow still exist.
   response = await action("run_night_audit", {}, { expectStatus: 409 });
   assert.ok(Array.isArray(response.json.blockers));
   record("야간 감사 선행조건·차단 UI", "의도된 409 확인");

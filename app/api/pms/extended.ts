@@ -56,6 +56,11 @@ const storageBindings = () => ({
   key: process.env.SUPABASE_SECRET_KEY,
 });
 
+/**
+ * CMS input is treated as a publishing boundary: required copy is normalized and
+ * length-bounded here so admin previews, the public hotel site, and stored records
+ * cannot diverge because one surface silently truncated a value.
+ */
 function requiredCmsText(value: string | undefined, label: string, maximum: number) {
   const text = (value || "").trim();
   if (!text || text.length > maximum) throw new PmsExtendedError(`${label}은(는) 1~${maximum}자로 입력하세요.`);
@@ -80,6 +85,8 @@ async function uploadWebsiteObject(dataUrl: string, filename: string, propertyId
   const extension = match[1] === "image/jpeg" ? "jpg" : match[1].split("/")[1];
   const stem = filename.replace(/\.[^.]+$/u, "").replace(/[^A-Za-z0-9_-]+/gu, "-").slice(0, 40) || "image";
   const objectPath = `${propertyId}/${Date.now()}-${crypto.randomUUID()}-${stem}.${extension}`;
+  // Only the generated property-prefixed object path is persisted. The Supabase
+  // service key is read server-side and is never returned in the public URL.
   const bindings = storageBindings();
   if (!bindings.url || !bindings.key) throw new PmsExtendedError("Supabase Storage 연결이 설정되지 않았습니다.", 503);
   const encodedPath = objectPath.split("/").map(encodeURIComponent).join("/");
@@ -118,6 +125,9 @@ export async function loadInventoryCalendar(
   to: string,
   propertyId: string,
 ) {
+  // Calendar cells are a projection, not stored availability. Each cell combines
+  // physical sellable rooms, committed nights, controls, website visibility, and
+  // channel-specific rate overrides so every consumer uses the same rule set.
   validateRange(from, to, 730);
   const [
     propertyResult,
@@ -233,6 +243,9 @@ export async function loadAccountingCenter(
   to: string,
   propertyId: string,
 ) {
+  // KPIs are recomputed from posted immutable journal lines and settlement facts.
+  // Mutable dashboard totals are intentionally not stored because they drift when
+  // a journal is reversed or a channel settlement changes state.
   validateRange(from, to, 367);
   const [
     propertyResult,
@@ -321,6 +334,9 @@ async function commitBatches(
   db: PmsDatabase,
   statements: PmsPreparedStatement[],
 ) {
+  // Large calendar edits are bounded per transport call. Callers must place audit
+  // and idempotency statements in the final list; database constraints keep each
+  // individual chunk valid even though a >450-statement operation spans batches.
   for (let start = 0; start < statements.length; start += 450)
     await db.batch(statements.slice(start, start + 450));
 }
@@ -355,6 +371,8 @@ function remember(
   actor: string,
   now: string,
 ) {
+  // The receipt is submitted with the domain statements so a successful retry can
+  // be distinguished from a failed attempt without creating duplicate side effects.
   return key
     ? db
         .prepare(
@@ -410,6 +428,9 @@ async function buildJournal(
     }>;
   },
 ) {
+  // Double-entry accounting is append-only: every posting must balance to the cent, and a
+  // correction is represented by a new reversal journal rather than editing lines.
+  // Database triggers enforce immutability after this service-level validation.
   const debit = round(input.lines.reduce((sum, line) => sum + line.debit, 0)),
     credit = round(input.lines.reduce((sum, line) => sum + line.credit, 0));
   if (!(debit > 0) || Math.abs(debit - credit) > 0.01)
@@ -467,6 +488,9 @@ export async function handleExtendedAction(
   now: string,
   idempotencyKey?: string | null,
 ) {
+  // This command gateway keeps property scope, actor identity, audit records, and
+  // idempotency behavior consistent across CMS, revenue, channel, and accounting
+  // mutations. Authorization is resolved by the parent PMS route before entry.
   const actor = principal.email;
   const propertyId = principal.propertyId;
   if (body.action === "update_website_settings") {

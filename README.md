@@ -1224,6 +1224,23 @@ interface PmsPreparedStatement {
 - SQL 문자열 안의 작은따옴표·큰따옴표 내부 `?`는 placeholder로 변환하지 않습니다.
 - prepared bind를 우회한 사용자 입력 문자열 연결은 금지합니다.
 
+### 소스 주석 품질 기준
+
+Aurora PMS의 유지보수 대상은 `app`, `db`, `scripts`, `tests`, `worker` 아래의 TypeScript, TSX, JavaScript, MJS 파일입니다. 모든 파일은 상단 설명 주석을 가져야 하며, 120줄 이상의 파일은 유효 코드 약 100줄마다 최소 한 줄 이상의 설명 주석을 유지합니다. 이 수치는 주석을 많이 쓰기 위한 목표가 아니라 대형 파일이 제목 한 줄만 남긴 채 도메인 지식을 잃는 것을 막는 회귀 기준입니다.
+
+주석은 문법을 다시 읽어 주는 대신 다음 내용을 기록합니다.
+
+- 테넌트/property scope, 권한 확인 순서, 서버 전용 credential 경계
+- 예약·재고의 원자성, 초과 판매 방지, idempotency와 optimistic concurrency
+- folio·AR·회계 journal의 append-only 및 reversal 불변조건
+- 판매가·채널 판매가·입금가·수수료 계약의 계산 기준
+- CMS 게시 여부와 PMS 내부 판매 가능 상태가 분리되는 이유
+- 캐시 키의 범위, 쓰기 후 무효화 시점, 제한값의 운영상 근거
+- UI에서 서버 데이터와 로컬 검색·draft state를 분리하는 이유
+- QA fixture가 남는 범위, 예상 실패가 성공 조건인 checkpoint
+
+반대로 변수명이나 `if` 조건을 그대로 번역한 주석, 현재 코드와 다른 미래 계획, 비밀키·토큰·고객 개인정보 예시는 남기지 않습니다. 핵심 동작을 바꾸는 커밋은 구현·테스트·README와 함께 관련 주석도 갱신해야 합니다. `tests/rendered-html.test.mjs`는 전체 파일 상단 주석, 대형 파일 설명 밀도, 핵심 경로의 테넌트 격리·원자성·idempotency·회계 불변조건 설명을 release gate로 검사합니다.
+
 ### 코드 변경 원칙
 
 - 기존 dirty worktree의 관련 없는 사용자 변경을 덮어쓰지 않습니다.
@@ -1248,7 +1265,7 @@ npm run qa:website
 
 `npm test`는 production build와 Node test suite를 실행합니다.
 
-현재 자동 suite는 26개 test로 구성됩니다.
+현재 자동 suite는 27개 test로 구성됩니다.
 
 | Suite | 검증 내용 |
 | --- | --- |
@@ -1577,6 +1594,7 @@ Aurora_PMS/
 
 | Commit | 작업 |
 | --- | --- |
+| 2026-07-17 source comment audit | 전체 유지보수 소스 주석 재감사, PMS API·직접 예약·DB adapter·재고·회계·채널 계약·인증·migration·workflow QA의 설계 이유와 불변조건 보강, 대형 파일 주석 품질 자동 gate 및 문서화 기준 추가 |
 | 2026-07-17 search & overlay audit | 13개 PMS 화면 헤드리스 재검증, 공용 목록 검색·빈 상태·결과 건수, 리포트 초기화, 중첩 dialog 포커스 복원, sticky action bar, 객실 modal 높이 충돌 제거, 모바일 390px QA, 개발 CSP 보정 |
 | 2026-07-17 website CMS release | 호텔/객실 소개 CMS, Supabase Storage 이미지, 객실 게시·정렬·편의시설, 재고 WEB OFF, 날짜 검색 보정, 모바일 UI, CMS/Storage E2E와 전체 코드 주석 감사 |
 | 2026-07-17 release | Supabase Auth/RBAC/property scope, 74 FK, 회계 경쟁 guard, 500객실 원자 batch, core 성능, 보안·health, 호텔 홈페이지·직접 예약 엔진, 확장 QA 문서 |
