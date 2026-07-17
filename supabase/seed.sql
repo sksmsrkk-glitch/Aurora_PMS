@@ -9,23 +9,35 @@ INSERT INTO room_types(id,property_id,code,name,base_rate,capacity,description,a
   ('rt-ste','prop-seoul','STE','시티 스위트',420000,4,'거실과 침실이 분리된 스위트',1,1)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO rate_plans(
-  id,property_id,code,name,description,currency,market_segment,meal_plan,
-  cancellation_policy,guarantee_policy,pricing_model,adjustment,min_stay,max_stay,
-  valid_from,valid_to,active,version,created_at,updated_at,created_by,updated_by
-) VALUES
-  ('rp-prop-seoul-bar','prop-seoul','BAR','Best Available Rate','호텔 표준 유연 요금','KRW','TRANSIENT','ROOM_ONLY','FLEXIBLE','CARD_GUARANTEE','FIXED',0,1,30,NULL,NULL,1,1,clock_timestamp(),clock_timestamp(),'system:seed','system:seed'),
-  ('rp-prop-seoul-web','prop-seoul','WEB-DIRECT','공식 홈페이지 전용','공식 홈페이지 실시간 판매 요금','KRW','DIRECT','ROOM_ONLY','FLEXIBLE','CARD_GUARANTEE','FIXED',0,1,30,NULL,NULL,1,1,clock_timestamp(),clock_timestamp(),'system:seed','system:seed'),
-  ('rp-prop-seoul-ota','prop-seoul','OTA','온라인 채널 표준','OTA 채널 매핑 기본 요금','KRW','OTA','ROOM_ONLY','FLEXIBLE','CARD_GUARANTEE','FIXED',0,1,30,NULL,NULL,1,1,clock_timestamp(),clock_timestamp(),'system:seed','system:seed'),
-  ('rp-prop-seoul-corp','prop-seoul','CORP','기업체 계약 요금','기업체 협약 고객용 요금','KRW','CORPORATE','ROOM_ONLY','DAY_1','DIRECT_BILL','FIXED',0,1,30,NULL,NULL,1,1,clock_timestamp(),clock_timestamp(),'system:seed','system:seed')
-ON CONFLICT(property_id,code) DO NOTHING;
+-- CI deliberately seeds a populated migration-009 database before upgrading it
+-- through tenant RLS, native temporal types, and the Rate Plan domain. Dynamic
+-- SQL keeps that historical seed valid while still projecting Rate Plans after
+-- migration 012 on the second idempotent seed pass.
+DO $seed_rate_plans$
+BEGIN
+  IF to_regclass('public.rate_plans') IS NOT NULL THEN
+    EXECUTE $sql$
+      INSERT INTO rate_plans(
+        id,property_id,code,name,description,currency,market_segment,meal_plan,
+        cancellation_policy,guarantee_policy,pricing_model,adjustment,min_stay,max_stay,
+        valid_from,valid_to,active,version,created_at,updated_at,created_by,updated_by
+      ) VALUES
+        ('rp-prop-seoul-bar','prop-seoul','BAR','Best Available Rate','호텔 표준 유연 요금','KRW','TRANSIENT','ROOM_ONLY','FLEXIBLE','CARD_GUARANTEE','FIXED',0,1,30,NULL,NULL,1,1,clock_timestamp(),clock_timestamp(),'system:seed','system:seed'),
+        ('rp-prop-seoul-web','prop-seoul','WEB-DIRECT','공식 홈페이지 전용','공식 홈페이지 실시간 판매 요금','KRW','DIRECT','ROOM_ONLY','FLEXIBLE','CARD_GUARANTEE','FIXED',0,1,30,NULL,NULL,1,1,clock_timestamp(),clock_timestamp(),'system:seed','system:seed'),
+        ('rp-prop-seoul-ota','prop-seoul','OTA','온라인 채널 표준','OTA 채널 매핑 기본 요금','KRW','OTA','ROOM_ONLY','FLEXIBLE','CARD_GUARANTEE','FIXED',0,1,30,NULL,NULL,1,1,clock_timestamp(),clock_timestamp(),'system:seed','system:seed'),
+        ('rp-prop-seoul-corp','prop-seoul','CORP','기업체 계약 요금','기업체 협약 고객용 요금','KRW','CORPORATE','ROOM_ONLY','DAY_1','DIRECT_BILL','FIXED',0,1,30,NULL,NULL,1,1,clock_timestamp(),clock_timestamp(),'system:seed','system:seed')
+      ON CONFLICT(property_id,code) DO NOTHING;
 
-INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by)
-SELECT rp.property_id,rp.id,rt.id,rt.base_rate,1,1,clock_timestamp(),'system:seed'
-FROM rate_plans rp
-JOIN room_types rt ON rt.property_id=rp.property_id
-WHERE rp.property_id='prop-seoul'
-ON CONFLICT(property_id,rate_plan_id,room_type_id) DO NOTHING;
+      INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by)
+      SELECT rp.property_id,rp.id,rt.id,rt.base_rate,1,1,clock_timestamp(),'system:seed'
+      FROM rate_plans rp
+      JOIN room_types rt ON rt.property_id=rp.property_id
+      WHERE rp.property_id='prop-seoul'
+      ON CONFLICT(property_id,rate_plan_id,room_type_id) DO NOTHING
+    $sql$;
+  END IF;
+END
+$seed_rate_plans$;
 
 INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,version,active) VALUES
   ('room-101','prop-seoul','rt-dlx','101',1,'VACANT','CLEAN','["금연"]',1,1),
