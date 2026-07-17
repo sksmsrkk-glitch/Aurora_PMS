@@ -4,7 +4,7 @@ VALUES ('prop-seoul','오로라 서울 호텔','SEL01','Asia/Seoul','KRW','2026-
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO role_assignments(id,property_id,email,role,active,created_at) VALUES
-  ('role-local-admin','prop-seoul','frontdesk@aurora.hotel','PROPERTY_ADMIN',1,clock_timestamp()::text)
+  ('role-local-pms-admin','prop-seoul','pms@allmytour.com','PROPERTY_ADMIN',1,clock_timestamp()::text)
 ON CONFLICT (property_id,email) DO NOTHING;
 
 INSERT INTO room_types(id,property_id,code,name,base_rate,capacity,description,active,version) VALUES
