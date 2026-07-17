@@ -9,7 +9,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "test": "npm run build && npm run test:unit",
+    "test:unit": "node --test tests/*.test.mjs",
+    "test:integration": "node --test tests/postgres-*.integration.mjs",
+    "test:ci": "npm run lint && npm run build && npm run test:unit && npm run test:integration",
     "qa:workflow": "node scripts/qa-full-workflow.mjs",
     "qa:booking": "node scripts/qa-booking-engine.mjs",
     "qa:website": "node scripts/qa-website-cms.mjs",
@@ -17,7 +20,8 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work",
     "db:supabase:migrate": "node scripts/migrate-supabase.mjs",
     "db:supabase:smoke": "node scripts/smoke-supabase.mjs",
-    "db:provision-role": "node scripts/provision-role.mjs"
+    "db:provision-role": "node scripts/provision-role.mjs",
+    "db:test:bootstrap": "node scripts/bootstrap-test-postgres.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.2",

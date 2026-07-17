@@ -1,0 +1,62 @@
+name: Aurora PMS CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aurora-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Lint, build, behavior and PostgreSQL tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aurora_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aurora_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DIRECT_URL: postgres://postgres:postgres@127.0.0.1:5432/aurora_ci
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/aurora_ci
+      AURORA_REQUIRE_POSTGRES_TESTS: "true"
+      NODE_ENV: test
+      AUTH_SECRET: ci-only-auth-secret-with-at-least-thirty-two-characters
+      PMS_ALLOW_LOCAL_ADMIN: "false"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Production build
+        run: npm run build
+      - name: Unit and behavior tests
+        run: npm run test:unit
+      - name: Prepare isolated PostgreSQL
+        run: npm run db:test:bootstrap
+      - name: Apply every migration to an empty database
+        run: npm run db:supabase:migrate
+      - name: PostgreSQL integration and concurrency tests
+        run: npm run test:integration
