@@ -46,10 +46,10 @@
 | `cancel_reservation` / `mark_no_show` | `reservationId`, `reason` | `DUE_IN`, 타입/객실 nights와 group pickup 복원 |
 | `update_inventory_control` | `roomTypeId`, `stayDate`, sellLimit, closed, `websiteClosed`, minStay, CTA/CTD, priceOverride | 물리 객실·확정 예약 이하 sell limit 금지, 공식 홈페이지 판매 독립 제어 |
 | `bulk_update_inventory_controls` | `from`, `to`, `roomTypeIds`, `weekdays`, 재고 필드, `websiteClosed`, 선택 mapping/channel sell/net | 730일, 5,000셀, 타입 유효, 홈페이지 노출 유지/허용/중지, 입금가≤판매가, 계약 존재 |
-| `update_website_settings` | 버전, 공개 여부, 호텔/브랜드/Hero/섹션/연락처/체크인·아웃 필드 | `ADMIN`, 필수 길이·이메일·시간, optimistic version |
+| `update_website_settings` | 버전, 공개 여부, 호텔/브랜드/Hero/섹션/연락처/체크인·아웃, hero media/layout/overlay/height/CTA, accent, navigation JSON | `ADMIN`, 필수 길이·이메일·시간, 고정 섹션 allowlist·유일성·최소 1개 노출, 안전한 CTA target·hex color, optimistic version |
 | `update_room_type_website` | `roomTypeId`, 버전, 공개, 순서, 마케팅명, 짧은/상세 소개, amenities JSON | 활성 타입, 최대 20개 편의시설, optimistic version |
-| `upload_website_media` | scope, 선택 `roomTypeId`, role, alt, order, filename, image data URL | `ADMIN`, JPEG/PNG/WebP, 3MB, scope/type 관계, server-only Storage write |
-| `delete_website_media` | `mediaId` | property scope, Storage object와 metadata 삭제, 감사 로그 |
+| `upload_website_media` | 선택적 client UUID, scope, 선택 `roomTypeId`, role, alt, order, filename, image data URL | `ADMIN`, JPEG/PNG/WebP, decode 후 3MB·base64 transport 4.2MB, scope/type 관계, server-only Storage write |
+| `delete_website_media` | `mediaId` | property scope, Storage object와 metadata 삭제, 선택된 hero pointer 원자 해제, 감사 로그 |
 | `create_business_block` | 프로필, block code/name, 일정, status, deduct flag, cutoff | 일정·코드·프로필 검증 |
 | `update_block_inventory` | `blockId`, 타입·날짜별 original/current/rate | picked-up 이하 감소 금지, 하우스 capacity |
 | `add_rooming_entry` / `pickup_rooming_entry` | block, 고객, 일정, 타입, 요금 | block 일정·할당, 중복 pickup, 예약 재고 원자 전환 |

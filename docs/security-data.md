@@ -109,6 +109,7 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `202607170011_native_temporal_types.sql` | 날짜·시각 native type | 28+ date, 66+ timestamptz, time 컬럼 전환, date 기반 inventory lock·pickup trigger |
 | `202607170012_rate_plan_domain.sql` | 정규화 Rate Plan | 요금제·객실 매핑·일자별 요금 3개 테이블, 예약·채널 rate code FK, 3개 RLS policy와 직판 기본값 |
 | `202607170013_native_flags_json_constraints.sql` | native flag·payload·예약 제약 | 24개 flag boolean, 12개 JSONB payload, JSON shape와 양수 숙박일·인원·요금·상태 제약 |
+| `202607170014_website_visual_editor.sql` | 홈페이지 비주얼 편집 | hero media/layout/overlay/height/CTA, theme accent, 고정 3섹션 navigation JSONB와 DB CHECK |
 
 ### 핵심 PostgreSQL 함수와 트리거
 

@@ -4,6 +4,13 @@ import type {
   PmsDatabase,
   PmsPreparedStatement,
 } from "../../../db/pms-database";
+import {
+  boundedInteger,
+  normalizeAccentColor,
+  normalizeHeroCtaHref,
+  normalizeHeroLayout,
+  validateWebsiteNavigation,
+} from "../../website-editor-contract";
 
 type Principal = { email: string; capabilities: string[]; propertyId: string };
 type Body = Record<string, string>;
@@ -511,6 +518,15 @@ export async function handleExtendedAction(
     if (!current) throw new PmsExtendedError("홈페이지 설정이 초기화되지 않았습니다.", 409);
     const version = Math.trunc(asNumber(body.version, "설정 버전", 1));
     if (version !== Number(current.version)) throw new PmsExtendedError("다른 관리자가 먼저 수정했습니다. 새로고침 후 다시 저장하세요.", 409);
+    const navigationInput = body.navigationJson ?? current.navigation_json;
+    let navigation;
+    try { navigation = validateWebsiteNavigation(navigationInput); }
+    catch (error) { throw new PmsExtendedError(error instanceof Error ? error.message : "메뉴 설정을 확인하세요."); }
+    const heroMediaId = (body.heroMediaId ?? String(current.hero_media_id || "")).trim() || null;
+    if (heroMediaId) {
+      const heroMedia = await db.prepare("SELECT id FROM website_media WHERE id=? AND property_id=? AND scope='HOTEL' AND active").bind(heroMediaId, propertyId).first();
+      if (!heroMedia) throw new PmsExtendedError("선택한 히어로 이미지를 찾지 못했습니다.", 404);
+    }
     const values = {
       hotelName: requiredCmsText(body.hotelName, "호텔명", 100),
       brandEyebrow: requiredCmsText(body.brandEyebrow, "브랜드 문구", 120),
@@ -528,10 +544,27 @@ export async function handleExtendedAction(
       checkinTime: /^\d{2}:\d{2}$/u.test(body.checkinTime || "") ? body.checkinTime : "15:00",
       checkoutTime: /^\d{2}:\d{2}$/u.test(body.checkoutTime || "") ? body.checkoutTime : "11:00",
       published: body.published === "true",
+      heroMediaId,
+      heroLayout: normalizeHeroLayout(body.heroLayout ?? current.hero_layout),
+      heroOverlay: boundedInteger(body.heroOverlay ?? current.hero_overlay, 60, 0, 90),
+      heroHeight: boundedInteger(body.heroHeight ?? current.hero_height, 720, 520, 960),
+      heroCtaLabel: requiredCmsText(body.heroCtaLabel ?? String(current.hero_cta_label || "객실 둘러보기"), "히어로 버튼명", 40),
+      heroCtaHref: normalizeHeroCtaHref(body.heroCtaHref ?? current.hero_cta_href),
+      bookingCtaLabel: requiredCmsText(body.bookingCtaLabel ?? String(current.booking_cta_label || "예약하기"), "예약 버튼명", 30),
+      themeAccent: normalizeAccentColor(body.themeAccent ?? current.theme_accent),
+      navigation,
     };
+    if (body.heroLayout !== undefined && values.heroLayout !== body.heroLayout) throw new PmsExtendedError("히어로 텍스트 배치를 확인하세요.");
+    if (body.heroOverlay !== undefined && (Number(body.heroOverlay) !== values.heroOverlay || values.heroOverlay < 0 || values.heroOverlay > 90)) throw new PmsExtendedError("히어로 이미지 어둡기는 0~90으로 설정하세요.");
+    if (body.heroHeight !== undefined && (Number(body.heroHeight) !== values.heroHeight || values.heroHeight < 520 || values.heroHeight > 960)) throw new PmsExtendedError("히어로 높이는 520~960px로 설정하세요.");
+    if (body.heroCtaHref !== undefined && values.heroCtaHref !== body.heroCtaHref) throw new PmsExtendedError("히어로 버튼 연결 위치를 확인하세요.");
+    if (body.themeAccent !== undefined && values.themeAccent !== String(body.themeAccent).toUpperCase()) throw new PmsExtendedError("강조색은 #RRGGBB 형식으로 입력하세요.");
+    if (values.heroCtaHref.startsWith("#") && !navigation.find((item)=>`#${item.id}`===values.heroCtaHref)?.enabled) throw new PmsExtendedError("히어로 버튼이 연결될 섹션을 먼저 노출하세요.");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(values.email)) throw new PmsExtendedError("홈페이지 문의 이메일을 확인하세요.");
     const statements: PmsPreparedStatement[] = [
-      db.prepare("UPDATE website_settings SET hotel_name=?,brand_eyebrow=?,hero_title=?,hero_subtitle=?,overview_title=?,overview_body=?,experience_title=?,experience_body=?,location_title=?,location_body=?,address=?,phone=?,email=?,checkin_time=?,checkout_time=?,published=?,version=version+1,updated_at=?,updated_by=? WHERE property_id=? AND version=?").bind(values.hotelName,values.brandEyebrow,values.heroTitle,values.heroSubtitle,values.overviewTitle,values.overviewBody,values.experienceTitle,values.experienceBody,values.locationTitle,values.locationBody,values.address,values.phone,values.email,values.checkinTime,values.checkoutTime,values.published,now,actor,propertyId,version),
+      // postgres.js serializes an array as a JSON array for jsonb. Passing an
+      // already-stringified value would store a JSON string scalar instead.
+      db.prepare("UPDATE website_settings SET hotel_name=?,brand_eyebrow=?,hero_title=?,hero_subtitle=?,overview_title=?,overview_body=?,experience_title=?,experience_body=?,location_title=?,location_body=?,address=?,phone=?,email=?,checkin_time=?,checkout_time=?,published=?,hero_media_id=?,hero_layout=?,hero_overlay=?,hero_height=?,hero_cta_label=?,hero_cta_href=?,booking_cta_label=?,theme_accent=?,navigation_json=?,version=version+1,updated_at=?,updated_by=? WHERE property_id=? AND version=?").bind(values.hotelName,values.brandEyebrow,values.heroTitle,values.heroSubtitle,values.overviewTitle,values.overviewBody,values.experienceTitle,values.experienceBody,values.locationTitle,values.locationBody,values.address,values.phone,values.email,values.checkinTime,values.checkoutTime,values.published,values.heroMediaId,values.heroLayout,values.heroOverlay,values.heroHeight,values.heroCtaLabel,values.heroCtaHref,values.bookingCtaLabel,values.themeAccent,values.navigation,now,actor,propertyId,version),
       audit(db,propertyId,actor,"UPDATE_WEBSITE_SETTINGS","website_settings",propertyId,{...values,version:version+1},now),
     ];
     const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);
@@ -564,8 +597,12 @@ export async function handleExtendedAction(
     const roomTypeId=scope==="ROOM_TYPE"?body.roomTypeId:null;
     if (roomTypeId&&!await db.prepare("SELECT id FROM room_types WHERE id=? AND property_id=? AND active").bind(roomTypeId,propertyId).first()) throw new PmsExtendedError("이미지를 연결할 객실 타입을 찾지 못했습니다.");
     const altText=requiredCmsText(body.altText,"이미지 대체 설명",180);
+    const requestedId=(body.mediaId||"").trim();
+    if(requestedId&&!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(requestedId))throw new PmsExtendedError("이미지 식별자 형식을 확인하세요.");
+    const id=requestedId||crypto.randomUUID(),sortOrder=Math.trunc(asNumber(body.sortOrder||"0","이미지 순서"));
+    // Validate every metadata field before creating an external Storage object;
+    // otherwise a rejected client UUID or order could leave an orphaned file.
     const uploaded=await uploadWebsiteObject(body.dataUrl||"",body.filename||"image",propertyId);
-    const id=crypto.randomUUID(),sortOrder=Math.trunc(asNumber(body.sortOrder||"0","이미지 순서"));
     try {
       const statements:PmsPreparedStatement[]=[
         db.prepare("INSERT INTO website_media(id,property_id,scope,room_type_id,role,object_path,public_url,alt_text,sort_order,active,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,true,?,?)").bind(id,propertyId,scope,roomTypeId,role,uploaded.objectPath,uploaded.publicUrl,altText,sortOrder,now,actor),
@@ -585,6 +622,9 @@ export async function handleExtendedAction(
     await deleteWebsiteObject(String(media.object_path));
     const statements:PmsPreparedStatement[]=[
       db.prepare("DELETE FROM website_media WHERE id=? AND property_id=?").bind(body.mediaId,propertyId),
+      // Clearing the optional pointer in the same transaction keeps the visual
+      // editor and public fallback deterministic when the selected hero is deleted.
+      db.prepare("UPDATE website_settings SET hero_media_id=NULL,version=version+1,updated_at=?,updated_by=? WHERE property_id=? AND hero_media_id=?").bind(now,actor,propertyId,body.mediaId),
       audit(db,propertyId,actor,"DELETE_WEBSITE_MEDIA","website_media",body.mediaId,{publicUrl:media.public_url},now),
     ];
     const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);

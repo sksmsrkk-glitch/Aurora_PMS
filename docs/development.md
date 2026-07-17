@@ -272,15 +272,15 @@ PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONF
 | 격리 Vercel/Supabase staging | `qa:workflow` 24개 핵심 checkpoint; health ref proof·실제 Supabase Auth·중단 캐셔 조건부 복구 포함 |
 | 로컬 Next.js + 격리 PostgreSQL | 24개 핵심 checkpoint와 필요 시 중단 캐셔 복구, `qa:public` SEO·CSS·검색 smoke |
 | Vercel Seoul Production + 실제 Supabase | 배포마다 같은 workflow·booking·CMS gate를 새 run ID로 기록 |
-| Node test suite | 36/36 tests 통과, production build·TypeScript 포함 |
-| 홈페이지 CMS E2E | 공개 projection, 동일 콘텐츠 version 저장, 잘못된 날짜 400, WEB OFF 제외·복원, Storage upload/public read/delete 통과 |
+| Node test suite | 28개 unit/behavior + 9개 PostgreSQL integration gate, production build·TypeScript 포함 |
+| 홈페이지 CMS E2E | 공개 projection, visual settings 저장, hero 이미지 선택·원상 복원, 잘못된 날짜 400, WEB OFF 제외·복원, Storage upload/public read/delete 통과 |
 | Supabase smoke | 51 tables, 29 application triggers(public schema), 79 validated FK, 51 RLS tables, 3개 공개 객실, Storage bucket·pooler 정상, 임의 SQL RPC 0 |
 | 데이터 감사 | 26개 관계·재고·원장·상태 검사, violation 0 |
 | Auth E2E | login 200, access/refresh HttpOnly·Secure·SameSite=Lax, `PROPERTY_ADMIN`, cross-property 401, logout 200 |
 | 500객실 경쟁 | 동시 응답 200/409, 최종 500실, 부분 commit 0, replay header true, QA 객실 정리 완료 |
 | 직접 예약 E2E | 실시간 조회, 예약 201, 동일 key 200, 취소 200, 중복 취소 200, 재고 원복 |
 | 격리 홈페이지 CMS E2E | homepage 200, 게시 객실 3, 검색 offer 3, 잘못된 날짜 400, 설정 version 증가, WEB OFF 제외·복원, media lifecycle 통과 |
-| 반응형 브라우저 QA | 1440px desktop·390px mobile, 가로 scroll 0, 홈페이지 검색 날짜 자동 보정, 공개 객실 3개, CMS 3개 탭·16개 기본 필드, 재고 WEB 노출 selector, 콘솔 오류 0 |
+| 반응형 브라우저 QA | 1440px desktop·390px mobile, 가로 scroll 0, 홈페이지 검색 날짜 자동 보정, 공개 객실 3개, CMS 3개 탭·visual editor 3개 control group·hero picker·메뉴 3행·preview device 전환, 재고 WEB 노출 selector, 콘솔 오류 0 |
 | PMS 헤드리스 UI 전수 QA | 13개 업무 화면 가로 overflow 0, 10개 업무 검색 영역 필터·초기화 정상, 17개 dialog/drawer 포커스·Escape·action bar 정상, 객실 타입 modal 860px→416px, 모바일 modal 최대 92dvh |
 | 리포트 브라우저 QA | 11/11 서버 리포트 오류 0, 키워드 0건·초기화 복원, CSV `Aurora_room_inventory_2026-07-16.csv`, XLSX `Aurora_객실_마스터_2026-07-16.xlsx` 실제 다운로드 |
 | Core benchmark | Vercel `icn1`, 200 requests, concurrency 10, 실패 0, 252.04 req/s, p50 36.13ms, p95 53.20ms, p99 96.01ms |

@@ -57,6 +57,13 @@ test("ARI dispatch validates the identifier emitted by the channel UI",()=>{
   }).success,true);
 });
 
+test("website image transport allows base64 expansion but rejects oversized payloads",()=>{
+  const registration=registrationFor("upload_website_media");
+  const prefix="data:image/png;base64,";
+  assert.equal(registration.schema.safeParse({action:"upload_website_media",scope:"HOTEL",filename:"hero.png",dataUrl:prefix+"A".repeat(3_900_000)}).success,true);
+  assert.equal(registration.schema.safeParse({action:"upload_website_media",scope:"HOTEL",filename:"hero.png",dataUrl:prefix+"A".repeat(4_200_000)}).success,false);
+});
+
 test("database errors map through a stable table instead of includes branches",()=>{
   assert.deepEqual(mapPmsError("duplicate key violates room_night_uq"),{
     status:409,error:"선택한 객실은 해당 일정에 이미 예약되어 있습니다. 다른 객실을 선택하세요.",

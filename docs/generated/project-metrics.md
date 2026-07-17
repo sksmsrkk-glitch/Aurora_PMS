@@ -3,17 +3,17 @@
 
 | 지표 | 현재 값 | 계산 원본 |
 | --- | ---: | --- |
-| Migration | 18 | `supabase/migrations/*.sql` |
-| 런타임 스키마 계약 | `202607170013_native_flags_json_constraints` | 정렬상 마지막 migration |
+| Migration | 19 | `supabase/migrations/*.sql` |
+| 런타임 스키마 계약 | `202607170014_website_visual_editor` | 정렬상 마지막 migration |
 | Public table 선언 | 54 | 고유 `CREATE TABLE` |
 | Application trigger 선언 | 29 | 고유 `CREATE TRIGGER` |
 | Foreign key 선언 | 83 | 고유 named FK constraint |
 | Tenant RLS 대상 | 51 | RLS enable 선언과 tenant table catalog |
 | 등록 PMS action | 52 | action registry key |
-| Unit/behavior test | 24 | `tests/*.test.mjs`의 test case |
+| Unit/behavior test | 28 | `tests/*.test.mjs`의 test case |
 | PostgreSQL integration test | 9 | `tests/*.integration.mjs`의 test case |
-| PMS CSS source | 93,268 bytes / 6 files | root PMS layout imports |
-| Public hotel CSS source | 21,287 bytes / 1 file | isolated `app/hotel/hotel.css` |
+| PMS CSS source | 104,166 bytes / 6 files | root PMS layout imports |
+| Public hotel CSS source | 22,277 bytes / 1 file | isolated `app/hotel/hotel.css` |
 | 상세 문서 | 7 files | `docs/*.md` (generated 제외) |
 
 이 표는 소스 선언 수를 보여 줍니다. 배포 대상의 실제 catalog는 `npm run db:contract:verify`와 `npm run db:supabase:smoke`가 별도로 검증합니다.

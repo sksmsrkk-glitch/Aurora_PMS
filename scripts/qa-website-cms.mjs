@@ -27,6 +27,13 @@ async function responseJson(path,options={}){const headers=new Headers(options.h
 async function websiteAdmin(){const result=await responseJson("/api/pms?view=website");assert.equal(result.response.status,200,result.body?.error);return result.body;}
 async function action(action,payload={}){const result=await responseJson("/api/pms",{method:"POST",headers:{origin:baseUrl,"content-type":"application/json","idempotency-key":`website-qa:${action}:${crypto.randomUUID()}`},body:JSON.stringify({action,...payload})});assert.equal(result.response.status,200,result.body?.error);return result.body;}
 async function availability(){return responseJson(`/api/booking/availability?${new URLSearchParams({arrival,departure,adults:"2",children:"0"})}`);}
+function settingsPayload(settings,overrides={}){
+  return {
+    version:String(settings.version),published:String(Boolean(settings.published)),hotelName:String(settings.hotel_name),brandEyebrow:String(settings.brand_eyebrow),heroTitle:String(settings.hero_title),heroSubtitle:String(settings.hero_subtitle),overviewTitle:String(settings.overview_title),overviewBody:String(settings.overview_body),experienceTitle:String(settings.experience_title),experienceBody:String(settings.experience_body),locationTitle:String(settings.location_title),locationBody:String(settings.location_body),address:String(settings.address),phone:String(settings.phone),email:String(settings.email),checkinTime:String(settings.checkin_time).slice(0,5),checkoutTime:String(settings.checkout_time).slice(0,5),
+    heroMediaId:String(settings.hero_media_id||""),heroLayout:String(settings.hero_layout),heroOverlay:String(settings.hero_overlay),heroHeight:String(settings.hero_height),heroCtaLabel:String(settings.hero_cta_label),heroCtaHref:String(settings.hero_cta_href),bookingCtaLabel:String(settings.booking_cta_label),themeAccent:String(settings.theme_accent),navigationJson:JSON.stringify(settings.navigation_json),
+    ...overrides,
+  };
+}
 
 await authenticateIfConfigured();
 const adminBefore=await websiteAdmin();
@@ -35,6 +42,8 @@ assert.ok(adminBefore.rooms.some(room=>room.published===true));
 const homepage=await fetch(`${baseUrl}/hotel`),html=await homepage.text();
 assert.equal(homepage.status,200);
 assert.ok(html.includes(String(adminBefore.settings.hero_title)));
+assert.ok(html.includes(String(adminBefore.settings.navigation_json[0].label)));
+assert.ok(html.includes(`hero-layout-${String(adminBefore.settings.hero_layout).toLowerCase()}`));
 
 const invalid=await responseJson(`/api/booking/availability?${new URLSearchParams({arrival,departure:arrival,adults:"2",children:"0"})}`);
 assert.equal(invalid.response.status,400);
@@ -47,9 +56,7 @@ const offer=before.body.offers[0];
 
 // Saving identical content exercises optimistic versioning without changing copy.
 const settings=adminBefore.settings;
-await action("update_website_settings",{
-  version:String(settings.version),published:String(Boolean(settings.published)),hotelName:String(settings.hotel_name),brandEyebrow:String(settings.brand_eyebrow),heroTitle:String(settings.hero_title),heroSubtitle:String(settings.hero_subtitle),overviewTitle:String(settings.overview_title),overviewBody:String(settings.overview_body),experienceTitle:String(settings.experience_title),experienceBody:String(settings.experience_body),locationTitle:String(settings.location_title),locationBody:String(settings.location_body),address:String(settings.address),phone:String(settings.phone),email:String(settings.email),checkinTime:String(settings.checkin_time),checkoutTime:String(settings.checkout_time),
-});
+await action("update_website_settings",settingsPayload(settings));
 const adminSaved=await websiteAdmin();
 assert.equal(Number(adminSaved.settings.version),Number(settings.version)+1);
 
@@ -67,16 +74,24 @@ try {
 const restored=await availability();
 assert.ok(restored.body.offers.some(item=>item.roomTypeId===offer.roomTypeId),"WEB ON did not restore the room offer");
 
-let mediaId="";
+let mediaId="",visualChanged=false;
 try {
   const altText=`Website QA ${crypto.randomUUID().slice(0,8)}`;
-  await action("upload_website_media",{scope:"HOTEL",roomTypeId:"",role:"GALLERY",altText,sortOrder:"999",filename:"qa-pixel.png",dataUrl:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="});
+  mediaId=crypto.randomUUID();
+  await action("upload_website_media",{mediaId,scope:"HOTEL",roomTypeId:"",role:"HERO",altText,sortOrder:"999",filename:"qa-pixel.png",dataUrl:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="});
   const uploaded=(await websiteAdmin()).media.find(item=>item.alt_text===altText);
-  assert.ok(uploaded,"Uploaded website media metadata is missing");mediaId=uploaded.id;
+  assert.ok(uploaded,"Uploaded website media metadata is missing");assert.equal(uploaded.id,mediaId);
   const image=await fetch(uploaded.public_url);assert.equal(image.status,200);
+  const beforeVisual=(await websiteAdmin()).settings;
+  const alternateLayout=beforeVisual.hero_layout==="CENTER"?"LEFT":"CENTER";
+  await action("update_website_settings",settingsPayload(beforeVisual,{heroMediaId:mediaId,heroLayout:alternateLayout}));visualChanged=true;
+  const selected=(await websiteAdmin()).settings;
+  assert.equal(selected.hero_media_id,mediaId);assert.equal(selected.hero_layout,alternateLayout);
+  await action("update_website_settings",settingsPayload(selected,{heroMediaId:String(settings.hero_media_id||""),heroLayout:String(settings.hero_layout)}));visualChanged=false;
 } finally {
+  if(visualChanged){const current=(await websiteAdmin()).settings;await action("update_website_settings",settingsPayload(current,{heroMediaId:String(settings.hero_media_id||""),heroLayout:String(settings.hero_layout)}));}
   if(mediaId)await action("delete_website_media",{mediaId});
 }
 assert.ok(!(await websiteAdmin()).media.some(item=>item.id===mediaId));
 
-console.log(JSON.stringify({homepage:homepage.status,publishedRooms:adminBefore.rooms.filter(room=>room.published===true).length,offers:before.body.offers.length,invalidDateStatus:invalid.response.status,settingsVersioned:true,webStopSell:true,webRestore:true,mediaLifecycle:true}));
+console.log(JSON.stringify({homepage:homepage.status,publishedRooms:adminBefore.rooms.filter(room=>room.published===true).length,offers:before.body.offers.length,invalidDateStatus:invalid.response.status,settingsVersioned:true,visualEditor:true,heroSelection:true,webStopSell:true,webRestore:true,mediaLifecycle:true}));
