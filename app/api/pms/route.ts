@@ -209,7 +209,7 @@ async function initializePostgres(db: D1) {
   const results = await db.batch([
     ...tables.map((table)=>db.prepare(`SELECT 1 FROM ${table} LIMIT 1`)),
     db.prepare("SELECT id FROM properties WHERE id='prop-seoul'"),
-    db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", new Date().toISOString()),
+    db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'pms@allmytour.com', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-pms-admin", new Date().toISOString()),
   ]);
   const property = results[tables.length]?.results[0];
   if (!property) throw new Error("Supabase PMS schema exists but the property seed is missing.");
@@ -222,7 +222,7 @@ async function initialize(db: D1) {
   try { propertyExists = Boolean(await db.prepare("SELECT id FROM properties WHERE id='prop-seoul' LIMIT 1").first()); await db.prepare("SELECT id FROM reservation_type_nights LIMIT 1").first(); await db.prepare("SELECT id FROM business_blocks LIMIT 1").first(); await db.prepare("SELECT id FROM folio_windows LIMIT 1").first(); await db.prepare("SELECT id FROM channel_connections LIMIT 1").first(); }
   catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
   const now = new Date().toISOString();
-  await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'frontdesk@aurora.hotel', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-admin", now).run();
+  await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'pms@allmytour.com', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-pms-admin", now).run();
   if (propertyExists) { await ensureReportingModel(db); await ensureWebsiteModel(db,now); await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await ensureExtendedModel(db,now); await backfillLegacyNights(db,now); return; }
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
@@ -367,7 +367,7 @@ async function principalFor(request: Request, db: D1): Promise<Principal | null>
   const url = new URL(request.url), identity = await authenticateSupabaseRequest(request);
   let email = identity?.email || null, displayName = identity?.displayName || "";
   const localRequest = ["localhost", "127.0.0.1"].includes(url.hostname);
-  if (!email && localRequest) { email = "frontdesk@aurora.hotel"; displayName = "Aurora Local Admin"; }
+  if (!email && localRequest) { email = "pms@allmytour.com"; displayName = "Aurora PMS Admin"; }
   if (!email && process.env.NODE_ENV !== "production" && process.env.PMS_ALLOW_DEMO_AUTH === "true") {
     email = process.env.PMS_DEMO_USER_EMAIL?.trim().toLowerCase() || null;
     displayName = email || "";

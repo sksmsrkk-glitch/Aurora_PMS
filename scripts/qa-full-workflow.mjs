@@ -339,7 +339,7 @@ async function main() {
   }
   record("캐셔 마감·차이 기록");
 
-  const finalReports = await request(`/api/pms?${new URLSearchParams({ view: "report", report: "audit", from: businessDate, to: addDays(businessDate, 30), q: "frontdesk@aurora.hotel", page: "1", pageSize: "100" })}`);
+  const finalReports = await request(`/api/pms?${new URLSearchParams({ view: "report", report: "audit", from: businessDate, to: addDays(businessDate, 30), q: "pms@allmytour.com", page: "1", pageSize: "100" })}`);
   assert.equal(finalReports.response.status, 200);
   assert.ok(finalReports.json.pagination.total > 0);
   record("감사 로그 키워드 추적", `${finalReports.json.pagination.total}건`);

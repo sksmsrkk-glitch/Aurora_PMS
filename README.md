@@ -734,6 +734,7 @@ stay availability = minimum available across all stay nights
 | `202607170003_booking_engine.sql` | PMS 직접 예약 | `booking_requests`, immutable `reservation_rate_nights`, 4개 validated FK, RLS/revoke |
 | `202607170004_website_cms.sql` | 호텔 홈페이지 CMS | `website_settings`, `room_type_website`, `website_media`, `website_closed`, Storage `hotel-media` bucket, 5개 FK, RLS/revoke와 초기 콘텐츠 |
 | `202607170005_website_seed_visibility.sql` | 공개 객실 초기화 | 운영 3개 타입만 초기 게시하고 신규·QA 타입은 관리자 검토 후 게시하도록 분리 |
+| `202607170006_default_admin_identity.sql` | 기본 관리자 계정 전환 | `pms@allmytour.com`에 `PROPERTY_ADMIN`을 부여하고 기존 `frontdesk@aurora.hotel` 기본 할당을 비활성화 |
 
 ### 핵심 PostgreSQL 함수와 트리거
 
@@ -828,7 +829,7 @@ Idempotency-Key: <unique-key>
 1. `Authorization: Bearer` 또는 `aurora-pms-access` cookie의 access token header를 읽습니다. ES256/RS256이면 Supabase JWKS로 서명·`iss`·`aud=authenticated`·`exp`를 서버에서 검증하고, legacy HS256 또는 JWKS 장애일 때만 `/auth/v1/user`로 검증합니다.
 2. access token이 만료됐고 bearer 요청이 아니라면 HttpOnly refresh cookie로 새 session을 발급하고 두 cookie를 rotation합니다.
 3. Production에서는 검증된 Supabase identity가 없으면 `401`입니다.
-4. localhost는 회귀 테스트를 위해 `frontdesk@aurora.hotel` local principal을 사용할 수 있습니다.
+4. localhost는 회귀 테스트를 위해 `pms@allmytour.com` local principal을 사용할 수 있습니다.
 5. Production이 아닌 환경에서만 `PMS_ALLOW_DEMO_AUTH=true`와 `PMS_DEMO_USER_EMAIL`이 함께 설정된 경우 explicit demo fallback이 허용됩니다.
 6. `role_assignments`에서 해당 email의 활성 property/role을 조회합니다. `x-aurora-property-id`가 있으면 assignment에 포함된 property인지 확인합니다.
 7. access token identity와 역할/property assignment는 각각 30초 cache하며 키는 token hash 또는 `email + requested property`로 격리합니다. 같은 Vercel instance에 동시에 도착한 동일 token/assignment 검증은 하나의 in-flight Promise로 병합합니다.
@@ -1092,7 +1093,7 @@ DATABASE_URL=postgresql://<user>:<password>@<pooler-host>:6543/postgres?sslmode=
 DIRECT_URL=postgresql://<user>:<password>@<session-or-direct-host>:5432/postgres?sslmode=require
 # 개발 회귀에서만 선택적으로 사용
 PMS_ALLOW_DEMO_AUTH=false
-# PMS_DEMO_USER_EMAIL=frontdesk@aurora.hotel
+# PMS_DEMO_USER_EMAIL=pms@allmytour.com
 ```
 
 - `SUPABASE_URL`: Project API URL
@@ -1408,7 +1409,8 @@ Aurora_PMS/
 │  │  ├─ 202607170002_large_atomic_batch.sql
 │  │  ├─ 202607170003_booking_engine.sql
 │  │  ├─ 202607170004_website_cms.sql
-│  │  └─ 202607170005_website_seed_visibility.sql
+│  │  ├─ 202607170005_website_seed_visibility.sql
+│  │  └─ 202607170006_default_admin_identity.sql
 │  └─ seed.sql
 ├─ tests/
 │  ├─ pms-invariants.test.mjs
@@ -1594,6 +1596,7 @@ Aurora_PMS/
 
 | Commit | 작업 |
 | --- | --- |
+| 2026-07-17 admin identity reset | Supabase Auth `pms@allmytour.com` 운영자 생성·확인, PROPERTY_ADMIN 할당, 기존 frontdesk 기본 할당 비활성화, local seed·fallback·QA·migration 동기화 |
 | 2026-07-17 source comment audit | 전체 유지보수 소스 주석 재감사, PMS API·직접 예약·DB adapter·재고·회계·채널 계약·인증·migration·workflow QA의 설계 이유와 불변조건 보강, 대형 파일 주석 품질 자동 gate 및 문서화 기준 추가 |
 | 2026-07-17 search & overlay audit | 13개 PMS 화면 헤드리스 재검증, 공용 목록 검색·빈 상태·결과 건수, 리포트 초기화, 중첩 dialog 포커스 복원, sticky action bar, 객실 modal 높이 충돌 제거, 모바일 390px QA, 개발 CSP 보정 |
 | 2026-07-17 website CMS release | 호텔/객실 소개 CMS, Supabase Storage 이미지, 객실 게시·정렬·편의시설, 재고 WEB OFF, 날짜 검색 보정, 모바일 UI, CMS/Storage E2E와 전체 코드 주석 감사 |
