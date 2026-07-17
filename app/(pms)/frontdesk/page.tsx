@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable frontdesk workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function FrontdeskPage() {
-  return <PmsShell initialSection="frontdesk" />;
+  return null;
 }

@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable master workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function MasterPage() {
-  return <PmsShell initialSection="master" />;
+  return null;
 }

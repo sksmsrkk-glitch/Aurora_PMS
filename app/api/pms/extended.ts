@@ -78,7 +78,9 @@ export async function loadWebsiteAdmin(db: PmsDatabase, propertyId: string) {
   const [settings, rooms, media] = await db.batch([
     db.prepare("SELECT * FROM website_settings WHERE property_id=? LIMIT 1").bind(propertyId),
     db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rt.description,rt.active,rw.published,rw.display_order,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.version website_version FROM room_types rt LEFT JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id=? ORDER BY COALESCE(rw.published,false) DESC,COALESCE(rw.display_order,9999),rt.code").bind(propertyId),
-    db.prepare("SELECT * FROM website_media WHERE property_id=? AND active ORDER BY scope,room_type_id,sort_order,created_at").bind(propertyId),
+    // Inactive rows are deletion tombstones. The admin library keeps them visible
+    // so an operator can retry Storage cleanup after a transient provider failure.
+    db.prepare("SELECT * FROM website_media WHERE property_id=? ORDER BY active DESC,scope,room_type_id,sort_order,created_at").bind(propertyId),
   ]);
   return { settings: settings.results[0] || null, rooms: rooms.results, media: media.results };
 }
@@ -617,14 +619,20 @@ export async function handleExtendedAction(
     return true;
   }
   if (body.action === "delete_website_media") {
-    const media=await db.prepare("SELECT * FROM website_media WHERE id=? AND property_id=? AND active").bind(body.mediaId,propertyId).first<Record<string,unknown>>();
+    const media=await db.prepare("SELECT * FROM website_media WHERE id=? AND property_id=?").bind(body.mediaId,propertyId).first<Record<string,unknown>>();
     if(!media)throw new PmsExtendedError("삭제할 홈페이지 이미지를 찾지 못했습니다.",404);
-    await deleteWebsiteObject(String(media.object_path));
-    const statements:PmsPreparedStatement[]=[
-      db.prepare("DELETE FROM website_media WHERE id=? AND property_id=?").bind(body.mediaId,propertyId),
-      // Clearing the optional pointer in the same transaction keeps the visual
-      // editor and public fallback deterministic when the selected hero is deleted.
+    // Phase 1 commits a tombstone before calling the external object store. Both
+    // public projections filter `active`, so no request can receive a dead URL if
+    // Storage succeeds but the final metadata transaction must be retried.
+    await db.batch([
+      db.prepare("UPDATE website_media SET active=false WHERE id=? AND property_id=? AND active").bind(body.mediaId,propertyId),
       db.prepare("UPDATE website_settings SET hero_media_id=NULL,version=version+1,updated_at=?,updated_by=? WHERE property_id=? AND hero_media_id=?").bind(now,actor,propertyId,body.mediaId),
+    ]);
+    await deleteWebsiteObject(String(media.object_path));
+    // Phase 2 hard-deletes the inactive metadata together with its audit and
+    // idempotency receipt. A DB failure leaves the tombstone available for retry.
+    const statements:PmsPreparedStatement[]=[
+      db.prepare("DELETE FROM website_media WHERE id=? AND property_id=? AND NOT active").bind(body.mediaId,propertyId),
       audit(db,propertyId,actor,"DELETE_WEBSITE_MEDIA","website_media",body.mediaId,{publicUrl:media.public_url},now),
     ];
     const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);

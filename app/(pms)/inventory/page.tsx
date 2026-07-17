@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable inventory workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function InventoryPage() {
-  return <PmsShell initialSection="inventory" />;
+  return null;
 }

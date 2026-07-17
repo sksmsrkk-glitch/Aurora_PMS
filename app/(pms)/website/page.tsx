@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable website workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function WebsitePage() {
-  return <PmsShell initialSection="website" />;
+  return null;
 }

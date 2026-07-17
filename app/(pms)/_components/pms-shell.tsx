@@ -3,15 +3,10 @@
 /** Aurora PMS application shell and cross-domain operational workspaces. */
 
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReportsCenter from "../../reports-center";
-import RoomMaster from "../../room-master";
-import RevenueInventoryCalendar from "../../inventory-calendar";
-import AccountingCenter from "../../accounting-center";
-import ChannelContracts from "../../channel-contracts";
-import HomepageManager from "../../homepage-manager";
 import { useDialogController } from "../../dialog-controller";
 import { ListSearch } from "../../list-search";
 import { PmsActionProvider, usePmsActions } from "../../pms-action-context";
@@ -23,6 +18,25 @@ import {
   pmsWorkspacePath,
   type PmsWorkspace,
 } from "../../pms-workspaces";
+
+/** Heavy, workspace-specific clients are split out of the initial PMS bundle. */
+const workspaceLoading = () => <section className="panel module-loading" aria-live="polite"><b>화면을 준비하고 있습니다</b><p>선택한 업무 모듈만 빠르게 불러오고 있어요.</p></section>;
+const ReportsCenter = dynamic(() => import("../../reports-center"), { loading: workspaceLoading });
+const RoomMaster = dynamic(() => import("../../room-master"), { loading: workspaceLoading });
+const RevenueInventoryCalendar = dynamic(() => import("../../inventory-calendar"), { loading: workspaceLoading });
+const AccountingCenter = dynamic(() => import("../../accounting-center"), { loading: workspaceLoading });
+const ChannelContracts = dynamic(() => import("../../channel-contracts"), { loading: workspaceLoading });
+const HomepageManager = dynamic(() => import("../../homepage-manager"), { loading: workspaceLoading });
+
+/** Warms only the code chunk associated with a user's navigation intent. */
+function prefetchWorkspaceModule(workspace: PmsWorkspace) {
+  if (workspace === "inventory") void import("../../inventory-calendar");
+  if (workspace === "website") void import("../../homepage-manager");
+  if (workspace === "accounting") void import("../../accounting-center");
+  if (workspace === "channels") void import("../../channel-contracts");
+  if (workspace === "reports") void import("../../reports-center");
+  if (workspace === "master") void import("../../room-master");
+}
 
 type Reservation = { id:string; confirmation_no:string; first_name:string; last_name:string; vip_level:string; room_number:string|null; room_type_id:string; room_type_code:string; room_type_name:string; arrival_date:string; departure_date:string; status:string; adults:number; children:number; source:string; rate_plan:string; nightly_rate:number; eta:string|null; notes:string; balance:number; version:number };
 type Room = { id:string; number:string; floor:number; room_type_id:string; room_type_code:string; room_type_name:string; front_desk_status:string; housekeeping_status:string; task_status:string|null; assignee:string|null; features:unknown; active:boolean; version:number };
@@ -80,6 +94,19 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
     if (!target) return;
     router.push(pmsWorkspacePath(target));
   }, [router]);
+  const warmWorkspace = useCallback((workspace: string) => {
+    const target = parsePmsWorkspace(workspace);
+    if (!target) return;
+    router.prefetch(pmsWorkspacePath(target));
+    prefetchWorkspaceModule(target);
+    if (["groups", "finance", "channels"].includes(target)) {
+      void queryClient.prefetchQuery({
+        queryKey: ["pms", "full"],
+        queryFn: () => fetchPmsData("/api/pms"),
+        staleTime: 60_000,
+      });
+    }
+  }, [queryClient, router]);
   useDialogController();
   const load = useCallback(async():Promise<Data|null>=>{ try { const payload=await queryClient.fetchQuery({queryKey:["pms","core"],queryFn:()=>fetchPmsData("/api/pms?view=core")});setData(payload);setCompleteness("core");return payload; } catch(e){if(e instanceof Error&&e.message==="AUTH_REDIRECT")return null;setError(e instanceof Error?e.message:"데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
   const loadFull=useCallback(async():Promise<Data|null>=>{setCompleteness("loading");try{const payload=await queryClient.fetchQuery({queryKey:["pms","full"],queryFn:()=>fetchPmsData("/api/pms")});setData(payload);setCompleteness("full");return payload;}catch(reason){setCompleteness("core");if(reason instanceof Error&&reason.message==="AUTH_REDIRECT")return null;setError(reason instanceof Error?reason.message:"업무 데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
@@ -111,7 +138,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark" aria-hidden="true"><Image src="/brand/aurora-mark-192.png" alt="" width={38} height={38} priority/></span><span><b>AURORA PMS</b><small>HOTEL OPERATIONS</small></span></div>
       <nav aria-label="주 메뉴">
-        {[['overview','⌂','오퍼레이션'],['frontdesk','⇄','프런트 데스크'],['inventory','▤','재고 & 요금'],['website','◇','홈페이지 관리'],['groups','◎','그룹 & 세일즈'],['finance','₩','폴리오 & AR'],['accounting','≋','회계 & 손익'],['channels','⌁','채널 허브'],['rooms','▦','룸 & 하우스키핑'],['reports','◫','리포트 센터'],['master','⚙','객실 마스터'],['revenue','↗','매출 & 인사이트'],['audit','✓','야간 감사']].map(([id,icon,label])=><button type="button" key={id} className={section===id?'active':''} aria-current={section===id?'page':undefined} onClick={()=>{navigateSection(id);setQuickPanel(null);setQuery("")}}><i aria-hidden="true">{icon}</i>{label}{id==='frontdesk'&&<em>{arrivalCount}</em>}</button>)}
+        {[['overview','⌂','오퍼레이션'],['frontdesk','⇄','프런트 데스크'],['inventory','▤','재고 & 요금'],['website','◇','홈페이지 관리'],['groups','◎','그룹 & 세일즈'],['finance','₩','폴리오 & AR'],['accounting','≋','회계 & 손익'],['channels','⌁','채널 허브'],['rooms','▦','룸 & 하우스키핑'],['reports','◫','리포트 센터'],['master','⚙','객실 마스터'],['revenue','↗','매출 & 인사이트'],['audit','✓','야간 감사']].map(([id,icon,label])=><button type="button" key={id} className={section===id?'active':''} aria-current={section===id?'page':undefined} onPointerEnter={()=>warmWorkspace(id)} onPointerDown={()=>warmWorkspace(id)} onFocus={()=>warmWorkspace(id)} onClick={()=>{navigateSection(id);setQuickPanel(null);setQuery("")}}><i aria-hidden="true">{icon}</i>{label}{id==='frontdesk'&&<em>{arrivalCount}</em>}</button>)}
       </nav>
       <div className="sidebar-bottom"><div className={`system-ok ${systemHealthy?'':'warn'}`}><span/> {systemHealthy?'인터페이스 오류 없음':`인터페이스 실패 ${failedInterfaceCount}건`}</div><button type="button" className="profile" aria-expanded={quickPanel==='profile'} onClick={()=>setQuickPanel(current=>current==='profile'?null:'profile')}><span>{data.principal.displayName.slice(0,2).toUpperCase()}</span><div><b>{data.principal.displayName}</b><small>{roleLabels[data.principal.role]||data.principal.role}</small></div><i>•••</i></button></div>
     </aside>

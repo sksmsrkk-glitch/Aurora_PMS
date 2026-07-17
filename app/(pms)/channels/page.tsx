@@ -1,6 +1,4 @@
-import PmsShell from "../_components/pms-shell";
-
-/** Bookmarkable channels workspace entry point. */
+/** Bookmarkable route; the persistent PMS layout renders its workspace. */
 export default function ChannelsPage() {
-  return <PmsShell initialSection="channels" />;
+  return null;
 }

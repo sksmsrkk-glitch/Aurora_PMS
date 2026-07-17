@@ -89,6 +89,8 @@ npm run db:supabase:smoke
 
 `generate-supabase-migration.mjs`처럼 기존 migration을 다시 생성하거나 덮어쓰는 명령은 존재하지 않습니다. 새 schema 변경은 새 번호의 SQL 파일로만 추가하고, CI가 빈 PostgreSQL에 전체 history를 재적용합니다.
 
+native type 변환이나 CHECK 재검증처럼 lock·table rewrite 가능성이 있는 migration은 `docs/operations.md`의 점검 창 절차를 따릅니다. 데이터 수리 DML은 적용 전 영향 건수와 적용 후 audit 수를 반드시 기록하며, `IF NOT EXISTS`를 migration 재실행 허가로 해석하지 않습니다.
+
 ## 개발자 가이드
 
 ### 기술 스택
