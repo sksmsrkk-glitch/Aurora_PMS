@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "release:build": "npm run db:contract:verify && next build",
     "start": "next start",
     "test": "npm run build && npm run test:unit",
     "test:unit": "node --import tsx --test tests/*.test.mjs",
@@ -21,7 +22,8 @@
     "db:supabase:migrate": "node scripts/migrate-supabase.mjs",
     "db:supabase:smoke": "node scripts/smoke-supabase.mjs",
     "db:provision-role": "node scripts/provision-role.mjs",
-    "db:test:bootstrap": "node scripts/bootstrap-test-postgres.mjs"
+    "db:test:bootstrap": "node scripts/bootstrap-test-postgres.mjs",
+    "db:contract:verify": "node --import tsx scripts/verify-runtime-contract.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.2",

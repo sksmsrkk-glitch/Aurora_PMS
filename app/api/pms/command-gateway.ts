@@ -1,5 +1,6 @@
 /** Authenticated PMS command gateway and domain-handler dispatcher. */
 import { getPmsDatabase, scopePmsDatabase, type PmsDatabase, type PmsPreparedStatement } from "../../../db/pms-database";
+import { schemaNotReadyResponse } from "../../../db/schema-contract";
 import { consumeRateLimit, rateLimitHeaders } from "../rate-limit";
 import { handleExtendedAction, PmsExtendedError } from "./extended";
 import { ReportRequestError, runReport } from "./reporting";
@@ -93,7 +94,8 @@ export async function handlePmsPost(request: Request) {
   // requests, scope the database, authorize the action capability, validate the
   // idempotency key, then execute the command and invalidate read caches.
   const rootDb = getPmsDatabase(runtimeBindings);
-  await ready(rootDb); const principal = await principalFor(request, rootDb);
+  try { await ready(rootDb); } catch (error) { const response=schemaNotReadyResponse(error); if(response)return response; throw error; }
+  const principal = await principalFor(request, rootDb);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
   const origin=request.headers.get("origin");
   if(origin&&origin!==new URL(request.url).origin)return Response.json({error:"허용되지 않은 요청 출처입니다."},{status:403});

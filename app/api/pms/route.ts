@@ -5,6 +5,7 @@ import { loadAccountingCenter, loadInventoryCalendar, loadWebsiteAdmin, PmsExten
 import { principalFor, ready, runtimeBindings } from "./auth";
 import { cachedCoreSnapshotResponse, cachedReport, cachedSnapshotResponse } from "./read-model";
 import { handlePmsPost } from "./command-gateway";
+import { schemaNotReadyResponse } from "../../../db/schema-contract";
 
 export const dynamic="force-dynamic";
 export const runtime="nodejs";
@@ -13,7 +14,8 @@ export async function GET(request: Request) {
   // All read models pass through authentication and the property-scoped adapter.
   // `view` selects a bounded projection; no branch accepts a raw table or SQL name.
   const rootDb = getPmsDatabase(runtimeBindings);
-  await ready(rootDb); const principal = await principalFor(request, rootDb);
+  try { await ready(rootDb); } catch (error) { const response=schemaNotReadyResponse(error); if(response)return response; throw error; }
+  const principal = await principalFor(request, rootDb);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
   const db = scopePmsDatabase(rootDb, principal.propertyId);
   const url=new URL(request.url);

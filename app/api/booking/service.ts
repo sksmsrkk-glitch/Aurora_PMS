@@ -1,6 +1,7 @@
 /** Direct-booking availability and reservation domain service. */
 import { createHash } from "node:crypto";
 import { getPmsDatabase, scopePmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRuntimeBindings } from "../../../db/pms-database";
+import { PmsSchemaNotReadyError, verifyPmsSchemaContract } from "../../../db/schema-contract";
 
 const MAX_STAY_NIGHTS = 30;
 
@@ -36,8 +37,17 @@ export type AvailabilityResult = {
   offers: PublicRoomOffer[];
 };
 
-function database() {
-  return scopePmsDatabase(getPmsDatabase(bindings), PUBLIC_PROPERTY_ID);
+async function database() {
+  const rootDatabase = getPmsDatabase(bindings);
+  try {
+    await verifyPmsSchemaContract(rootDatabase);
+  } catch (error) {
+    if (error instanceof PmsSchemaNotReadyError) {
+      throw new BookingError("예약 시스템 업그레이드가 완료되지 않았습니다. 잠시 후 다시 시도해 주세요.", 503, error.code);
+    }
+    throw error;
+  }
+  return scopePmsDatabase(rootDatabase, PUBLIC_PROPERTY_ID);
 }
 
 function isoDate(value: string) {
@@ -118,7 +128,7 @@ export async function getAvailability(input: { arrival: string; departure: strin
   if (!dates.length) throw new BookingError("체크인·체크아웃 날짜를 확인해 주세요. 한 번에 최대 30박까지 예약할 수 있습니다.", 400, "INVALID_DATES");
   if (adults === null || children === null) throw new BookingError("투숙 인원을 확인해 주세요.", 400, "INVALID_OCCUPANCY");
 
-  const rows = await availabilityRows(database(), input.arrival, input.departure);
+  const rows = await availabilityRows(await database(), input.arrival, input.departure);
   if (!rows.property) throw new BookingError("호텔 판매 정보를 불러올 수 없습니다.", 503, "PROPERTY_UNAVAILABLE");
   if (input.arrival < rows.property.business_date) throw new BookingError("호텔 영업일보다 이전 날짜는 예약할 수 없습니다.", 400, "PAST_BUSINESS_DATE");
 
@@ -204,7 +214,7 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
     throw new BookingError("예약자 이름, 이메일, 연락처와 투숙 정보를 정확히 입력해 주세요.", 400, "INVALID_GUEST");
   }
 
-  const db = database();
+  const db = await database();
   // A retried browser request returns the original reservation instead of
   // consuming another room. The unique booking_requests key is the final guard
   // when concurrent requests pass this fast-path lookup at the same time.
@@ -245,7 +255,7 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
 }
 
 export async function findWebReservationByIdempotency(idempotencyKey: string) {
-  const existing = await database().prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id=pms_current_property_id() AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
+  const existing = await (await database()).prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id=pms_current_property_id() AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
   return existing ? { reservationId: String(existing.id), confirmation: String(existing.confirmation_no), arrival: String(existing.arrival_date), departure: String(existing.departure_date), status: String(existing.status), duplicate: true } : null;
 }
 
@@ -254,7 +264,7 @@ export async function cancelWebReservation(input: { confirmation?: unknown; emai
   const email = requiredText(input.email, 254);
   const lastName = requiredText(input.lastName, 80);
   if (!confirmation || !email || !lastName || !validEmail(email)) throw new BookingError("예약번호, 이메일, 성을 정확히 입력해 주세요.", 400, "INVALID_LOOKUP");
-  const db = database();
+  const db = await database();
   const reservation = await db.prepare("SELECT r.id,r.status,r.arrival_date,r.departure_date,r.confirmation_no,r.version,g.last_name,b.email_hash,p.business_date FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id JOIN booking_requests b ON b.reservation_id=r.id AND b.property_id=r.property_id JOIN properties p ON p.id=r.property_id WHERE r.property_id=pms_current_property_id() AND r.confirmation_no=? LIMIT 1").bind(confirmation).first<Record<string, unknown>>();
   if (!reservation || String(reservation.email_hash) !== emailHash(email) || String(reservation.last_name).toLocaleLowerCase("en-US") !== lastName.toLocaleLowerCase("en-US")) {
     throw new BookingError("입력한 정보와 일치하는 웹 예약을 찾지 못했습니다.", 404, "BOOKING_NOT_FOUND");

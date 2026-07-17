@@ -62,5 +62,9 @@ jobs:
         run: npm run db:supabase:migrate
       - name: Upgrade the populated database through current migrations
         run: npm run db:supabase:migrate
+      - name: Verify runtime schema and pooled role contract
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/aurora_ci
+        run: npm run db:contract:verify
       - name: PostgreSQL integration and concurrency tests
         run: npm run test:integration
