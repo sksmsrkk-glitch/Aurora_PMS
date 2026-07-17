@@ -411,22 +411,19 @@ async function principalFor(request: Request, db: D1): Promise<Principal | null>
 }
 
 async function operationalControls(db: D1, businessDate: string, actor?: string) {
-  const [arrivals, cashiers, oos, failed, openCashier, priorAudit, roomPostings] = await Promise.all([
-    db.prepare("SELECT COUNT(*) count FROM reservations WHERE property_id='prop-seoul' AND arrival_date=? AND status='DUE_IN'").bind(businessDate).first<{count:number}>(),
-    db.prepare("SELECT COUNT(*) count FROM cashier_sessions WHERE property_id='prop-seoul' AND business_date=? AND status='OPEN'").bind(businessDate).first<{count:number}>(),
-    db.prepare("SELECT COUNT(*) count FROM rooms WHERE property_id='prop-seoul' AND housekeeping_status='OUT_OF_SERVICE'").first<{count:number}>(),
-    db.prepare("SELECT COUNT(*) count FROM outbox_events WHERE property_id='prop-seoul' AND status='FAILED'").first<{count:number}>(),
-    actor ? db.prepare("SELECT * FROM cashier_sessions WHERE property_id='prop-seoul' AND actor=? AND status='OPEN' ORDER BY opened_at DESC LIMIT 1").bind(actor).first() : null,
-    db.prepare("SELECT * FROM night_audits WHERE property_id='prop-seoul' AND business_date=? LIMIT 1").bind(businessDate).first(),
-    db.prepare("SELECT COUNT(*) count FROM reservations r WHERE r.property_id='prop-seoul' AND r.status='IN_HOUSE' AND r.arrival_date<=? AND r.departure_date>? AND NOT EXISTS (SELECT 1 FROM folio_entries f WHERE f.reservation_id=r.id AND f.business_date=? AND f.kind='CHARGE' AND f.code='ROOM')").bind(businessDate,businessDate,businessDate).first<{count:number}>(),
-  ]);
+  // Keep the close-day guard below the six-connection serverless pool ceiling.
+  // Seven independent parallel queries could occupy every connection while a
+  // queued guard waited behind them; one snapshot is faster and consistent.
+  const summary=await db.prepare("SELECT (SELECT COUNT(*) FROM reservations WHERE property_id='prop-seoul' AND arrival_date=? AND status='DUE_IN') arrivals,(SELECT COUNT(*) FROM cashier_sessions WHERE property_id='prop-seoul' AND business_date=? AND status='OPEN') cashiers,(SELECT COUNT(*) FROM rooms WHERE property_id='prop-seoul' AND housekeeping_status='OUT_OF_SERVICE') oos,(SELECT COUNT(*) FROM outbox_events WHERE property_id='prop-seoul' AND status='FAILED') failed,(SELECT COUNT(*) FROM night_audits WHERE property_id='prop-seoul' AND business_date=?) prior_audits,(SELECT COUNT(*) FROM reservations r WHERE r.property_id='prop-seoul' AND r.status='IN_HOUSE' AND r.arrival_date<=? AND r.departure_date>? AND NOT EXISTS (SELECT 1 FROM folio_entries f WHERE f.reservation_id=r.id AND f.business_date=? AND f.kind='CHARGE' AND f.code='ROOM')) room_postings").bind(businessDate,businessDate,businessDate,businessDate,businessDate,businessDate).first<{arrivals:number;cashiers:number;oos:number;failed:number;prior_audits:number;room_postings:number}>();
+  const openCashier=actor?await db.prepare("SELECT * FROM cashier_sessions WHERE property_id='prop-seoul' AND actor=? AND status='OPEN' ORDER BY opened_at DESC LIMIT 1").bind(actor).first():null;
+  const priorAudit=Number(summary?.prior_audits??0)>0?await db.prepare("SELECT * FROM night_audits WHERE property_id='prop-seoul' AND business_date=? LIMIT 1").bind(businessDate).first():null;
   const blockers = [
-    { code:"UNRESOLVED_ARRIVALS", label:"미처리 도착 예약", count:Number(arrivals?.count??0), blocking:true },
-    { code:"OPEN_CASHIERS", label:"미마감 캐셔", count:Number(cashiers?.count??0), blocking:true },
-    { code:"FAILED_INTERFACES", label:"인터페이스 전송 실패", count:Number(failed?.count??0), blocking:false },
-    { code:"OUT_OF_SERVICE", label:"판매 중지 객실", count:Number(oos?.count??0), blocking:false },
+    { code:"UNRESOLVED_ARRIVALS", label:"미처리 도착 예약", count:Number(summary?.arrivals??0), blocking:true },
+    { code:"OPEN_CASHIERS", label:"미마감 캐셔", count:Number(summary?.cashiers??0), blocking:true },
+    { code:"FAILED_INTERFACES", label:"인터페이스 전송 실패", count:Number(summary?.failed??0), blocking:false },
+    { code:"OUT_OF_SERVICE", label:"판매 중지 객실", count:Number(summary?.oos??0), blocking:false },
   ];
-  return { blockers, canClose: blockers.every(x=>!x.blocking||x.count===0) && !priorAudit, openCashier, priorAudit, pendingRoomPostings:Number(roomPostings?.count??0) };
+  return { blockers, canClose: blockers.every(x=>!x.blocking||x.count===0) && !priorAudit, openCashier, priorAudit, pendingRoomPostings:Number(summary?.room_postings??0) };
 }
 
 function datesBetween(arrival: string, departure: string) {

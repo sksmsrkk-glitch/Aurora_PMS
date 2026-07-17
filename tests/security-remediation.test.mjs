@@ -6,11 +6,23 @@ import { readFile } from "node:fs/promises";
 const read=(path)=>readFile(new URL(`../${path}`,import.meta.url),"utf8");
 
 test("runtime and seed paths never provision an administrator",async()=>{
-  const [route,seed,removal]=await Promise.all([read("app/api/pms/route.ts"),read("supabase/seed.sql"),read("supabase/migrations/202607170007_remove_seed_admin.sql")]);
+  const [route,seed,legacyIdentity,removal]=await Promise.all([read("app/api/pms/route.ts"),read("supabase/seed.sql"),read("supabase/migrations/202607170006_default_admin_identity.sql"),read("supabase/migrations/202607170007_remove_seed_admin.sql")]);
   assert.doesNotMatch(route,/INSERT[^\n]+role_assignments/iu);
   assert.doesNotMatch(seed,/role_assignments/iu);
+  assert.doesNotMatch(legacyIdentity,/INSERT INTO public\.role_assignments/iu);
+  assert.doesNotMatch(legacyIdentity,/pms@allmytour\.com|frontdesk@aurora\.hotel/iu);
   assert.match(removal,/DELETE FROM public\.role_assignments/iu);
   assert.match(removal,/role-local-pms-admin/iu);
+});
+
+test("clean Supabase seed projects website CMS rows after schema migrations",async()=>{
+  const [seed,smoke]=await Promise.all([read("supabase/seed.sql"),read("scripts/smoke-supabase.mjs")]);
+  assert.match(seed,/INSERT INTO website_settings/iu);
+  assert.match(seed,/INSERT INTO room_type_website/iu);
+  assert.match(seed,/INSERT INTO accounting_accounts/iu);
+  assert.match(seed,/ON CONFLICT \(property_id,room_type_id\) DO NOTHING/iu);
+  assert.match(smoke,/n\.nspname='public'/u);
+  assert.match(smoke,/required_triggers/u);
 });
 
 test("demo authentication is non-production, explicit, token-bound, and host-independent",async()=>{
@@ -74,4 +86,16 @@ test("login, booking, and PMS writes use a shared atomic database rate limit",as
   assert.doesNotMatch(guard,/new Map/u);
   assert.match(migration,/PRIMARY KEY\(scope,key_hash,window_start\)/u);
   assert.match(migration,/ENABLE ROW LEVEL SECURITY/u);
+});
+
+test("night-audit controls stay below the serverless database pool ceiling",async()=>{
+  const [route,workflow]=await Promise.all([read("app/api/pms/route.ts"),read("scripts/qa-full-workflow.mjs")]);
+  const start=route.indexOf("async function operationalControls");
+  const end=route.indexOf("function datesBetween",start);
+  const controls=route.slice(start,end);
+  assert.doesNotMatch(controls,/Promise\.all/u);
+  assert.match(controls,/room_postings/u);
+  assert.match(workflow,/AbortSignal\.timeout\(90_000\)/u);
+  assert.match(workflow,/PMS_TEST_EMAIL\|\|process\.env\.PMS_DEMO_USER_EMAIL/u);
+  assert.doesNotMatch(workflow,/q:\s*"pms@allmytour\.com"/u);
 });

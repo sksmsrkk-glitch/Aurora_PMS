@@ -7,14 +7,28 @@ const addDays=(date,days)=>{const value=new Date(`${date}T00:00:00Z`);value.setU
 const dateParts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date()).filter(part=>part.type!=="literal").map(part=>[part.type,part.value]));
 const today=`${dateParts.year}-${dateParts.month}-${dateParts.day}`,arrival=addDays(today,60),departure=addDays(today,61);
 const demoToken=process.env.PMS_DEMO_AUTH_TOKEN||"";
+let sessionCookie="";
 
 await assertSafeQaTarget(baseUrl);
 
-async function responseJson(path,options={}){const headers=new Headers(options.headers);if(demoToken)headers.set("x-aurora-demo-token",demoToken);const response=await fetch(`${baseUrl}${path}`,{...options,headers}),body=await response.json();return {response,body};}
+// Production-mode staging must use a real verified Supabase Auth session. The
+// token fallback remains available only for explicitly opted-in local development.
+async function authenticateIfConfigured(){
+  const email=process.env.PMS_TEST_EMAIL,password=process.env.PMS_TEST_PASSWORD;
+  if(!email&&!password)return;
+  if(!email||!password)throw new Error("PMS_TEST_EMAIL and PMS_TEST_PASSWORD must be provided together");
+  const response=await fetch(`${baseUrl}/api/auth/login`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email,password})});
+  const body=await response.json().catch(()=>null);
+  assert.equal(response.status,200,body?.error||"QA authentication failed");
+  sessionCookie=response.headers.getSetCookie().map(value=>value.split(";")[0]).join("; ");
+  assert.ok(sessionCookie,"QA authentication did not return session cookies");
+}
+async function responseJson(path,options={}){const headers=new Headers(options.headers);if(sessionCookie)headers.set("cookie",sessionCookie);if(demoToken)headers.set("x-aurora-demo-token",demoToken);const response=await fetch(`${baseUrl}${path}`,{...options,headers}),body=await response.json();return {response,body};}
 async function websiteAdmin(){const result=await responseJson("/api/pms?view=website");assert.equal(result.response.status,200,result.body?.error);return result.body;}
 async function action(action,payload={}){const result=await responseJson("/api/pms",{method:"POST",headers:{origin:baseUrl,"content-type":"application/json","idempotency-key":`website-qa:${action}:${crypto.randomUUID()}`},body:JSON.stringify({action,...payload})});assert.equal(result.response.status,200,result.body?.error);return result.body;}
 async function availability(){return responseJson(`/api/booking/availability?${new URLSearchParams({arrival,departure,adults:"2",children:"0"})}`);}
 
+await authenticateIfConfigured();
 const adminBefore=await websiteAdmin();
 assert.equal(Number(adminBefore.settings.published),1);
 assert.ok(adminBefore.rooms.some(room=>Number(room.published)===1));

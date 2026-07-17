@@ -24,13 +24,14 @@ try{
     SELECT
       (SELECT COUNT(*)::int FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE') tables,
       (SELECT COUNT(*)::int FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r' AND relrowsecurity) rls_tables,
-      (SELECT COUNT(*)::int FROM pg_trigger WHERE NOT tgisinternal) triggers,
+      (SELECT COUNT(*)::int FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname='public') triggers,
+      (SELECT COUNT(*)::int FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname='public' AND t.tgname IN ('reservation_type_nights_capacity','block_inventory_capacity_insert','folio_entries_no_update','ar_ledger_no_update','integration_attempts_no_update','accounting_journal_lines_no_update','accounting_journal_entries_guard_update','reservation_rate_nights_no_update','channel_settlement_contract_snapshot_insert')) required_triggers,
       (SELECT COUNT(*)::int FROM pg_constraint WHERE connamespace='public'::regnamespace AND contype='f' AND convalidated) foreign_keys,
       (SELECT COUNT(*)::int FROM pms_schema_migrations) migrations,
       (SELECT COUNT(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('pms_execute','pms_batch','pms_execute_statement','pms_render_sql')) arbitrary_sql_functions,
       (SELECT COUNT(*)::int FROM role_assignments WHERE id IN ('role-local-admin','role-local-pms-admin')) seeded_admins
   `;
-  if(catalog.tables<51||catalog.rls_tables<51||catalog.triggers<34||catalog.foreign_keys<79||catalog.migrations<14||Number(catalog.arbitrary_sql_functions)!==0||Number(catalog.seeded_admins)!==0)throw new Error("Supabase catalog verification failed");
+  if(catalog.tables<51||catalog.rls_tables<51||catalog.triggers<29||Number(catalog.required_triggers)!==9||catalog.foreign_keys<79||catalog.migrations<14||Number(catalog.arbitrary_sql_functions)!==0||Number(catalog.seeded_admins)!==0)throw new Error("Supabase catalog verification failed");
 
   const [website]=await sql`
     SELECT
@@ -67,11 +68,25 @@ try{
   try{await sql`UPDATE folio_entries SET description='smoke' WHERE id='fe1'`;}catch(error){immutableGuard=error instanceof Error&&error.message.includes("immutable");}
   if(!immutableGuard)throw new Error("Immutable folio trigger verification failed");
 
-  const [journal]=await sql`SELECT e.id,COALESCE(SUM(l.debit),0) debit,COALESCE(SUM(l.credit),0) credit FROM accounting_journal_entries e JOIN accounting_journal_lines l ON l.journal_entry_id=e.id GROUP BY e.id LIMIT 1`;
-  if(!journal||Math.abs(Number(journal.debit)-Number(journal.credit))>0.01)throw new Error("Balanced accounting journal verification failed");
+  // A clean staging database intentionally has no operational journals. Build a
+  // balanced entry inside a transaction, exercise the immutable-line trigger, and
+  // confirm PostgreSQL rolled the whole smoke fixture back after the trigger abort.
+  const journalId=`smoke-balanced-${crypto.randomUUID()}`;
   let accountingImmutable=false;
-  try{await sql`UPDATE accounting_journal_lines SET memo='smoke' WHERE journal_entry_id=${journal.id}`;}catch(error){accountingImmutable=error instanceof Error&&error.message.includes("immutable");}
-  if(!accountingImmutable)throw new Error("Immutable accounting journal verification failed");
+  try{
+    await sql.begin(async transaction=>{
+      const accounts=await transaction`SELECT id FROM accounting_accounts WHERE property_id='prop-seoul' AND active=1 ORDER BY code LIMIT 2`;
+      if(accounts.length<2)throw new Error("starter accounting accounts are missing");
+      const now=new Date().toISOString();
+      await transaction`INSERT INTO accounting_journal_entries(id,property_id,entry_no,business_date,entry_type,source_type,source_id,description,vendor,status,reversal_of_id,created_at,created_by) VALUES (${journalId},'prop-seoul',${`SMOKE-BAL-${crypto.randomUUID()}`},'2099-12-30','ADJUSTMENT','SMOKE',NULL,'rollback-only balanced journal',NULL,'POSTED',NULL,${now},'smoke')`;
+      await transaction`INSERT INTO accounting_journal_lines(id,property_id,journal_entry_id,account_id,debit,credit,department,channel_connection_id,reservation_id,memo,created_at) VALUES (${crypto.randomUUID()},'prop-seoul',${journalId},${accounts[0].id},100,0,'FINANCE',NULL,NULL,'rollback-only debit',${now}),(${crypto.randomUUID()},'prop-seoul',${journalId},${accounts[1].id},0,100,'FINANCE',NULL,NULL,'rollback-only credit',${now})`;
+      const [totals]=await transaction`SELECT COALESCE(SUM(debit),0) debit,COALESCE(SUM(credit),0) credit FROM accounting_journal_lines WHERE journal_entry_id=${journalId}`;
+      if(Math.abs(Number(totals.debit)-Number(totals.credit))>0.01)throw new Error("balanced accounting journal mismatch");
+      await transaction`UPDATE accounting_journal_lines SET memo='forbidden smoke update' WHERE journal_entry_id=${journalId}`;
+    });
+  }catch(error){accountingImmutable=error instanceof Error&&error.message.includes("immutable");}
+  const [journalRollback]=await sql`SELECT COUNT(*)::int count FROM accounting_journal_entries WHERE id=${journalId}`;
+  if(!accountingImmutable||Number(journalRollback.count)!==0)throw new Error("Balanced immutable accounting journal verification failed");
   let reversalRaceGuard=false;
   try{
     await sql.begin(async transaction=>{

@@ -31,7 +31,9 @@ async function request(path, options = {}) {
   const headers = new Headers(options.headers);
   if (sessionCookie) headers.set("Cookie", sessionCookie);
   if (demoToken) headers.set("x-aurora-demo-token",demoToken);
-  const response = await fetch(`${baseUrl}${path}`, { ...options, headers });
+  // Bound regressions below the platform's five-minute function timeout so QA
+  // returns an actionable endpoint and action name instead of hanging silently.
+  const response = await fetch(`${baseUrl}${path}`, { ...options, headers, signal:options.signal||AbortSignal.timeout(90_000) });
   const text = await response.text();
   let json;
   try { json = text ? JSON.parse(text) : null; }
@@ -100,6 +102,15 @@ async function main() {
   assert.equal(data.principal.role, "PROPERTY_ADMIN");
   const businessDate = data.property.business_date;
   record("Supabase 실데이터 스냅샷", `${elapsed}ms`);
+
+  // An interrupted staging run can leave only this QA principal's cashier open.
+  // Close that recoverable fixture before creating the new run's cashier session;
+  // immutable financial and audit history is preserved for later inspection.
+  if(data.controls.openCashier){
+    await action("close_cashier",{countedAmount:String(data.controls.openCashier.opening_amount||0)});
+    data=(await snapshot()).data;
+    record("중단 QA 캐셔 복구 마감");
+  }
 
   const reportKeys = ["reservations", "occupancy", "financials", "accounting_journal", "channel_settlements", "ar", "housekeeping", "groups", "channels", "audit", "room_inventory"];
   for (const report of reportKeys) {
@@ -344,7 +355,10 @@ async function main() {
   }
   record("캐셔 마감·차이 기록");
 
-  const finalReports = await request(`/api/pms?${new URLSearchParams({ view: "report", report: "audit", from: businessDate, to: addDays(businessDate, 30), q: "pms@allmytour.com", page: "1", pageSize: "100" })}`);
+  // Search for the principal that actually executed this run. Production-like
+  // staging uses a verified QA Auth user, while local runs may use the demo email.
+  const auditActor=process.env.PMS_TEST_EMAIL||process.env.PMS_DEMO_USER_EMAIL||"";
+  const finalReports = await request(`/api/pms?${new URLSearchParams({ view: "report", report: "audit", from: businessDate, to: addDays(businessDate, 30), q: auditActor, page: "1", pageSize: "100" })}`);
   assert.equal(finalReports.response.status, 200);
   assert.ok(finalReports.json.pagination.total > 0);
   record("감사 로그 키워드 추적", `${finalReports.json.pagination.total}건`);

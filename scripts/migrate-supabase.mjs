@@ -52,7 +52,9 @@ try {
   const [summary] = await sql`
     SELECT
       (SELECT COUNT(*)::int FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE') table_count,
-      (SELECT COUNT(*)::int FROM pg_trigger WHERE NOT tgisinternal) trigger_count,
+      -- Supabase-managed schemas can add or remove platform triggers independently
+      -- of Aurora releases, so readiness reports only application-owned triggers.
+      (SELECT COUNT(*)::int FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname='public') trigger_count,
       (SELECT COUNT(*)::int FROM properties) property_count,
       (SELECT COUNT(*)::int FROM room_types) room_type_count,
       (SELECT COUNT(*)::int FROM rooms) room_count,
