@@ -5,9 +5,9 @@ import { getWebsiteContent } from "../../api/booking/website-service";
 import { bookingMetadata } from "../seo";
 import BookingClient from "./BookingClient";
 
-// Availability, CMS metadata, and publication state are runtime hotel data and
-// must not be frozen into the artifact created by `next build`.
-export const dynamic = "force-dynamic";
+// Search parameters remain request-specific in the client; only published CMS
+// metadata is cached, with the same one-minute freshness as the hotel landing.
+export const revalidate = 60;
 
 export async function generateMetadata(): Promise<Metadata> {
   try { return bookingMetadata(await getWebsiteContent()); }

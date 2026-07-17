@@ -6,7 +6,9 @@ import { getWebsiteContent } from "../api/booking/website-service";
 import HotelSearchForm from "./HotelSearchForm";
 import { hotelStructuredData, serializeJsonLd } from "./seo";
 
-export const dynamic = "force-dynamic";
+// Published CMS content is refreshed at most one minute after an administrator
+// changes it without forcing every public request through a server render.
+export const revalidate = 60;
 
 function dateAfter(days: number) {
   const date = new Date(Date.now() + days * 86_400_000);

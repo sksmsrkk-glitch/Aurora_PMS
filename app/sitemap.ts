@@ -3,9 +3,9 @@ import type { MetadataRoute } from "next";
 import { getWebsiteContent } from "./api/booking/website-service";
 import { publicSiteUrl } from "./hotel/seo";
 
-// Publication state is managed in the PMS, so discovery must reflect it without
-// waiting for a new frontend deployment.
-export const dynamic = "force-dynamic";
+// Publication changes reach crawlers within one minute without regenerating the
+// sitemap on every request.
+export const revalidate = 60;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   try {
