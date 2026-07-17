@@ -1,0 +1,77 @@
+/** Regression gates for the seven findings fixed in the July security review. */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+const read=(path)=>readFile(new URL(`../${path}`,import.meta.url),"utf8");
+
+test("runtime and seed paths never provision an administrator",async()=>{
+  const [route,seed,removal]=await Promise.all([read("app/api/pms/route.ts"),read("supabase/seed.sql"),read("supabase/migrations/202607170007_remove_seed_admin.sql")]);
+  assert.doesNotMatch(route,/INSERT[^\n]+role_assignments/iu);
+  assert.doesNotMatch(seed,/role_assignments/iu);
+  assert.match(removal,/DELETE FROM public\.role_assignments/iu);
+  assert.match(removal,/role-local-pms-admin/iu);
+});
+
+test("demo authentication is non-production, explicit, token-bound, and host-independent",async()=>{
+  const route=await read("app/api/pms/route.ts");
+  assert.match(route,/process\.env\.NODE_ENV === "production"/u);
+  assert.match(route,/PMS_ALLOW_DEMO_AUTH !== "true"/u);
+  assert.match(route,/PMS_DEMO_AUTH_TOKEN/gu);
+  assert.match(route,/timingSafeEqual/gu);
+  assert.doesNotMatch(route,/localRequest|\["localhost",\s*"127\.0\.0\.1"\]/u);
+});
+
+test("every folio and AR command commits a strict idempotency receipt",async()=>{
+  const [route,extended]=await Promise.all([read("app/api/pms/route.ts"),read("app/api/pms/extended.ts")]);
+  const actions=["create_folio_window","create_routing_rule","split_folio_entry","reverse_folio_entry","refund_payment","transfer_to_ar","post_ar_payment"];
+  for(let index=0;index<actions.length;index+=1){
+    const start=route.indexOf(`body.action === "${actions[index]}"`);
+    const end=index+1<actions.length?route.indexOf(`body.action === "${actions[index+1]}"`,start):route.indexOf('body.action === "housekeeping"',start);
+    assert.ok(start>=0&&end>start,`${actions[index]} branch missing`);
+    assert.match(route.slice(start,end),/mutationReceipt\(\)/u,`${actions[index]} does not commit its receipt`);
+  }
+  assert.match(route,/INSERT INTO idempotency_keys/gu);
+  assert.doesNotMatch(extended,/INSERT OR IGNORE INTO idempotency_keys/u);
+});
+
+test("arbitrary SQL RPC bridge is absent from runtime and revoked by migration",async()=>{
+  const [database,removal]=await Promise.all([read("db/pms-database.ts"),read("supabase/migrations/202607170009_remove_arbitrary_sql_rpc.sql")]);
+  assert.doesNotMatch(database,/pms_execute|pms_batch|SupabaseHttpDatabase/u);
+  assert.match(database,/DATABASE_URL/gu);
+  assert.match(removal,/REVOKE ALL ON FUNCTION public\.pms_execute/u);
+  assert.match(removal,/DROP FUNCTION IF EXISTS public\.pms_batch/u);
+  assert.match(removal,/service_role/u);
+});
+
+test("D1 bootstrap and Drizzle mirror include direct-booking schema",async()=>{
+  const [route,schema]=await Promise.all([read("app/api/pms/route.ts"),read("db/schema.ts")]);
+  for(const source of [route,schema]){
+    assert.match(source,/booking_requests/u);
+    assert.match(source,/reservation_rate_nights/u);
+  }
+  assert.match(route,/reservation_rate_nights_no_update/u);
+  assert.match(route,/reservation_rate_nights_no_delete/u);
+  assert.match(schema,/bookingRequestIdempotency|booking_request_idempotency_uq/u);
+});
+
+test("stateful QA proves staging deployment and database isolation before writes",async()=>{
+  const [gate,workflow,booking,cms]=await Promise.all([read("scripts/qa-target.mjs"),read("scripts/qa-full-workflow.mjs"),read("scripts/qa-booking-engine.mjs"),read("scripts/qa-website-cms.mjs")]);
+  assert.match(gate,/AURORA_STAGING_ONLY/u);
+  assert.match(gate,/databaseProjectRef!==expectedProjectRef/u);
+  assert.match(gate,/tnbxreeidezidckemflb/u);
+  assert.match(gate,/qaAllowed!==true/u);
+  for(const source of [workflow,booking,cms])assert.match(source,/assertSafeQaTarget/u);
+});
+
+test("login, booking, and PMS writes use a shared atomic database rate limit",async()=>{
+  const [limiter,login,guard,pms,migration]=await Promise.all([read("app/api/rate-limit.ts"),read("app/api/auth/login/route.ts"),read("app/api/booking/guard.ts"),read("app/api/pms/route.ts"),read("supabase/migrations/202607170008_distributed_rate_limits.sql")]);
+  assert.match(limiter,/ON CONFLICT\(scope,key_hash,window_start\) DO UPDATE/u);
+  assert.match(limiter,/createHmac/u);
+  assert.match(limiter,/x-vercel-forwarded-for/u);
+  for(const source of [login,guard,pms])assert.match(source,/consumeRateLimit/u);
+  assert.doesNotMatch(login,/new Map/u);
+  assert.doesNotMatch(guard,/new Map/u);
+  assert.match(migration,/PRIMARY KEY\(scope,key_hash,window_start\)/u);
+  assert.match(migration,/ENABLE ROW LEVEL SECURITY/u);
+});

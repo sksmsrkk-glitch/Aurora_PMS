@@ -1,6 +1,8 @@
 import { getPmsDatabase, scopePmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRuntimeBindings } from "../../../db/pms-database";
 import { authenticateSupabaseRequest } from "../../supabase-session";
+import { consumeRateLimit, rateLimitHeaders } from "../rate-limit";
 import { ReportRequestError, runReport } from "./reporting";
+import { timingSafeEqual } from "node:crypto";
 /** Authenticated PMS API router and transactional command gateway. */
 import { handleExtendedAction, loadAccountingCenter, loadInventoryCalendar, loadWebsiteAdmin, PmsExtendedError } from "./extended";
 
@@ -12,8 +14,6 @@ type Role = "PROPERTY_ADMIN" | "NIGHT_AUDITOR" | "FRONT_DESK" | "CASHIER" | "HOU
 type Principal = { email: string; displayName: string; role: Role; capabilities: string[]; propertyId: string };
 
 const runtimeBindings:PmsRuntimeBindings={
-  SUPABASE_URL:process.env.SUPABASE_URL,
-  SUPABASE_SECRET_KEY:process.env.SUPABASE_SECRET_KEY,
   DATABASE_URL:process.env.DATABASE_URL,
 };
 
@@ -54,11 +54,14 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, confirmation_no TEXT NOT NULL, property_id TEXT NOT NULL, guest_id TEXT NOT NULL, room_type_id TEXT NOT NULL, room_id TEXT, arrival_date TEXT NOT NULL, departure_date TEXT NOT NULL, status TEXT NOT NULL, adults INTEGER NOT NULL, children INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL, rate_plan TEXT NOT NULL, nightly_rate REAL NOT NULL, eta TEXT, notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS reservation_nights (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, room_id TEXT NOT NULL, stay_date TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS reservation_type_nights (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS booking_requests (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, reservation_id TEXT NOT NULL, email_hash TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS reservation_rate_nights (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, sell_rate REAL NOT NULL CHECK(sell_rate>=0), currency TEXT NOT NULL, rate_plan TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS folio_entries (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, kind TEXT NOT NULL, code TEXT NOT NULL, description TEXT NOT NULL, amount REAL NOT NULL, payment_method TEXT, business_date TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, reverses_entry_id TEXT)`,
   `CREATE TABLE IF NOT EXISTS housekeeping_tasks (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_id TEXT NOT NULL, business_date TEXT NOT NULL, status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 2, assignee TEXT, notes TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, before_json TEXT, after_json TEXT, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS outbox_events (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, topic TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, published_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS idempotency_keys (key TEXT PRIMARY KEY, property_id TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS api_rate_limits (scope TEXT NOT NULL, key_hash TEXT NOT NULL, window_start TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1, expires_at TEXT NOT NULL, PRIMARY KEY(scope,key_hash,window_start))`,
   `CREATE TABLE IF NOT EXISTS role_assignments (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS cashier_sessions (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, actor TEXT NOT NULL, business_date TEXT NOT NULL, status TEXT NOT NULL, opening_amount REAL NOT NULL, expected_amount REAL, counted_amount REAL, variance REAL, opened_at TEXT NOT NULL, closed_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS night_audits (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, business_date TEXT NOT NULL, status TEXT NOT NULL, blockers_json TEXT NOT NULL, summary_json TEXT, started_at TEXT NOT NULL, completed_at TEXT, completed_by TEXT)`,
@@ -99,6 +102,11 @@ const schema = [
   `CREATE UNIQUE INDEX IF NOT EXISTS room_night_uq ON reservation_nights(property_id, room_id, stay_date)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS reservation_type_night_uq ON reservation_type_nights(reservation_id, stay_date)`,
   `CREATE INDEX IF NOT EXISTS type_night_inventory_idx ON reservation_type_nights(property_id, room_type_id, stay_date)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS booking_request_idempotency_uq ON booking_requests(property_id,idempotency_key)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS booking_request_reservation_uq ON booking_requests(property_id,reservation_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS reservation_rate_night_uq ON reservation_rate_nights(reservation_id,stay_date)`,
+  `CREATE INDEX IF NOT EXISTS reservation_rate_calendar_idx ON reservation_rate_nights(property_id,room_type_id,stay_date)`,
+  `CREATE INDEX IF NOT EXISTS api_rate_limits_expiry_idx ON api_rate_limits(expires_at)`,
   `CREATE INDEX IF NOT EXISTS arrival_idx ON reservations(property_id, arrival_date, status)`,
   `CREATE INDEX IF NOT EXISTS hk_board_idx ON housekeeping_tasks(property_id, business_date, status)`,
   `CREATE INDEX IF NOT EXISTS folio_reservation_idx ON folio_entries(reservation_id, created_at)`,
@@ -177,6 +185,8 @@ const schema = [
   `CREATE TRIGGER IF NOT EXISTS block_pickup_decrement AFTER DELETE ON block_pickup_nights BEGIN UPDATE block_inventory SET picked_up=MAX(0,picked_up-1),version=version+1,updated_at=datetime('now') WHERE block_id=OLD.block_id AND room_type_id=OLD.room_type_id AND stay_date=OLD.stay_date; END`,
   `CREATE TRIGGER IF NOT EXISTS inventory_controls_validate_insert BEFORE INSERT ON inventory_controls WHEN NEW.sell_limit < 0 OR NEW.min_stay < 1 OR NEW.price_override < 0 BEGIN SELECT RAISE(ABORT, 'invalid inventory control'); END`,
   `CREATE TRIGGER IF NOT EXISTS inventory_controls_validate_update BEFORE UPDATE ON inventory_controls WHEN NEW.sell_limit < 0 OR NEW.min_stay < 1 OR NEW.price_override < 0 BEGIN SELECT RAISE(ABORT, 'invalid inventory control'); END`,
+  `CREATE TRIGGER IF NOT EXISTS reservation_rate_nights_no_update BEFORE UPDATE ON reservation_rate_nights BEGIN SELECT RAISE(ABORT, 'reservation rate nights are immutable'); END`,
+  `CREATE TRIGGER IF NOT EXISTS reservation_rate_nights_no_delete BEFORE DELETE ON reservation_rate_nights BEGIN SELECT RAISE(ABORT, 'reservation rate nights are immutable'); END`,
   `CREATE TRIGGER IF NOT EXISTS folio_entries_validate_insert BEFORE INSERT ON folio_entries WHEN NEW.amount <= 0 OR NEW.kind NOT IN ('CHARGE','PAYMENT','CHARGE_REVERSAL','PAYMENT_REVERSAL','REFUND') BEGIN SELECT RAISE(ABORT, 'invalid folio entry'); END`,
   `CREATE TRIGGER IF NOT EXISTS folio_entries_no_update BEFORE UPDATE ON folio_entries BEGIN SELECT RAISE(ABORT, 'folio entries are immutable'); END`,
   `CREATE TRIGGER IF NOT EXISTS folio_entries_no_delete BEFORE DELETE ON folio_entries BEGIN SELECT RAISE(ABORT, 'folio entries are immutable'); END`,
@@ -203,13 +213,12 @@ async function ready(db: D1) {
 }
 
 async function initializePostgres(db: D1) {
-  // Production schema changes are migration-owned. Runtime startup only verifies
-  // required tables/seed property and restores the local admin assignment safely.
-  const tables = ["properties", "reservation_type_nights", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries", "website_settings", "room_type_website", "website_media"];
+  // Production schema changes and administrator provisioning are migration/operator
+  // owned. Runtime startup performs read-only probes and can never create a role.
+  const tables = ["properties", "reservation_type_nights", "reservation_rate_nights", "booking_requests", "api_rate_limits", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries", "website_settings", "room_type_website", "website_media"];
   const results = await db.batch([
     ...tables.map((table)=>db.prepare(`SELECT 1 FROM ${table} LIMIT 1`)),
     db.prepare("SELECT id FROM properties WHERE id='prop-seoul'"),
-    db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'pms@allmytour.com', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-pms-admin", new Date().toISOString()),
   ]);
   const property = results[tables.length]?.results[0];
   if (!property) throw new Error("Supabase PMS schema exists but the property seed is missing.");
@@ -219,10 +228,9 @@ async function initialize(db: D1) {
   // D1/local development is self-bootstrapping for a zero-setup demo. The ensure*
   // routines are idempotent legacy upgrades; Supabase never executes this DDL path.
   let propertyExists = false;
-  try { propertyExists = Boolean(await db.prepare("SELECT id FROM properties WHERE id='prop-seoul' LIMIT 1").first()); await db.prepare("SELECT id FROM reservation_type_nights LIMIT 1").first(); await db.prepare("SELECT id FROM business_blocks LIMIT 1").first(); await db.prepare("SELECT id FROM folio_windows LIMIT 1").first(); await db.prepare("SELECT id FROM channel_connections LIMIT 1").first(); }
+  try { propertyExists = Boolean(await db.prepare("SELECT id FROM properties WHERE id='prop-seoul' LIMIT 1").first()); await db.prepare("SELECT id FROM reservation_type_nights LIMIT 1").first(); await db.prepare("SELECT id FROM reservation_rate_nights LIMIT 1").first(); await db.prepare("SELECT id FROM booking_requests LIMIT 1").first(); await db.prepare("SELECT scope FROM api_rate_limits LIMIT 1").first(); await db.prepare("SELECT id FROM business_blocks LIMIT 1").first(); await db.prepare("SELECT id FROM folio_windows LIMIT 1").first(); await db.prepare("SELECT id FROM channel_connections LIMIT 1").first(); }
   catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
   const now = new Date().toISOString();
-  await db.prepare("INSERT OR IGNORE INTO role_assignments VALUES (?, 'prop-seoul', 'pms@allmytour.com', 'PROPERTY_ADMIN', 1, ?)").bind("role-local-pms-admin", now).run();
   if (propertyExists) { await ensureReportingModel(db); await ensureWebsiteModel(db,now); await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await ensureExtendedModel(db,now); await backfillLegacyNights(db,now); return; }
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
@@ -360,15 +368,24 @@ function decodedDisplayName(request: Request, email: string) {
 const principalCache = new Map<string,{expires:number;role:Role;propertyId:string}>();
 const principalInflight = new Map<string,Promise<{role:Role;propertyId:string}|null>>();
 
+function demoAuthenticationEnabled(request: Request) {
+  // Demo identity is deliberately impossible in production and requires both an
+  // operator flag and a high-entropy request token. Host-derived values are never
+  // authentication evidence because reverse proxies can rewrite them.
+  if (process.env.NODE_ENV === "production" || process.env.PMS_ALLOW_DEMO_AUTH !== "true") return false;
+  const expected = process.env.PMS_DEMO_AUTH_TOKEN || "";
+  const supplied = request.headers.get("x-aurora-demo-token") || "";
+  if (expected.length < 32 || supplied.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+}
+
 async function principalFor(request: Request, db: D1): Promise<Principal | null> {
   // Authentication establishes identity; role_assignments establishes the property
   // scope. The requested property is accepted only when that same user has an active
   // assignment, preventing a client-controlled header from crossing tenant bounds.
-  const url = new URL(request.url), identity = await authenticateSupabaseRequest(request);
+  const identity = await authenticateSupabaseRequest(request);
   let email = identity?.email || null, displayName = identity?.displayName || "";
-  const localRequest = ["localhost", "127.0.0.1"].includes(url.hostname);
-  if (!email && localRequest) { email = "pms@allmytour.com"; displayName = "Aurora PMS Admin"; }
-  if (!email && process.env.NODE_ENV !== "production" && process.env.PMS_ALLOW_DEMO_AUTH === "true") {
+  if (!email && demoAuthenticationEnabled(request)) {
     email = process.env.PMS_DEMO_USER_EMAIL?.trim().toLowerCase() || null;
     displayName = email || "";
   }
@@ -627,6 +644,10 @@ export async function POST(request: Request) {
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
   const origin=request.headers.get("origin");
   if(origin&&origin!==new URL(request.url).origin)return Response.json({error:"허용되지 않은 요청 출처입니다."},{status:403});
+  let rateLimit;
+  try { rateLimit=await consumeRateLimit(request,"pms-write",120,60_000,`${principal.propertyId}:${principal.email}`,rootDb); }
+  catch { return Response.json({error:"요청 보호 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요."},{status:503,headers:{"Retry-After":"30"}}); }
+  if(!rateLimit.allowed)return Response.json({error:"변경 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."},{status:429,headers:rateLimitHeaders(rateLimit)});
   const db = scopePmsDatabase(rootDb, principal.propertyId);
   let body: Record<string, string>;
   try { body = await request.json() as Record<string, string>; }
@@ -636,24 +657,27 @@ export async function POST(request: Request) {
   if (!requiredCapability || !principal.capabilities.includes(requiredCapability)) return Response.json({error:"이 작업을 수행할 권한이 없습니다."},{status:403});
   const idempotencyKey = request.headers.get("idempotency-key");
   if (!idempotencyKey || idempotencyKey.length > 200 || !/^[A-Za-z0-9:._-]+$/u.test(idempotencyKey)) return Response.json({error:"변경 요청에는 유효한 Idempotency-Key가 필요합니다."},{status:400});
+  // Every successful mutation appends this strict unique receipt inside the same
+  // transaction as its domain writes. Do not use OR IGNORE here: two concurrent
+  // retries must make the losing transaction roll back all side effects.
+  const mutationReceipt = () => db.prepare("INSERT INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now);
+  const duplicate = await db.prepare("SELECT key FROM idempotency_keys WHERE key=?").bind(idempotencyKey).first();
+  if (duplicate && body.action!=="export_report") return Response.json(await cachedSnapshot(db, principal), {headers:{"X-Idempotent-Replay":"true"}});
   if(body.action==="export_report") {
     try {
       const params=new URLSearchParams();for(const key of ["report","q","from","to","status","source","roomTypeId"]){if(body[key])params.set(key,body[key]);}
       const report=await runReport(db,params,principal,{exportMode:true});
+      if(duplicate)return Response.json({...report,replayed:true},{headers:{"X-Idempotent-Replay":"true"}});
       if(report.pagination.total>report.export.maxRows)return Response.json({error:`결과가 ${report.export.maxRows.toLocaleString()}행을 초과합니다. 기간 또는 필터를 좁혀 주세요.`},{status:413});
       const exportId=crypto.randomUUID(),filters=JSON.stringify(report.filters),format=body.format==="CSV"?"CSV":"XLSX";
       await db.batch([
         db.prepare("INSERT INTO report_exports VALUES (?, 'prop-seoul', ?, ?, ?, ?, 'COMPLETED', ?, ?, ?)").bind(exportId,report.report.key,format,filters,report.rows.length,actor,now,now),
         db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'EXPORT_REPORT', 'report_export', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,exportId,JSON.stringify({report:report.report.key,filters,rowCount:report.rows.length,format}),now),
-        ...(idempotencyKey?[db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES (?, 'prop-seoul', ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[]),
+        mutationReceipt(),
       ]);
       invalidateSnapshots();
       return Response.json({...report,exportId});
     } catch(error){if(error instanceof ReportRequestError)return Response.json({error:error.message},{status:error.status});throw error;}
-  }
-  if (idempotencyKey) {
-    const duplicate = await db.prepare("SELECT key FROM idempotency_keys WHERE key=?").bind(idempotencyKey).first();
-    if (duplicate) return Response.json(await cachedSnapshot(db, principal), {headers:{"X-Idempotent-Replay":"true"}});
   }
   const reservation = body.reservationId ? await db.prepare("SELECT * FROM reservations WHERE id=? AND property_id='prop-seoul'").bind(body.reservationId).first<Record<string, unknown>>() : null;
   const propertyState = await db.prepare("SELECT business_date FROM properties WHERE id='prop-seoul'").first<{business_date:string}>(); const businessDate=String(propertyState?.business_date);
@@ -975,10 +999,10 @@ export async function POST(request: Request) {
       const next=await db.prepare("SELECT COALESCE(MAX(window_no),0)+1 next_no FROM folio_windows WHERE reservation_id=? AND property_id='prop-seoul'").bind(body.reservationId).first<{next_no:number}>(),windowId=crypto.randomUUID(),payeeType=body.payeeType||"GUEST";
       if(!["GUEST","COMPANY","TRAVEL_AGENT","GROUP"].includes(payeeType))return Response.json({error:"올바른 지불 주체 유형을 선택하세요."},{status:400});
       if(body.accountProfileId&&!await db.prepare("SELECT id FROM account_profiles WHERE id=? AND property_id='prop-seoul' AND active=1").bind(body.accountProfileId).first())return Response.json({error:"유효한 계정 프로필을 선택하세요."},{status:400});
-      await db.batch([db.prepare("INSERT INTO folio_windows VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 'OPEN', ?, ?, NULL)").bind(windowId,body.reservationId,Number(next?.next_no??1),body.name?.trim()||`Window ${next?.next_no??1}`,payeeType,body.accountProfileId||null,now,actor),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CREATE_FOLIO_WINDOW', 'reservation', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,body.reservationId,JSON.stringify({windowId,payeeType}),now)]);
+      await db.batch([db.prepare("INSERT INTO folio_windows VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 'OPEN', ?, ?, NULL)").bind(windowId,body.reservationId,Number(next?.next_no??1),body.name?.trim()||`Window ${next?.next_no??1}`,payeeType,body.accountProfileId||null,now,actor),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'CREATE_FOLIO_WINDOW', 'reservation', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,body.reservationId,JSON.stringify({windowId,payeeType}),now),mutationReceipt()]);
     } else if (body.action === "create_routing_rule" && reservation) {
       const code=(body.code||"").toUpperCase(),target=await db.prepare("SELECT id FROM folio_windows WHERE id=? AND reservation_id=? AND property_id='prop-seoul' AND status='OPEN'").bind(body.windowId,body.reservationId).first(); if(!code||!target)return Response.json({error:"거래 코드와 열린 대상 폴리오를 선택하세요."},{status:400});
-      await db.batch([db.prepare("INSERT INTO folio_routing_rules VALUES (?, 'prop-seoul', ?, ?, ?, 1, ?, ?) ON CONFLICT(reservation_id,transaction_code) DO UPDATE SET target_window_id=excluded.target_window_id,active=1").bind(crypto.randomUUID(),body.reservationId,code,body.windowId,now,actor),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'UPSERT_FOLIO_ROUTING', 'reservation', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,body.reservationId,JSON.stringify({code,windowId:body.windowId}),now)]);
+      await db.batch([db.prepare("INSERT INTO folio_routing_rules VALUES (?, 'prop-seoul', ?, ?, ?, 1, ?, ?) ON CONFLICT(reservation_id,transaction_code) DO UPDATE SET target_window_id=excluded.target_window_id,active=1").bind(crypto.randomUUID(),body.reservationId,code,body.windowId,now,actor),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'UPSERT_FOLIO_ROUTING', 'reservation', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,body.reservationId,JSON.stringify({code,windowId:body.windowId}),now),mutationReceipt()]);
     } else if (body.action === "split_folio_entry") {
       const source=await db.prepare("SELECT f.*,d.folio_window_id,d.net_amount,d.tax_amount,d.service_amount,f.amount-COALESCE((SELECT SUM(x.amount) FROM folio_entries x WHERE x.reverses_entry_id=f.id AND x.property_id='prop-seoul' AND x.kind='CHARGE_REVERSAL'),0) remaining FROM folio_entries f JOIN folio_entry_details d ON d.entry_id=f.id WHERE f.id=? AND f.property_id='prop-seoul' AND d.property_id='prop-seoul' AND f.kind='CHARGE'").bind(body.entryId).first<Record<string,unknown>>(),amount=roundMoney(Number(body.amount));
       if(!source||!(amount>0)||amount>Number(source.remaining)+0.001)return Response.json({error:"분할 가능한 원전표 잔액 안에서 금액을 입력하세요."},{status:409});
@@ -990,17 +1014,18 @@ export async function POST(request: Request) {
         db.prepare("INSERT INTO folio_entries VALUES (?, 'prop-seoul', ?, 'CHARGE', ?, ?, ?, NULL, ?, ?, ?, NULL)").bind(repostId,source.reservation_id,source.code,`분할 전기 · ${source.description}`,amount,businessDate,now,actor),
         db.prepare("INSERT INTO folio_entry_details VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 'KRW', ?, ?, ?)").bind(repostId,source.reservation_id,body.targetWindowId,net,tax,service,source.id,reason,now),
         db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'SPLIT_FOLIO_ENTRY', 'folio_entry', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(source.id),JSON.stringify(source),JSON.stringify({amount,targetWindowId:body.targetWindowId,reverseId,repostId,reason}),now),
+        mutationReceipt(),
       ]);
     } else if (body.action === "reverse_folio_entry") {
       const source=await db.prepare("SELECT f.*,d.folio_window_id,d.net_amount,d.tax_amount,d.service_amount,f.amount-COALESCE((SELECT SUM(x.amount) FROM folio_entries x WHERE x.reverses_entry_id=f.id AND x.property_id='prop-seoul' AND x.kind=CASE f.kind WHEN 'CHARGE' THEN 'CHARGE_REVERSAL' ELSE 'PAYMENT_REVERSAL' END),0)-COALESCE((SELECT SUM(x.amount) FROM folio_entries x WHERE x.reverses_entry_id=f.id AND x.property_id='prop-seoul' AND x.kind='REFUND'),0) remaining FROM folio_entries f JOIN folio_entry_details d ON d.entry_id=f.id WHERE f.id=? AND f.property_id='prop-seoul' AND d.property_id='prop-seoul' AND f.kind IN ('CHARGE','PAYMENT')").bind(body.entryId).first<Record<string,unknown>>();
       if(!source||Number(source.remaining)<=0.001)return Response.json({error:"이미 전액 반대전표 처리된 전표입니다."},{status:409}); const reason=body.reason?.trim();if(!reason)return Response.json({error:"정정 사유를 입력하세요."},{status:400});
       const amount=roundMoney(Number(source.remaining)),ratio=amount/Number(source.amount),net=roundMoney(Number(source.net_amount)*ratio),tax=roundMoney(Number(source.tax_amount)*ratio),service=roundMoney(amount-net-tax),entryId=crypto.randomUUID(),kind=source.kind==='CHARGE'?'CHARGE_REVERSAL':'PAYMENT_REVERSAL';
-      await db.batch([db.prepare("INSERT INTO folio_entries VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(entryId,source.reservation_id,kind,source.code,`반대전표 · ${source.description}`,amount,source.payment_method??null,businessDate,now,actor,source.id),db.prepare("INSERT INTO folio_entry_details VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 'KRW', ?, ?, ?)").bind(entryId,source.reservation_id,source.folio_window_id,net,tax,service,source.id,reason,now),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'REVERSE_FOLIO_ENTRY', 'folio_entry', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(source.id),JSON.stringify(source),JSON.stringify({entryId,kind,amount,reason}),now)]);
+      await db.batch([db.prepare("INSERT INTO folio_entries VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(entryId,source.reservation_id,kind,source.code,`반대전표 · ${source.description}`,amount,source.payment_method??null,businessDate,now,actor,source.id),db.prepare("INSERT INTO folio_entry_details VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 'KRW', ?, ?, ?)").bind(entryId,source.reservation_id,source.folio_window_id,net,tax,service,source.id,reason,now),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'REVERSE_FOLIO_ENTRY', 'folio_entry', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(source.id),JSON.stringify(source),JSON.stringify({entryId,kind,amount,reason}),now),mutationReceipt()]);
     } else if (body.action === "refund_payment") {
       const cashier=await db.prepare("SELECT id FROM cashier_sessions WHERE property_id='prop-seoul' AND actor=? AND status='OPEN'").bind(actor).first();if(!cashier)return Response.json({error:"환불 전 캐셔 세션을 개시하세요."},{status:409});
       const source=await db.prepare("SELECT f.*,d.folio_window_id,f.amount-COALESCE((SELECT SUM(x.amount) FROM folio_entries x WHERE x.reverses_entry_id=f.id AND x.property_id='prop-seoul' AND x.kind IN ('PAYMENT_REVERSAL','REFUND')),0) remaining FROM folio_entries f JOIN folio_entry_details d ON d.entry_id=f.id WHERE f.id=? AND f.property_id='prop-seoul' AND d.property_id='prop-seoul' AND f.kind='PAYMENT'").bind(body.entryId).first<Record<string,unknown>>(),amount=roundMoney(Number(body.amount)),reason=body.reason?.trim();
       if(!source||source.payment_method==='DIRECT_BILL'||!(amount>0)||amount>Number(source.remaining)+0.001||!reason)return Response.json({error:"환불 가능 결제와 잔액, 사유를 확인하세요."},{status:409}); const entryId=crypto.randomUUID();
-      await db.batch([db.prepare("INSERT INTO folio_entries VALUES (?, 'prop-seoul', ?, 'REFUND', 'REFUND', ?, ?, ?, ?, ?, ?, ?)").bind(entryId,source.reservation_id,`환불 · ${reason}`,amount,source.payment_method,businessDate,now,actor,source.id),db.prepare("INSERT INTO folio_entry_details VALUES (?, 'prop-seoul', ?, ?, ?, 0, 0, 'KRW', ?, ?, ?)").bind(entryId,source.reservation_id,source.folio_window_id,amount,source.id,reason,now),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'REFUND_PAYMENT', 'folio_entry', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(source.id),JSON.stringify(source),JSON.stringify({entryId,amount,reason}),now)]);
+      await db.batch([db.prepare("INSERT INTO folio_entries VALUES (?, 'prop-seoul', ?, 'REFUND', 'REFUND', ?, ?, ?, ?, ?, ?, ?)").bind(entryId,source.reservation_id,`환불 · ${reason}`,amount,source.payment_method,businessDate,now,actor,source.id),db.prepare("INSERT INTO folio_entry_details VALUES (?, 'prop-seoul', ?, ?, ?, 0, 0, 'KRW', ?, ?, ?)").bind(entryId,source.reservation_id,source.folio_window_id,amount,source.id,reason,now),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'REFUND_PAYMENT', 'folio_entry', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(source.id),JSON.stringify(source),JSON.stringify({entryId,amount,reason}),now),mutationReceipt()]);
     } else if (body.action === "transfer_to_ar") {
       const window=await db.prepare(`SELECT w.*,r.id reservation_id,COALESCE(SUM(CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'PAYMENT' THEN -f.amount WHEN 'CHARGE_REVERSAL' THEN -f.amount WHEN 'PAYMENT_REVERSAL' THEN f.amount WHEN 'REFUND' THEN f.amount ELSE 0 END),0) balance,COALESCE(SUM(CASE WHEN f.kind='CHARGE' THEN d.net_amount WHEN f.kind='CHARGE_REVERSAL' THEN -d.net_amount ELSE 0 END),0) net_total,COALESCE(SUM(CASE WHEN f.kind='CHARGE' THEN d.tax_amount WHEN f.kind='CHARGE_REVERSAL' THEN -d.tax_amount ELSE 0 END),0) tax_total,COALESCE(SUM(CASE WHEN f.kind='CHARGE' THEN d.service_amount WHEN f.kind='CHARGE_REVERSAL' THEN -d.service_amount ELSE 0 END),0) service_total FROM folio_windows w JOIN reservations r ON r.id=w.reservation_id AND r.property_id=w.property_id LEFT JOIN folio_entry_details d ON d.folio_window_id=w.id AND d.property_id=w.property_id LEFT JOIN folio_entries f ON f.id=d.entry_id AND f.property_id=w.property_id WHERE w.id=? AND w.property_id='prop-seoul' AND w.status='OPEN' GROUP BY w.id,r.id`).bind(body.windowId).first<Record<string,unknown>>(),profile=await db.prepare("SELECT * FROM account_profiles WHERE id=? AND property_id='prop-seoul' AND active=1 AND credit_status='DIRECT_BILL'").bind(body.accountProfileId).first<Record<string,unknown>>();
       if(!window||Number(window.balance)<=0.001||!profile)return Response.json({error:"잔액이 있는 열린 폴리오와 후불 승인 계정을 선택하세요."},{status:409}); const dueDate=body.dueDate;if(!dueDate||dueDate<businessDate)return Response.json({error:"청구서 만기일을 확인하세요."},{status:400});
@@ -1015,11 +1040,12 @@ export async function POST(request: Request) {
         db.prepare("UPDATE folio_windows SET status='TRANSFERRED',payee_type='COMPANY',payee_account_profile_id=?,closed_at=? WHERE id=? AND property_id='prop-seoul' AND status='OPEN'").bind(profile.id,now,window.id),
         db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'TRANSFER_FOLIO_TO_AR', 'ar_invoice', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,invoiceId,JSON.stringify({invoiceNo,amount,windowId:window.id,accountProfileId:profile.id}),now),
         db.prepare("INSERT INTO outbox_events VALUES (?, 'prop-seoul', 'ar.invoice_issued', 'ar_invoice', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),invoiceId,JSON.stringify({invoiceId,invoiceNo,amount}),now),
+        mutationReceipt(),
       ]);
     } else if (body.action === "post_ar_payment") {
       const invoice=await db.prepare("SELECT i.*,COALESCE(SUM(l.debit-l.credit),0) balance FROM ar_invoices i LEFT JOIN ar_ledger_entries l ON l.invoice_id=i.id AND l.property_id=i.property_id WHERE i.id=? AND i.property_id='prop-seoul' GROUP BY i.id").bind(body.invoiceId).first<Record<string,unknown>>(),amount=roundMoney(Number(body.amount)),method=body.method||"BANK_TRANSFER";if(!invoice||!(amount>0)||amount>Number(invoice.balance)+0.001)return Response.json({error:"AR 청구서 잔액 안에서 수납 금액을 입력하세요."},{status:409});
       const cashier=await db.prepare("SELECT id FROM cashier_sessions WHERE property_id='prop-seoul' AND actor=? AND status='OPEN'").bind(actor).first();if(!cashier)return Response.json({error:"AR 수납 전 캐셔 세션을 개시하세요."},{status:409}); const paid=amount>=Number(invoice.balance)-0.001;
-      await db.batch([db.prepare("INSERT INTO ar_ledger_entries VALUES (?, 'prop-seoul', ?, ?, 'PAYMENT', 0, ?, ?, ?, ?, ?, ?, NULL)").bind(crypto.randomUUID(),invoice.ar_account_id,invoice.id,amount,businessDate,method,`AR receipt ${invoice.invoice_no}`,now,actor),...(paid?[db.prepare("UPDATE ar_invoices SET status='PAID' WHERE id=? AND property_id='prop-seoul' AND status='OPEN'").bind(invoice.id)]:[]),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'POST_AR_PAYMENT', 'ar_invoice', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(invoice.id),JSON.stringify({balance:invoice.balance}),JSON.stringify({amount,method,status:paid?'PAID':'OPEN'}),now)]);
+      await db.batch([db.prepare("INSERT INTO ar_ledger_entries VALUES (?, 'prop-seoul', ?, ?, 'PAYMENT', 0, ?, ?, ?, ?, ?, ?, NULL)").bind(crypto.randomUUID(),invoice.ar_account_id,invoice.id,amount,businessDate,method,`AR receipt ${invoice.invoice_no}`,now,actor),...(paid?[db.prepare("UPDATE ar_invoices SET status='PAID' WHERE id=? AND property_id='prop-seoul' AND status='OPEN'").bind(invoice.id)]:[]),db.prepare("INSERT INTO audit_logs VALUES (?, 'prop-seoul', ?, 'POST_AR_PAYMENT', 'ar_invoice', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,String(invoice.id),JSON.stringify({balance:invoice.balance}),JSON.stringify({amount,method,status:paid?'PAID':'OPEN'}),now),mutationReceipt()]);
     } else if (body.action === "housekeeping") {
       const status = body.status === "INSPECTED" ? "INSPECTED" : "CLEAN";
       const room = await db.prepare("SELECT id FROM rooms WHERE id=? AND property_id='prop-seoul'").bind(body.roomId).first();

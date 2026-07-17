@@ -5,8 +5,6 @@ import { getPmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRu
 const MAX_STAY_NIGHTS = 30;
 
 const bindings: PmsRuntimeBindings = {
-  SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
   DATABASE_URL: process.env.DATABASE_URL,
 };
 

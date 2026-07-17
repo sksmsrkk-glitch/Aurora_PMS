@@ -1,5 +1,6 @@
 /** Direct-booking create, replay, cancel and inventory-restoration E2E. */
 import assert from "node:assert/strict";
+import { assertSafeQaTarget } from "./qa-target.mjs";
 
 const baseUrl=(process.env.PMS_BASE_URL||"http://localhost:3000").replace(/\/$/u,"");
 const addDays=(date,days)=>{const value=new Date(`${date}T00:00:00Z`);value.setUTCDate(value.getUTCDate()+days);return value.toISOString().slice(0,10)};
@@ -7,6 +8,8 @@ const todayParts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"A
 const today=`${todayParts.year}-${todayParts.month}-${todayParts.day}`;
 const arrival=addDays(today,1),departure=addDays(today,2);
 const availabilityPath=`/api/booking/availability?${new URLSearchParams({arrival,departure,adults:"2",children:"0"})}`;
+
+await assertSafeQaTarget(baseUrl);
 
 async function json(path,options){
   const response=await fetch(`${baseUrl}${path}`,options);

@@ -3,10 +3,6 @@ INSERT INTO properties(id,name,code,timezone,currency,business_date)
 VALUES ('prop-seoul','오로라 서울 호텔','SEL01','Asia/Seoul','KRW','2026-07-16')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO role_assignments(id,property_id,email,role,active,created_at) VALUES
-  ('role-local-pms-admin','prop-seoul','pms@allmytour.com','PROPERTY_ADMIN',1,clock_timestamp()::text)
-ON CONFLICT (property_id,email) DO NOTHING;
-
 INSERT INTO room_types(id,property_id,code,name,base_rate,capacity,description,active,version) VALUES
   ('rt-dlx','prop-seoul','DLX','디럭스 킹',198000,2,'킹베드 기반의 대표 객실',1,1),
   ('rt-twn','prop-seoul','TWN','프리미어 트윈',228000,3,'가족 및 비즈니스 고객용 트윈',1,1),

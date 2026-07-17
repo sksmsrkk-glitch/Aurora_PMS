@@ -1,25 +1,9 @@
 /** Public booking rate limits, payload limits and same-origin protections. */
 import type { NextRequest } from "next/server";
-
-const buckets = new Map<string, { count: number; resetAt: number }>();
-
-export function clientAddress(request: NextRequest) {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "unknown";
-}
+import { consumeRateLimit } from "../rate-limit";
 
 export function allowBookingRequest(request: NextRequest, kind: "read" | "write") {
-  const now = Date.now();
-  const windowMs = 60_000;
-  const limit = kind === "read" ? 60 : 10;
-  const key = `${kind}:${clientAddress(request)}`;
-  const current = buckets.get(key);
-  if (!current || current.resetAt <= now) {
-    buckets.set(key, { count: 1, resetAt: now + windowMs });
-    if (buckets.size > 2_000) for (const [bucketKey, value] of buckets) if (value.resetAt <= now) buckets.delete(bucketKey);
-    return true;
-  }
-  current.count += 1;
-  return current.count <= limit;
+  return consumeRateLimit(request,`booking-${kind}`,kind === "read" ? 60 : 10,60_000);
 }
 
 export function isSameOrigin(request: NextRequest) {

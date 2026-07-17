@@ -1,12 +1,16 @@
 /** End-to-end QA for CMS projection, media lifecycle and direct-web stop sell. */
 import assert from "node:assert/strict";
+import { assertSafeQaTarget } from "./qa-target.mjs";
 
 const baseUrl=(process.env.PMS_BASE_URL||"http://localhost:3000").replace(/\/$/u,"");
 const addDays=(date,days)=>{const value=new Date(`${date}T00:00:00Z`);value.setUTCDate(value.getUTCDate()+days);return value.toISOString().slice(0,10)};
 const dateParts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date()).filter(part=>part.type!=="literal").map(part=>[part.type,part.value]));
 const today=`${dateParts.year}-${dateParts.month}-${dateParts.day}`,arrival=addDays(today,60),departure=addDays(today,61);
+const demoToken=process.env.PMS_DEMO_AUTH_TOKEN||"";
 
-async function responseJson(path,options){const response=await fetch(`${baseUrl}${path}`,options),body=await response.json();return {response,body};}
+await assertSafeQaTarget(baseUrl);
+
+async function responseJson(path,options={}){const headers=new Headers(options.headers);if(demoToken)headers.set("x-aurora-demo-token",demoToken);const response=await fetch(`${baseUrl}${path}`,{...options,headers}),body=await response.json();return {response,body};}
 async function websiteAdmin(){const result=await responseJson("/api/pms?view=website");assert.equal(result.response.status,200,result.body?.error);return result.body;}
 async function action(action,payload={}){const result=await responseJson("/api/pms",{method:"POST",headers:{origin:baseUrl,"content-type":"application/json","idempotency-key":`website-qa:${action}:${crypto.randomUUID()}`},body:JSON.stringify({action,...payload})});assert.equal(result.response.status,200,result.body?.error);return result.body;}
 async function availability(){return responseJson(`/api/booking/availability?${new URLSearchParams({arrival,departure,adults:"2",children:"0"})}`);}

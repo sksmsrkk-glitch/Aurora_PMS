@@ -20,7 +20,8 @@
     "db:generate": "drizzle-kit generate",
     "db:supabase:generate": "node scripts/generate-supabase-migration.mjs",
     "db:supabase:migrate": "node scripts/migrate-supabase.mjs",
-    "db:supabase:smoke": "node scripts/smoke-supabase.mjs"
+    "db:supabase:smoke": "node scripts/smoke-supabase.mjs",
+    "db:provision-role": "node scripts/provision-role.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

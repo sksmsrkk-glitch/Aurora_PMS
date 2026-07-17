@@ -1,4 +1,4 @@
-/** Unified prepared-statement adapter for Supabase RPC, PostgreSQL and D1. */
+/** Unified prepared-statement adapter for server-only PostgreSQL and D1. */
 import postgres from "postgres";
 
 export type PmsDialect = "d1" | "postgres";
@@ -46,8 +46,6 @@ export function scopePmsDatabase(database: PmsDatabase, propertyId: string): Pms
 export type PmsRuntimeBindings = {
   DB?: D1Database;
   DATABASE_URL?: string;
-  SUPABASE_URL?: string;
-  SUPABASE_SECRET_KEY?: string;
 };
 
 type PostgresExecutor = postgres.Sql | postgres.TransactionSql;
@@ -195,88 +193,6 @@ class PostgresDatabase implements PmsDatabase {
   }
 }
 
-type SupabaseRpcResult<T> = { results?: T[]; changes?: number };
-
-class SupabasePreparedStatement implements PmsPreparedStatement {
-  constructor(
-    private readonly database: SupabaseHttpDatabase,
-    readonly query: string,
-    readonly values: unknown[] = [],
-  ) {}
-
-  bind(...values: unknown[]) {
-    return new SupabasePreparedStatement(this.database,this.query,values);
-  }
-
-  async first<T = Record<string, unknown>>() {
-    const result=await this.database.execute<T>(this.query,this.values);
-    return result.results[0] ?? null;
-  }
-
-  all<T = Record<string, unknown>>() {
-    return this.database.execute<T>(this.query,this.values);
-  }
-
-  run<T = Record<string, unknown>>() {
-    return this.database.execute<T>(this.query,this.values);
-  }
-}
-
-class SupabaseHttpDatabase implements PmsDatabase {
-  readonly dialect = "postgres" as const;
-
-  constructor(private readonly url:string,private readonly secretKey:string) {}
-
-  prepare(query:string) {
-    return new SupabasePreparedStatement(this,query);
-  }
-
-  private async rpc<T>(name:"pms_execute"|"pms_batch",body:Record<string,unknown>):Promise<T> {
-    // The service credential stays on the server. Browser code never calls these
-    // privileged RPCs directly, and error bodies are reduced to diagnostic fields.
-    const response=await fetch(`${this.url.replace(/\/$/u,"")}/rest/v1/rpc/${name}`,{
-      method:"POST",
-      headers:{
-        apikey:this.secretKey,
-        "content-type":"application/json",
-        accept:"application/json",
-        "x-client-info":"aurora-pms-worker/1.0",
-      },
-      body:JSON.stringify(body,(_key,value)=>value===undefined?null:value),
-    });
-    if(!response.ok){
-      let message=`Supabase Data API request failed (${response.status})`;
-      try {
-        const error=await response.json() as {message?:string;details?:string;hint?:string};
-        message=[error.message,error.details,error.hint].filter(Boolean).join(" · ")||message;
-      } catch { /* Keep the sanitized HTTP status message. */ }
-      throw new Error(message);
-    }
-    return await response.json() as T;
-  }
-
-  async execute<T>(query:string,values:unknown[]):Promise<PmsResult<T>> {
-    const payload=await this.rpc<SupabaseRpcResult<T>>("pms_execute",{p_sql:toPostgresSql(query),p_values:values});
-    const results=Array.isArray(payload.results)?payload.results:[];
-    return {results,success:true,meta:{changes:Number(payload.changes??results.length)}};
-  }
-
-  async batch<T = Record<string, unknown>>(statements:PmsPreparedStatement[]) {
-    if(!statements.length)return [];
-    const payload=statements.map((statement)=>{
-      if(!(statement instanceof SupabasePreparedStatement))throw new Error("Cannot mix database statement implementations in one batch");
-      return {sql:toPostgresSql(statement.query),values:statement.values};
-    });
-    // pms_batch owns the PostgreSQL transaction on the Supabase side; separating
-    // these into pms_execute calls would permit partially posted business commands.
-    const response=await this.rpc<SupabaseRpcResult<T>[]>("pms_batch",{p_statements:payload});
-    return response.map((item)=>{
-      const results=Array.isArray(item.results)?item.results:[];
-      return {results,success:true as const,meta:{changes:Number(item.changes??results.length)}};
-    });
-  }
-}
-
 class D1PreparedStatementAdapter implements PmsPreparedStatement {
   constructor(private readonly statement: D1PreparedStatement) {}
 
@@ -344,19 +260,10 @@ function processDatabaseUrl() {
   return process.env.DATABASE_URL;
 }
 
-function processSetting(name:"SUPABASE_URL"|"SUPABASE_SECRET_KEY") {
-  if (typeof process === "undefined") return undefined;
-  return process.env[name];
-}
-
 export function getPmsDatabase(bindings: PmsRuntimeBindings): PmsDatabase {
-  // Prefer the server-only Supabase RPC path, then a direct pooled PostgreSQL URL,
-  // and finally the local/edge D1 binding. Every branch exposes identical batch
-  // semantics so domain services do not depend on their deployment environment.
-  const supabaseUrl=bindings.SUPABASE_URL||processSetting("SUPABASE_URL");
-  const supabaseSecretKey=bindings.SUPABASE_SECRET_KEY||processSetting("SUPABASE_SECRET_KEY");
-  if(supabaseUrl&&supabaseSecretKey)return new SupabaseHttpDatabase(supabaseUrl,supabaseSecretKey);
-
+  // Serverless production uses Supavisor's transaction-mode DATABASE_URL with
+  // prepared statements disabled. No API credential can submit SQL text to an RPC;
+  // the D1 binding remains the explicit local/edge alternative.
   const databaseUrl = bindings.DATABASE_URL || processDatabaseUrl();
   if (databaseUrl) {
     if (!postgresClient || postgresUrl !== databaseUrl) {

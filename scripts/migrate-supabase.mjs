@@ -21,7 +21,7 @@ function parseEnv(contents) {
 }
 
 const env = parseEnv(await readFile(path.join(root,".env.local"),"utf8"));
-const directUrl = env.DIRECT_URL;
+const directUrl = process.env.DIRECT_URL || env.DIRECT_URL;
 if (!directUrl || !/^postgres(?:ql)?:\/\//u.test(directUrl)) throw new Error("DIRECT_URL is missing or invalid in .env.local");
 
 const sql = postgres(directUrl, { max:1, prepare:false, ssl:"require", connect_timeout:15, idle_timeout:5 });
@@ -29,8 +29,13 @@ try {
   await sql`CREATE TABLE IF NOT EXISTS pms_schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
   const migrationsDirectory=path.join(root,"supabase","migrations");
   const migrations=(await readdir(migrationsDirectory)).filter((name)=>/^\d+_.+\.sql$/u.test(name)).sort();
+  const migrationMax=process.env.PMS_MIGRATION_MAX || "";
   for(const migrationFile of migrations){
     const migrationId=migrationFile.replace(/\.sql$/u,"");
+    if(migrationMax&&migrationId.localeCompare(migrationMax,"en")>0){
+      console.log(`Deferred migration ${migrationId} after ${migrationMax}.`);
+      continue;
+    }
     const applied = await sql`SELECT id FROM pms_schema_migrations WHERE id=${migrationId}`;
     if (!applied.length) {
       const migration = await readFile(path.join(migrationsDirectory,migrationFile),"utf8");

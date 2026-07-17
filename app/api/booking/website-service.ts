@@ -7,8 +7,6 @@
 import { getPmsDatabase, type PmsRuntimeBindings } from "../../../db/pms-database";
 
 const bindings: PmsRuntimeBindings = {
-  SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
   DATABASE_URL: process.env.DATABASE_URL,
 };
 

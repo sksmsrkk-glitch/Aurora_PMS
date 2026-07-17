@@ -1,5 +1,6 @@
 /** Destructive staging workflow QA spanning every PMS operating domain. */
 import assert from "node:assert/strict";
+import { assertSafeQaTarget } from "./qa-target.mjs";
 
 const baseUrl = (process.env.PMS_BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 // Every run receives a compact namespace for records it creates. The workflow is
@@ -10,6 +11,7 @@ const qaCode = `Q${runId}`.slice(0, 12);
 const roomPrefix = `Q${runId.slice(-5)}`;
 const results = [];
 let sessionCookie = "";
+const demoToken=process.env.PMS_DEMO_AUTH_TOKEN || "";
 
 const addDays = (date, days) => {
   const value = new Date(`${date}T00:00:00Z`);
@@ -28,6 +30,7 @@ async function request(path, options = {}) {
   const started = performance.now();
   const headers = new Headers(options.headers);
   if (sessionCookie) headers.set("Cookie", sessionCookie);
+  if (demoToken) headers.set("x-aurora-demo-token",demoToken);
   const response = await fetch(`${baseUrl}${path}`, { ...options, headers });
   const text = await response.text();
   let json;
@@ -86,8 +89,10 @@ async function createReservation(lastName, roomTypeId, arrivalDate, departureDat
 async function main() {
   // First verify shell, authentication, and read projections before creating
   // persistent QA data used by the remaining domain checkpoints.
+  await assertSafeQaTarget(baseUrl);
   await authenticateIfConfigured();
-  const page = await fetch(`${baseUrl}/`,{headers:sessionCookie?{Cookie:sessionCookie}:undefined});
+  const pageHeaders=new Headers();if(sessionCookie)pageHeaders.set("Cookie",sessionCookie);if(demoToken)pageHeaders.set("x-aurora-demo-token",demoToken);
+  const page = await fetch(`${baseUrl}/`,{headers:pageHeaders});
   assert.equal(page.status, 200, "dashboard route failed");
   record("대시보드 페이지 로드", `${page.status}`);
 

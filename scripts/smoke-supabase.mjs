@@ -1,4 +1,4 @@
-/** Production-like Supabase catalog, invariant and Data API smoke checks. */
+/** Read-only/rollback Supabase catalog, invariant and pooled-runtime smoke checks. */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import postgres from "postgres";
@@ -15,8 +15,8 @@ function parseEnv(contents) {
   return values;
 }
 
-const env=parseEnv(await readFile(path.join(process.cwd(),".env.local"),"utf8"));
-for(const key of ["DIRECT_URL","SUPABASE_URL","SUPABASE_SECRET_KEY"])if(!env[key])throw new Error(`${key} is required`);
+const env={...parseEnv(await readFile(path.join(process.cwd(),".env.local"),"utf8")),...Object.fromEntries(["DIRECT_URL","DATABASE_URL"].filter(key=>process.env[key]).map(key=>[key,process.env[key]]))};
+for(const key of ["DIRECT_URL","DATABASE_URL"])if(!env[key])throw new Error(`${key} is required`);
 
 const sql=postgres(env.DIRECT_URL,{max:1,prepare:false,ssl:"require",connect_timeout:15,idle_timeout:5});
 try{
@@ -26,9 +26,11 @@ try{
       (SELECT COUNT(*)::int FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r' AND relrowsecurity) rls_tables,
       (SELECT COUNT(*)::int FROM pg_trigger WHERE NOT tgisinternal) triggers,
       (SELECT COUNT(*)::int FROM pg_constraint WHERE connamespace='public'::regnamespace AND contype='f' AND convalidated) foreign_keys,
-      (SELECT COUNT(*)::int FROM pms_schema_migrations) migrations
+      (SELECT COUNT(*)::int FROM pms_schema_migrations) migrations,
+      (SELECT COUNT(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('pms_execute','pms_batch','pms_execute_statement','pms_render_sql')) arbitrary_sql_functions,
+      (SELECT COUNT(*)::int FROM role_assignments WHERE id IN ('role-local-admin','role-local-pms-admin')) seeded_admins
   `;
-  if(catalog.tables<50||catalog.rls_tables<50||catalog.triggers<34||catalog.foreign_keys<79||catalog.migrations<10)throw new Error("Supabase catalog verification failed");
+  if(catalog.tables<51||catalog.rls_tables<51||catalog.triggers<34||catalog.foreign_keys<79||catalog.migrations<14||Number(catalog.arbitrary_sql_functions)!==0||Number(catalog.seeded_admins)!==0)throw new Error("Supabase catalog verification failed");
 
   const [website]=await sql`
     SELECT
@@ -83,14 +85,36 @@ try{
   const [settlementMismatch]=await sql`SELECT COUNT(*)::int count FROM channel_settlements WHERE abs((gross_sell_amount-channel_cost_amount)-hotel_net_amount)>0.01 OR contract_type NOT IN ('COMMISSION','NET_RATE')`;
   if(Number(settlementMismatch.count)!==0)throw new Error("Channel settlement equation verification failed");
 
-  const started=Date.now();
-  const response=await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/pms_execute`,{
-    method:"POST",
-    headers:{apikey:env.SUPABASE_SECRET_KEY,"content-type":"application/json","x-client-info":"aurora-pms-smoke/1.0"},
-    body:JSON.stringify({p_sql:"SELECT COUNT(*) count FROM reservations WHERE property_id=$1",p_values:["prop-seoul"]}),
-  });
-  if(!response.ok)throw new Error(`Supabase Data API smoke test failed (${response.status})`);
-  const data=await response.json();
-  if(Number(data.results?.[0]?.count)<4)throw new Error("Supabase Data API returned fewer rows than the seed baseline");
-  console.log(`Supabase smoke passed: ${catalog.tables} tables, ${catalog.triggers} triggers, ${catalog.foreign_keys} validated foreign keys, ${catalog.rls_tables} RLS tables, ${website.published_rooms} published website rooms, Data API ${Date.now()-started} ms.`);
+  // Duplicate receipts must abort every statement in the financial transaction,
+  // not merely ignore the second key after ledger side effects were committed.
+  const receiptKey=`smoke-idempotency-${crypto.randomUUID()}`,auditId=crypto.randomUUID();
+  let receiptRollback=false;
+  try {
+    await sql.begin(async transaction=>{
+      await transaction`INSERT INTO audit_logs(id,property_id,actor,action,entity_type,entity_id,before_json,after_json,created_at) VALUES (${auditId},'prop-seoul','smoke','SMOKE_IDEMPOTENCY','smoke',${receiptKey},NULL,NULL,${new Date().toISOString()})`;
+      await transaction`INSERT INTO idempotency_keys(key,property_id,action,actor,created_at) VALUES (${receiptKey},'prop-seoul','SMOKE','smoke',${new Date().toISOString()})`;
+      await transaction`INSERT INTO idempotency_keys(key,property_id,action,actor,created_at) VALUES (${receiptKey},'prop-seoul','SMOKE','smoke',${new Date().toISOString()})`;
+    });
+  } catch(error) { receiptRollback=error instanceof Error&&error.message.includes("idempotency_keys_pkey"); }
+  const [receiptState]=await sql`SELECT (SELECT COUNT(*)::int FROM idempotency_keys WHERE key=${receiptKey}) receipts,(SELECT COUNT(*)::int FROM audit_logs WHERE id=${auditId}) audits`;
+  if(!receiptRollback||Number(receiptState.receipts)!==0||Number(receiptState.audits)!==0)throw new Error("Idempotency transaction rollback verification failed");
+
+  const rateScope=`smoke-${crypto.randomUUID()}`;let rateRollback=false;
+  try {
+    await sql.begin(async transaction=>{
+      const [first]=await transaction`INSERT INTO api_rate_limits(scope,key_hash,window_start,count,expires_at) VALUES (${rateScope},'smoke','2099-01-01T00:00:00.000Z',1,'2099-01-01T00:02:00.000Z') ON CONFLICT(scope,key_hash,window_start) DO UPDATE SET count=api_rate_limits.count+1 RETURNING count`;
+      const [second]=await transaction`INSERT INTO api_rate_limits(scope,key_hash,window_start,count,expires_at) VALUES (${rateScope},'smoke','2099-01-01T00:00:00.000Z',1,'2099-01-01T00:02:00.000Z') ON CONFLICT(scope,key_hash,window_start) DO UPDATE SET count=api_rate_limits.count+1 RETURNING count`;
+      if(Number(first.count)!==1||Number(second.count)!==2)throw new Error("rate limit count mismatch");
+      throw new Error("rollback rate limit smoke");
+    });
+  } catch(error) { rateRollback=error instanceof Error&&error.message==="rollback rate limit smoke"; }
+  const [rateState]=await sql`SELECT COUNT(*)::int count FROM api_rate_limits WHERE scope=${rateScope}`;
+  if(!rateRollback||Number(rateState.count)!==0)throw new Error("Rate-limit atomic rollback verification failed");
+
+  const started=Date.now(),runtimeSql=postgres(env.DATABASE_URL,{max:1,prepare:false,ssl:"require",connect_timeout:15,idle_timeout:5});
+  try {
+    const [runtime]=await runtimeSql`SELECT COUNT(*)::int count FROM reservations WHERE property_id='prop-seoul'`;
+    if(Number(runtime?.count)<4)throw new Error("Pooled runtime connection returned fewer rows than the seed baseline");
+  } finally { await runtimeSql.end({timeout:5}); }
+  console.log(`Supabase smoke passed: ${catalog.tables} tables, ${catalog.triggers} triggers, ${catalog.foreign_keys} validated foreign keys, ${catalog.rls_tables} RLS tables, ${website.published_rooms} published website rooms, pooled runtime ${Date.now()-started} ms, arbitrary SQL RPCs 0.`);
 }finally{await sql.end({timeout:5});}

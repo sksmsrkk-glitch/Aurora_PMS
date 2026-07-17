@@ -28,6 +28,14 @@ export const reservationNights = sqliteTable("reservation_nights", {
 export const reservationTypeNights = sqliteTable("reservation_type_nights", {
   id: integer("id").primaryKey({ autoIncrement: true }), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), roomTypeId: text("room_type_id").notNull(), stayDate: text("stay_date").notNull(),
 }, (t) => [uniqueIndex("reservation_type_night_uq").on(t.reservationId, t.stayDate), index("type_night_inventory_idx").on(t.propertyId, t.roomTypeId, t.stayDate)]);
+// Direct bookings retain both a request receipt and the immutable nightly rate
+// accepted by the guest, so retries and later BAR changes cannot rewrite a stay.
+export const bookingRequests = sqliteTable("booking_requests", {
+  id:text("id").primaryKey(), propertyId:text("property_id").notNull(), idempotencyKey:text("idempotency_key").notNull(), reservationId:text("reservation_id").notNull(), emailHash:text("email_hash").notNull(), createdAt:text("created_at").notNull(),
+},(t)=>[uniqueIndex("booking_request_idempotency_uq").on(t.propertyId,t.idempotencyKey),uniqueIndex("booking_request_reservation_uq").on(t.propertyId,t.reservationId)]);
+export const reservationRateNights = sqliteTable("reservation_rate_nights", {
+  id:text("id").primaryKey(), propertyId:text("property_id").notNull(), reservationId:text("reservation_id").notNull(), roomTypeId:text("room_type_id").notNull(), stayDate:text("stay_date").notNull(), sellRate:real("sell_rate").notNull(), currency:text("currency").notNull(), ratePlan:text("rate_plan").notNull(), createdAt:text("created_at").notNull(),
+},(t)=>[uniqueIndex("reservation_rate_night_uq").on(t.reservationId,t.stayDate),index("reservation_rate_calendar_idx").on(t.propertyId,t.roomTypeId,t.stayDate)]);
 export const folioEntries = sqliteTable("folio_entries", {
   id: text("id").primaryKey(), propertyId: text("property_id").notNull(), reservationId: text("reservation_id").notNull(), kind: text("kind").notNull(), code: text("code").notNull(), description: text("description").notNull(), amount: real("amount").notNull(), paymentMethod: text("payment_method"), businessDate: text("business_date").notNull(), createdAt: text("created_at").notNull(), createdBy: text("created_by").notNull(), reversesEntryId: text("reverses_entry_id"),
 }, (t) => [index("folio_reservation_idx").on(t.reservationId, t.createdAt)]);
@@ -43,6 +51,9 @@ export const outboxEvents = sqliteTable("outbox_events", {
 export const idempotencyKeys = sqliteTable("idempotency_keys", {
   key: text("key").primaryKey(), propertyId: text("property_id").notNull(), action: text("action").notNull(), actor: text("actor").notNull(), createdAt: text("created_at").notNull(),
 });
+export const apiRateLimits = sqliteTable("api_rate_limits", {
+  scope:text("scope").notNull(), keyHash:text("key_hash").notNull(), windowStart:text("window_start").notNull(), count:integer("count").notNull().default(1), expiresAt:text("expires_at").notNull(),
+},(t)=>[uniqueIndex("api_rate_limit_window_uq").on(t.scope,t.keyHash,t.windowStart),index("api_rate_limits_expiry_idx").on(t.expiresAt)]);
 export const roleAssignments = sqliteTable("role_assignments", {
   id: text("id").primaryKey(), propertyId: text("property_id").notNull(), email: text("email").notNull(), role: text("role").notNull(), active: integer("active", { mode: "boolean" }).notNull().default(true), createdAt: text("created_at").notNull(),
 }, (t) => [uniqueIndex("role_property_email_uq").on(t.propertyId, t.email)]);

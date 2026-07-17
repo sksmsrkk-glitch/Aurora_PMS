@@ -17,9 +17,11 @@ test("Supabase Auth uses verified users and HttpOnly refreshable sessions",async
   assert.match(route,/authenticateSupabaseRequest/);
   assert.match(route,/principalInflight/);
   assert.match(route,/const results = await db\.batch\(\[/);
-  assert.match(route,/process\.env\.NODE_ENV\s*!==\s*"production"/);
+  assert.match(route,/process\.env\.NODE_ENV\s*===\s*"production"/);
+  assert.match(route,/PMS_DEMO_AUTH_TOKEN/);
+  assert.doesNotMatch(route,/localRequest|url\.hostname/);
   assert.doesNotMatch(route,/bootstrapRole/);
-  assert.match(login,/count>=8/);
+  assert.match(login,/consumeRateLimit/);
 });
 
 test("property scope, required idempotency and atomic 500-room batches are enforced",async()=>{
