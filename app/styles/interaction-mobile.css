@@ -1,0 +1,113 @@
+/* The official Toss-hosted stylesheet is loaded in layout.tsx. Keep every
+   operational surface on the same product typeface, including legacy serif
+   metric selectors, form controls, tables, and dynamically rendered modals. */
+:root{--aurora-font-product:"Toss Product Sans","Tossface",-apple-system,BlinkMacSystemFont,"Bazier Square","Pretendard Variable",Pretendard,"Noto Sans KR","Segoe UI",sans-serif}
+html,body,body *{font-family:var(--aurora-font-product)!important}
+
+/* Aurora interaction clarity and mobile operations */
+.dialog-open{overflow:hidden}
+.search{position:relative;display:flex;align-items:center;gap:8px}
+.search input{min-width:0}
+.search-count{flex:0 0 auto;color:var(--brand-strong);font-size:10px;font-weight:750;white-space:nowrap}
+.search-clear{flex:0 0 auto;width:26px;height:26px;border:0;border-radius:50%;background:#f2f4f6;color:#6b7684;font-size:16px;line-height:1;cursor:pointer}
+.search-clear:hover{background:#e5e8eb;color:#333d4b}
+.room-empty{grid-column:1/-1;min-height:180px}
+.booking-modal,.cashier-modal,.modal.master-modal{max-height:calc(100dvh - 32px);overscroll-behavior:contain;scrollbar-gutter:stable}
+.drawer{overscroll-behavior:contain}
+.drawer-head{position:sticky;top:0;z-index:5;margin:-4px -2px 12px;padding:4px 2px 12px;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}
+.drawer-head>button,.modal-head>button{display:grid;place-items:center;min-width:40px;min-height:40px;border-radius:50%}
+.modal-actions{position:sticky;bottom:0;z-index:5;margin:14px -2px -2px;padding:14px 2px 2px;background:rgba(255,255,255,.97);border-top:1px solid var(--line);backdrop-filter:blur(14px)}
+.quick-panel{max-height:calc(100dvh - 112px);overflow-y:auto;overscroll-behavior:contain}
+.quick-panel-head{position:sticky;top:-12px;z-index:2;background:rgba(255,255,255,.96);backdrop-filter:blur(14px)}
+button,a,input,select,textarea{touch-action:manipulation}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:3px solid rgba(49,130,246,.35);outline-offset:2px}
+
+@media(hover:hover) and (pointer:fine){
+  .room-card,.pulse-grid article,.type-master-grid article,.quick-panel button,.table-row,.flow-row{transition:transform .18s ease,box-shadow .18s ease,background-color .18s ease,border-color .18s ease}
+}
+
+.login-shell{min-height:100dvh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 18% 10%,rgba(49,130,246,.18),transparent 32%),radial-gradient(circle at 82% 88%,rgba(85,212,172,.16),transparent 34%),#f4f7fb}
+.login-card{width:min(440px,100%);padding:36px;border:1px solid rgba(224,230,237,.9);border-radius:28px;background:rgba(255,255,255,.94);box-shadow:0 28px 90px rgba(0,27,55,.13);backdrop-filter:blur(18px)}
+.login-brand{display:flex;align-items:center;gap:13px}.login-brand img{filter:drop-shadow(0 8px 16px rgba(49,130,246,.2))}.login-brand b,.login-brand small{display:block}.login-brand b{font-size:15px;letter-spacing:.2px}.login-brand small{margin-top:3px;color:#8b95a1;font-size:9px;letter-spacing:1.4px}
+.login-copy{margin:34px 0 26px}.login-copy p{margin:0 0 8px;color:#3182f6;font-size:10px;font-weight:800;letter-spacing:1px}.login-copy h1{margin:0;color:#191f28;font-size:28px;letter-spacing:-.9px}.login-copy span{display:block;margin-top:11px;color:#6b7684;font-size:13px;line-height:1.6}
+.login-card form{display:grid;gap:16px}.login-card label{display:grid;gap:7px}.login-card label span{color:#4e5968;font-size:11px;font-weight:700}.login-card input{width:100%;min-height:50px;padding:0 15px;border:1px solid #d9e0e8;border-radius:14px;background:#fff;color:#191f28;font-size:16px;outline:none}.login-card input:focus{border-color:#3182f6;box-shadow:0 0 0 4px rgba(49,130,246,.13)}.login-card form>.primary{min-height:52px;margin-top:5px;border-radius:14px;background:#3182f6;font-size:14px}.login-card form>.primary:hover{background:#1b64da}.login-error{margin:0;padding:11px 13px;border-radius:11px;background:#fff1f0;color:#b42318;font-size:12px}.login-security{margin:22px 0 0;color:#8b95a1;font-size:10px;text-align:center}
+@media(max-width:600px){.login-shell{align-items:end;padding:0}.login-card{padding:28px 20px calc(24px + env(safe-area-inset-bottom));border-radius:28px 28px 0 0}.login-copy{margin:28px 0 22px}.login-copy h1{font-size:25px}}
+
+@media(max-width:1100px){
+  .workspace>header{flex-wrap:wrap}
+  .header-actions{flex-wrap:wrap;justify-content:flex-end}
+  .search{display:flex;width:min(100%,420px)}
+}
+
+@media(max-width:760px){
+  .app-shell{grid-template-columns:minmax(0,1fr);min-width:0}
+  .sidebar{height:calc(76px + env(safe-area-inset-bottom));padding:7px 6px calc(7px + env(safe-area-inset-bottom))}
+  .sidebar nav{gap:3px;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+  .sidebar nav button{min-width:82px;min-height:58px;padding:6px 7px;font-size:10px;line-height:1.2;scroll-snap-align:start}
+  .sidebar nav i{font-size:18px}
+  .workspace{min-width:0;padding:16px 12px calc(104px + env(safe-area-inset-bottom))}
+  .workspace>header{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:12px;margin:-8px -2px 16px;padding:10px 2px 12px}
+  .workspace>header>div:first-child{min-width:0}
+  .workspace h1{font-size:23px;line-height:1.25}
+  .header-actions{display:grid;width:100%;grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);gap:8px;margin:0;justify-content:stretch}
+  .search{display:flex;grid-column:1/-1;width:100%;height:48px;padding:0 10px;background:#fff}
+  .search input{font-size:16px}
+  .search kbd{display:none}
+  .search-count{font-size:11px}
+  .search-clear{width:32px;height:32px}
+  .cashier-btn{display:inline-flex!important;justify-content:center;min-width:0;width:100%;height:44px;padding:8px 10px;white-space:nowrap}
+  .icon-btn{display:grid!important;width:44px;height:44px}
+  .header-actions .primary{display:inline-flex!important;align-items:center;justify-content:center;min-width:0;width:100%;min-height:44px;padding:8px 10px;white-space:nowrap}
+  .quick-panel{top:auto;right:12px;bottom:calc(88px + env(safe-area-inset-bottom));left:12px;width:auto;max-height:min(68dvh,560px);border-radius:22px}
+  .notification-panel>button{min-height:62px}
+  .panel,.report-main,.report-catalog,.master-panel{min-width:0}
+  .panel{padding:15px}
+  .panel-title{align-items:flex-start;gap:12px;flex-wrap:wrap}
+  .panel-title>div:first-child{min-width:0}
+  .segmented{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+  .segmented button{flex:0 0 auto;min-height:40px;padding:8px 12px}
+  .pulse-grid,.finance-kpis,.channel-kpis,.accounting-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .room-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .room-card{min-width:0;padding:14px}
+  .room-card>button{min-height:44px}
+  .reservation-table,.report-scroll,.advanced-calendar,.accounting-table,.settlement-table,.room-master-table{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+  .inventory-toolbar,.accounting-hero{gap:14px;padding:16px}
+  .inventory-presets{gap:4px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .inventory-presets button{flex:0 0 auto;min-height:44px;padding:9px 14px}
+  .inventory-range,.accounting-hero form,.accounting-actions{display:grid;grid-template-columns:1fr 1fr;align-items:end;gap:10px}
+  .inventory-range label,.accounting-hero form label{min-width:0}
+  .inventory-range input,.accounting-hero input{width:100%;min-height:44px;font-size:16px}
+  .inventory-range .primary,.accounting-hero form .primary{min-height:44px}
+  .inventory-range em{grid-column:1/-1}
+  .report-filters,.master-toolbar{min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .modal-backdrop,.drawer-backdrop{align-items:flex-end;padding:0}
+  .booking-modal,.cashier-modal,.modal.master-modal{width:100%;max-width:none;max-height:92dvh;margin:0;border-radius:24px 24px 0 0;padding:18px 16px 0;animation:flow-rise .22s cubic-bezier(.2,.8,.2,1)}
+  .drawer{align-self:flex-end;width:100%;height:min(92dvh,760px);margin-top:auto;border-radius:24px 24px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
+  .drawer-head{margin:-2px -2px 10px;padding:2px 2px 12px}
+  .modal-head{position:sticky;top:0;z-index:5;background:rgba(255,255,255,.97);border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}
+  .modal-actions,.modal-actions.sticky,.master-modal>.modal-actions{margin:12px -16px 0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));gap:8px}
+  .modal-actions button{min-height:46px;flex:1}
+  .form-grid,.master-form-grid,.bulk-date-grid,.channel-rate-fields,.contract-choice{grid-template-columns:1fr}
+  .form-grid input,.form-grid select,.form-grid textarea,.stack-form input,.stack-form select,.stack-form textarea,.master-form-grid input,.master-form-grid select,.master-form-grid textarea,.report-filters input,.report-filters select,.bulk-date-grid input,.channel-rate-fields input,.channel-rate-fields select,.stack-label textarea{min-height:46px;font-size:16px}
+  .weekday-selector span{width:42px;height:42px}
+  .bulk-selector span{min-height:42px;padding:11px 13px}
+  .drawer-actions button,.payment button,.manage-strip button{min-height:46px}
+  .toast{right:12px;left:12px;width:auto;max-width:none}
+}
+
+@media(max-width:420px){
+  .pulse-grid,.finance-kpis,.channel-kpis,.accounting-kpis,.room-grid{grid-template-columns:1fr}
+  .inventory-range,.accounting-hero form,.accounting-actions{grid-template-columns:1fr}
+  .inventory-range em{grid-column:auto}
+  .workspace h1{font-size:21px}
+  .cashier-btn,.header-actions .primary{font-size:10px}
+}
+
+/* Aurora PMS generated brand mark */
+.brand .brand-mark,.loading .brand-mark{overflow:hidden;border:1px solid rgba(49,130,246,.16);background:linear-gradient(145deg,#f8fbff,#eef1ff);color:transparent;padding:5px;box-shadow:0 8px 22px rgba(49,130,246,.18)}
+.brand-mark img{display:block;width:100%;height:100%;object-fit:contain}
+.brand b{font-size:15px;font-weight:800;letter-spacing:-.35px}
+.brand small{font-size:8px;letter-spacing:1.25px}
+.loading .brand-mark{width:56px;height:56px;border-radius:18px;padding:7px}
+.mobile-brand{display:none}
+@media(max-width:760px){.mobile-brand{display:flex;align-items:center;gap:7px;margin-bottom:8px;color:var(--brand-strong)}.mobile-brand img{width:24px;height:24px;object-fit:contain}.mobile-brand b{font-size:11px;font-weight:800;letter-spacing:-.2px}}

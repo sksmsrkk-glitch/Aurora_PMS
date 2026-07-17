@@ -1,0 +1,1702 @@
+# Aurora Hotel PMS
+
+Aurora는 예약, 장기 객실 재고·요금, 프런트 데스크, 하우스키핑, 그룹 블록, 폴리오, 매출채권, 채널 계약·정산, 호텔 회계·손익, 캐셔, 야간 감사와 운영 리포트를 하나의 운영 원장으로 연결하는 차세대 호텔 PMS(Property Management System)입니다.
+
+단순한 대시보드 데모가 아니라 실제 상태 전이, 재고 차감, 정산 원장, 권한, 동시성, 감사 로그와 실패 복구를 데이터베이스 불변식으로 보호하는 것을 목표로 합니다.
+
+> 현재 운영 구성: Next.js 16 + Vercel Functions + Supabase PostgreSQL 17 + Supavisor transaction pooler
+
+## 현재 릴리스 현황
+
+| 항목 | 현재 값 |
+| --- | --- |
+| 운영 URL | [https://aurora-pms-gilt.vercel.app](https://aurora-pms-gilt.vercel.app) |
+| 격리 스테이징 URL | [https://aurora-pms-staging.vercel.app](https://aurora-pms-staging.vercel.app) — 별도 Vercel 프로젝트 `aurora-pms-staging` |
+| GitHub 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
+| 작업 브랜치 | `main` |
+| 인증 | Supabase Auth password login, refreshable HttpOnly session, 서버 RBAC·property assignment |
+| 데이터베이스 | Supabase 프로젝트 `tnbxreeidezidckemflb`, PostgreSQL 17 |
+| 스테이징 데이터베이스 | Supabase Micro 프로젝트 `tkfcnkxxcsgslqfnoclg`, 운영 ref와 물리 분리 |
+| Vercel 함수 리전 | Seoul `icn1` — 한국 호텔 사용자의 캐시 적중·정적·인증 응답 지연 최소화 |
+| 운영 스키마 목표 | 54 tables, 29+ application triggers, 86+ validated foreign keys, 52 tenant RLS policies, 17 migrations |
+| 자동 테스트 | production build + 18 unit/behavior tests + 8 PostgreSQL integration tests + staging E2E |
+| 전체 업무 QA | 격리 스테이징 24/24 workflow checkpoints(run `OGZVBIH7`), booking/CMS E2E 통과 |
+| 핵심 API release gate | Vercel Seoul: 200 requests, concurrency 10, 0 failures, 252.04 req/s, p50 36.13ms, p95 53.20ms |
+| 공개 호텔·부킹 | `/hotel`, `/hotel/book`, PMS CMS 콘텐츠·이미지와 실시간 가격·재고 기반 직접 예약·취소 |
+
+### 구현 완료 범위
+
+| 영역 | 상태 | 구현 수준 |
+| --- | --- | --- |
+| 예약·투숙 | 완료 | 생성, 수정, 배정, 체크인·아웃, 취소, 노쇼, 룸 무브, 낙관적 잠금 |
+| 객실·하우스키핑 | 완료 | 타입/실물 객실, 최대 500실 대량 생성, 청소·점검·OOS |
+| 재고·요금 | 완료 | 최대 730일 조회, 5,000셀 벌크 변경, MLOS/CTA/CTD/stop-sell |
+| 그룹·세일즈 | 완료 | 프로필, 블록, 날짜별 할당, rooming list, pickup, cutoff |
+| 폴리오·캐셔·AR | 완료 | 다중 창, 라우팅, 분할, 반대, 결제·환불, 회사 후불, 수납 |
+| 채널 허브 | 완료 | 연결·매핑, ARI, inbound revision, DLQ, outbox, delivery attempt |
+| 채널 계약·정산 | 완료 | 수수료/입금가 계약, 채널 판매가·호텔 입금가, 발생·지급 대사 |
+| 호텔 회계·손익 | 완료 | 11개 기본 계정, 복식부기, 불변 journal, 반대전표, P/L KPI |
+| 리포트·Excel | 완료 | 11종, 키워드·복합 필터, 마스킹, CSV/XLSX, export audit |
+| 야간 감사 | 완료 | blocker, 객실료 전기, cutoff, 영업일 전환 |
+| UI 시스템 | 완료 | Aurora Flow UI, Toss Product Sans 실제 CDN 로드, 반응형·접근성 상태 |
+| 인증·테넌트 격리 | 완료 | Supabase Auth, access/refresh cookie, 역할·capability, assignment 기반 property scope |
+| 호텔 홈페이지·부킹 엔진 | 완료 | 실시간 가용성, CTA/CTD/MLOS, 요금 snapshot, 멱등 예약, 온라인 취소·재고 복원 |
+| 홈페이지 관리 CMS | 완료 | 호텔 소개, 호텔/객실 이미지, 객실 소개·편의시설, 타입 생성·게시, Supabase Storage, 홈페이지 전용 일자별 판매 중지 |
+| 운영 배포 | 완료 | GitHub, Supabase migration, Vercel Production, Seoul `icn1` |
+
+### 2026-07-17 플랫폼 하드닝 라운드
+
+- 배포 전에 migration ID, `aurora_app`의 `NOLOGIN`·`NOBYPASSRLS`, 연결 사용자 membership, tenant policy 수와 실제 `SET LOCAL ROLE` transaction을 검증합니다.
+- 루트 SQL 정규식 허용 목록을 제거하고 인증에 필요한 `findActiveRoleAssignments(email)`만 닫힌 capability로 제공합니다.
+- 운영 날짜·시각 컬럼을 `date`, `time`, `timestamptz`로 전환하고 PostgreSQL date parser가 `YYYY-MM-DD`를 보존하게 했습니다.
+- `rate_plans`, `rate_plan_room_types`, `rate_plan_calendar`를 도입하고 WEB-DIRECT 요금이 공식 홈페이지의 nightly rate를 직접 구동합니다.
+- 대시보드의 `+8%`, `4.2%` 같은 고정값을 제거하고 property 영업일 기준 오늘·전일의 도착, 점유, 매출, ADR을 계산합니다.
+- 공개 사이트에 신뢰된 canonical, Open Graph, Hotel JSON-LD, 동적 sitemap과 PMS/API robots 차단을 추가했습니다.
+- 90KB 단일 `globals.css`를 책임별 모듈로 분리하고 이 문서를 상세 핸드북으로 보존했습니다.
+
+`완료`는 현재 저장소의 구현과 자동 QA 범위를 의미합니다. 실제 호텔의 법정 회계, 결제대행, 개인정보 처리, OTA 인증, 장애복구 목표를 충족했다는 인증은 아니며, 운영 전 [프로덕션 전환 전 필수 작업](#프로덕션-전환-전-필수-작업)을 별도로 수행해야 합니다.
+
+## 목차
+
+- [제품 목표](#제품-목표)
+- [현재 릴리스 현황](#현재-릴리스-현황)
+- [핵심 설계 원칙](#핵심-설계-원칙)
+- [전체 아키텍처](#전체-아키텍처)
+- [아키텍처 결정 기록](#아키텍처-결정-기록)
+- [화면 및 기능 명세](#화면-및-기능-명세)
+- [업무 도메인 상세](#업무-도메인-상세)
+- [호텔 홈페이지와 직접 예약 엔진](#호텔-홈페이지와-직접-예약-엔진)
+- [리포트와 Excel 내보내기](#리포트와-excel-내보내기)
+- [권한과 보안](#권한과-보안)
+- [데이터 모델](#데이터-모델)
+- [마이그레이션 카탈로그](#마이그레이션-카탈로그)
+- [API 계약](#api-계약)
+- [API 상세 개발 명세](#api-상세-개발-명세)
+- [성능과 확장성](#성능과-확장성)
+- [Aurora Flow UI](#aurora-flow-ui)
+- [설치 및 Supabase 연결](#설치-및-supabase-연결)
+- [개발자 가이드](#개발자-가이드)
+- [테스트 및 Loop QA](#테스트-및-loop-qa)
+- [프로젝트 구조](#프로젝트-구조)
+- [운영 체크리스트](#운영-체크리스트)
+- [장애 대응 Runbook](#장애-대응-runbook)
+- [프로덕션 전환 전 필수 작업](#프로덕션-전환-전-필수-작업)
+- [구현 변경 이력](#구현-변경-이력)
+
+## 제품 목표
+
+Aurora PMS는 호텔 운영자가 여러 시스템을 오가며 같은 정보를 반복 입력하는 문제를 줄이고, 다음 질문에 즉시 답할 수 있도록 설계했습니다.
+
+- 오늘 도착·재실·출발 고객은 누구인가?
+- 어떤 객실이 판매 가능하고 어떤 객실이 청소·점검·판매 중지 상태인가?
+- 객실 타입별 날짜 재고와 판매 제한, 요금은 어떻게 설정되어 있는가?
+- 개별 예약과 그룹 블록이 실제 하우스 재고에 어떤 영향을 주는가?
+- 고객 폴리오와 회사 후불 매출채권의 잔액은 정확히 일치하는가?
+- 누가 어떤 예약, 객실, 재고, 정산 데이터를 변경했는가?
+- OTA 메시지나 Webhook 전송이 실패했을 때 안전하게 재처리할 수 있는가?
+- 예약·점유율·ADR·RevPAR·정산·감사 데이터를 필터링하고 Excel로 받을 수 있는가?
+
+## 핵심 설계 원칙
+
+### 1. 데이터베이스가 마지막 방어선이다
+
+UI 검증에만 의존하지 않습니다. 중복 객실, 초과 판매, 중복 픽업, 원장 수정, 중복 야간 전기처럼 재무·재고 무결성을 깨뜨릴 수 있는 동작은 PostgreSQL 제약조건, 트리거, 원자적 배치와 advisory lock으로 다시 검증합니다.
+
+### 2. 기록은 수정하지 않고 반대 기록을 추가한다
+
+폴리오와 AR 원장은 append-only입니다. 잘못된 전표를 `UPDATE`나 `DELETE`하지 않고 반대전표, 환불, 재전기 항목을 추가해 원인과 결과를 모두 보존합니다.
+
+### 3. 모든 외부 연동은 재시도 가능해야 한다
+
+OTA 메시지는 Message ID와 revision으로 순서를 검증하고, 처리 실패는 DLQ 성격의 수신 원장에 남깁니다. 코어 트랜잭션 이후 외부 전송은 transactional outbox에서 수행해 외부 장애가 예약 저장을 롤백시키지 않도록 분리합니다.
+
+### 4. 역할과 권한은 서버에서 다시 확인한다
+
+버튼 노출 여부는 편의 기능일 뿐입니다. 모든 쓰기 요청은 서버에서 현재 사용자의 역할과 capability를 검증합니다.
+
+### 5. 사용자는 다음 행동을 고민하지 않아야 한다
+
+각 화면은 현재 상태, 필요한 조치, 결과를 한 문장 안에서 설명합니다. 주요 행동은 강한 버튼, 보조 행동은 약한 버튼으로 구분하고 완료·실패·차단 상태를 즉시 보여줍니다.
+
+## 전체 아키텍처
+
+```mermaid
+flowchart LR
+  U["호텔 운영자"] --> VERCEL["Vercel Production HTTPS"]
+  G["호텔 고객"] --> WEB["Aurora Hotel Website\nDirect Booking Engine"]
+  VERCEL --> AUTH["Supabase Auth\naccess + refresh session"]
+  VERCEL --> UI["Aurora Flow UI\nNext.js Client"]
+  AUTH --> API["PMS Route Handler\nRBAC · Zod · idempotency"]
+  UI --> API
+  WEB --> BOOKING["Public Booking API\nrate · restriction · inventory validation"]
+  API --> REGISTRY["51-action registry\ndomain · capability · schema"]
+  REGISTRY --> ADAPTER["Tenant-scoped PmsDatabase"]
+  BOOKING --> ADAPTER
+  ADAPTER --> PG["Supavisor transaction pooler\nDATABASE_URL · prepared=false"]
+  PG --> DB
+  DB --> GUARD["RLS · grants · triggers · indexes · advisory locks"]
+  API --> OUTBOX["Transactional Outbox"]
+  OUTBOX --> OTA["OTA / Webhook / Channel Manager"]
+```
+
+### 요청 처리 흐름
+
+```mermaid
+sequenceDiagram
+  participant User as 운영자
+  participant UI as Aurora UI
+  participant API as /api/pms
+  participant DB as PostgreSQL
+  User->>UI: 버튼 클릭 또는 폼 제출
+  UI->>API: action + payload + Idempotency-Key
+  API->>API: 사용자·권한·입력 검증
+  API->>DB: 원자적 SQL batch
+  DB->>DB: 제약·트리거·재고 lock 검증
+  DB-->>API: commit 또는 명확한 오류
+  API-->>UI: mutation receipt + invalidation keys
+  UI->>API: invalidated read model 재조회
+  API-->>UI: 현재 화면 projection
+  UI-->>User: 갱신된 상태·잔액·재고
+```
+
+### 런타임 계층
+
+| 계층 | 책임 |
+| --- | --- |
+| `app/login/page.tsx` | Supabase Auth 로그인, 실패·대기 상태, 세션 진입점 |
+| `app/supabase-session.ts` | access token 검증, refresh, HttpOnly/Secure/SameSite cookie, logout |
+| `app/page.tsx` | `/overview`로 보내는 제품 루트 redirect |
+| `app/(pms)/*/page.tsx` | 13개 실제 업무 URL; 새로고침·북마크·딥링크·라우트 단위 진입 지원 |
+| `app/(pms)/_components/pms-shell.tsx` | 공통 shell, 예약 Drawer와 업무 Modal, 상태 기반 CTA |
+| `app/pms-action-context.tsx` | 모든 workspace가 공유하는 command/busy Context; prop drilling 제거 |
+| `app/query-provider.tsx` | TanStack Query client와 읽기 모델 cache lifecycle |
+| `app/hotel/page.tsx` | Aurora 호텔 공개 홈페이지, 객실·경험·위치·예약 검색 진입점 |
+| `app/homepage-manager.tsx` | 호텔 소개, 객실 콘텐츠·게시, 타입 생성, 이미지 업로드·삭제 Website Studio |
+| `app/hotel/book/BookingClient.tsx` | 실시간 객실 검색, 예약자 입력, 멱등 예약 확정, 기존 예약 취소 |
+| `app/inventory-calendar.tsx` | 최대 730일 캘린더, 타입·요일 벌크 재고, 호텔·채널 판매가와 입금가 |
+| `app/accounting-center.tsx` | 매출·비용·손익, 복식부기 분개, 반대전표, 채널 정산 |
+| `app/channel-contracts.tsx` | 수수료/입금가 채널 계약과 정산 조건 관리 |
+| `app/reports-center.tsx` | 11개 리포트 카탈로그, 복합 필터, 페이지네이션, CSV/XLSX 다운로드 |
+| `app/room-master.tsx` | 객실 타입과 실물 객실 생성·수정·대량 생성 |
+| `app/api/pms/route.ts` | 47줄 HTTP 경계; GET/POST를 전용 모듈로 위임 |
+| `app/api/pms/auth.ts` | Supabase identity, assignment, property scope, capability principal |
+| `app/api/pms/action-registry.ts` | 51개 action의 도메인·필요 capability·Zod 입력 스키마 |
+| `app/api/pms/command-gateway.ts` | command 실행, strict idempotency receipt, 감사·Outbox 기록 |
+| `app/api/pms/read-model.ts` | core/full projection과 압축·짧은 읽기 cache |
+| `app/api/pms/error-map.ts` | 안정된 DB 오류 코드/패턴을 HTTP 상태와 사용자 메시지로 매핑 |
+| `app/api/booking/service.ts` | 공개 판매 타입, 투숙 제한, 일별 가용재고·요금 재계산, 예약·취소 원자 처리 |
+| `app/api/booking/website-service.ts` | CMS에서 공개 승인된 호텔·객실·미디어만 읽는 서버 projection |
+| `app/api/booking/*/route.ts` | 공개 availability와 reservation HTTP 계약, 분산 rate limit·same-origin 방어 |
+| `app/api/rate-limit.ts` | Vercel 전체 instance가 공유하는 HMAC key 기반 PostgreSQL 원자 카운터 |
+| `app/api/health/route.ts` | secret을 노출하지 않는 데이터베이스 readiness/latency probe |
+| `app/api/pms/extended.ts` | 장기 벌크 재고, 채널 요금·계약·정산, 복식부기 회계 서비스 |
+| `app/api/pms/reporting.ts` | 서버 사이드 리포트 쿼리, 필터, 요약, 마스킹, 행 제한 |
+| `db/pms-database.ts` | `SET LOCAL ROLE aurora_app` + `app.property_id`를 매 transaction에 설정하는 PostgreSQL adapter |
+| `supabase/migrations/` | 유일한 스키마 원본: PostgreSQL DDL, RLS, 함수, 트리거, 인덱스 |
+| `scripts/qa-full-workflow.mjs` | 더미데이터 기반 전체 업무 Loop QA |
+
+### 시스템 경계와 신뢰 경계
+
+```mermaid
+flowchart TB
+  subgraph Public["브라우저 / 공개 네트워크"]
+    BROWSER["호텔 사용자 브라우저"]
+    TOSSCDN["Toss static CDN\nProduct Sans CSS/WOFF2"]
+  end
+  subgraph Vercel["Vercel icn1 · 서버 신뢰 경계"]
+    NEXT["Next.js UI / Route Handler"]
+    AUTH["Principal + RBAC"]
+    COMMAND["Command validation / idempotency"]
+    CACHE["3s snapshot · 5s report cache"]
+  end
+  subgraph Supabase["Supabase ap-south-1 · 데이터 신뢰 경계"]
+    POOLER["Supavisor transaction pooler"]
+    PG["PostgreSQL 17"]
+    RULES["RLS · constraints · triggers · advisory locks"]
+  end
+  subgraph External["외부 연동 경계"]
+    CHANNEL["OTA / Channel Manager"]
+    ERP["회계 ERP / GL export"]
+  end
+  BROWSER -->|HTTPS| NEXT
+  BROWSER -->|font subsetting| TOSSCDN
+  NEXT --> AUTH --> COMMAND --> POOLER --> PG --> RULES
+  NEXT --> CACHE
+  PG -->|transactional outbox| CHANNEL
+  PG -->|report/export| ERP
+```
+
+- 브라우저에는 Supabase Secret Key, DB URL, 직접 SQL 실행 권한을 제공하지 않습니다.
+- 런타임은 server-only `DATABASE_URL`로만 SQL을 실행하며 SQL text를 받는 `SECURITY DEFINER` RPC는 migration `202607170009`에서 revoke 후 삭제합니다.
+- UI에서 버튼을 숨기더라도 서버가 capability를 다시 검사하므로 클라이언트 변조가 권한 상승으로 이어지지 않습니다.
+- 외부 채널 전송과 회계 ERP export는 코어 원장의 결과를 소비하는 경계이며, 코어 예약 트랜잭션을 외부 응답 성공 여부에 묶지 않습니다.
+
+### 읽기 모델과 쓰기 모델
+
+Aurora는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사용하지만, 내부적으로 읽기와 쓰기의 책임을 분리합니다.
+
+| 모델 | 진입점 | 특징 |
+| --- | --- | --- |
+| 기본 Snapshot | `GET /api/pms` | 오늘 운영에 필요한 예약·객실·재고·폴리오·채널 요약을 한 응답으로 제공 |
+| 장기 재고 | `GET /api/pms?view=inventory` | 730일까지 선택 기간만 조회; 기본 Snapshot의 14일 경량 보기를 대체하는 전용 화면 |
+| 회계 센터 | `GET /api/pms?view=accounting` | 기간별 journal, settlement, account, P/L summary를 별도 조회 |
+| 리포트 | `GET /api/pms?view=report` | 필터·정렬·페이지네이션·마스킹이 적용된 서버 읽기 모델 |
+| Command | `POST /api/pms` | action별 capability·Zod·상태·멱등 키를 검증하고 원자 batch 실행 후 작은 receipt만 반환 |
+
+### 원자성 단위
+
+- 예약 생성: guest + reservation + folio window + 타입/객실 night + audit + outbox가 하나의 batch입니다.
+- 그룹 픽업: block pickup night + reservation night + rooming 상태가 같은 트랜잭션에서 이동합니다.
+- AR 이관: invoice debit + folio direct-bill payment + window 상태 전이가 함께 commit됩니다.
+- 회계 수기 전표: journal header + 모든 debit/credit line + audit + idempotency가 함께 commit됩니다.
+- 채널 정산: settlement + 회계 journal + audit + idempotency가 함께 commit됩니다.
+- 반대전표: 원전표 `REVERSED` 전환 + 반대 journal + audit가 함께 commit됩니다.
+
+## 아키텍처 결정 기록
+
+| ADR | 결정 | 이유 | 결과/트레이드오프 |
+| --- | --- | --- | --- |
+| ADR-001 | 모듈러 모놀리스와 단일 `/api/pms` HTTP endpoint | PMS 업무는 강하게 연결되어 있어 분산 트랜잭션보다 한 배포 단위가 안전함 | HTTP는 하나지만 auth/read/command/registry/error/domain 모듈은 분리 |
+| ADR-002 | `supabase/migrations/`를 유일한 schema source로 사용 | runtime DDL, SQLite mirror, 정규식 dialect 변환 사이 drift 제거 | 로컬 검증도 PostgreSQL service에서 실제 migration을 실행 |
+| ADR-003 | Vercel은 Supavisor transaction-mode `DATABASE_URL` 사용 | 임의 SQL RPC라는 단일 장애점을 없애면서 serverless 연결을 pooler로 수렴 | `postgres` prepared statement를 끄고 짧은 connection lifetime을 사용 |
+| ADR-004 | `reservation_nights`와 `reservation_type_nights` 분리 | 실물 객실 중복과 객실 타입 overbooking은 서로 다른 제약 문제 | 저장량은 늘지만 배정 전 예약과 배정 후 객실을 모두 정확히 보호 |
+| ADR-005 | 폴리오·AR·회계 line append-only | 재무 기록의 변경 이력을 없애지 않고 감사 가능하게 유지 | 정정은 반드시 reversal workflow를 사용 |
+| ADR-006 | 채널 mapping과 commercial contract 분리 | 외부 Room/Rate ID 변경이 수수료·입금가 계산과 과거 정산을 훼손하지 않게 함 | 운영자가 기술 매핑과 계약 조건을 각각 관리해야 함 |
+| ADR-007 | 계약 조건을 settlement에 snapshot | 계약 변경 뒤에도 과거 판매가·수수료·입금가 재현 | 중복 데이터가 생기지만 역사적 정확성이 우선 |
+| ADR-008 | 장기 캘린더·회계를 전용 range view로 분리 | 기본 대시보드 payload와 장기 조회 비용을 분리 | 화면마다 별도 loading/error 상태가 필요 |
+| ADR-009 | Snapshot gzip + 짧은 in-memory cache | 422KB 수준의 운영 응답을 동시 전송할 때 발생한 p95 병목 제거 | instance 간 cache는 공유되지 않지만 쓰기 직후 전체 invalidation 수행 |
+| ADR-010 | Vercel Seoul `icn1` + Fluid Compute | 한국 호텔 사용자의 read-heavy snapshot·인증·정적 응답을 현지 처리하고 instance 공유로 cold start 완화 | DB miss·쓰기는 Supabase `ap-south-1`까지 한 번의 리전 간 왕복이 필요 |
+| ADR-011 | Toss Product Sans를 공식 CDN에서 runtime 로드 | 실제 Toss 타이포그래피를 적용하면서 폰트 파일을 저장소에 재배포하지 않음 | 외부 CDN 가용성과 사용 조건 확인이 필요 |
+| ADR-012 | 인증·멱등성·rate limit을 DB 불변식으로 승격 | Host·instance memory·사전 조회는 production 보안 경계가 될 수 없음 | demo는 명시 token, 금전 receipt는 strict unique insert, rate limit은 공유 UPSERT |
+| ADR-013 | transaction-local tenant context + NOBYPASSRLS app role | 문자열 `replaceAll`로 property literal을 치환하면 누락 쿼리를 정적으로 보장할 수 없음 | adapter가 매 statement/batch에 `aurora_app`과 `app.property_id`를 설정하고 DB가 교차 접근 거부 |
+| ADR-014 | 실제 workspace URL + action Context | `useState` 화면 전환은 새로고침과 딥링크가 깨지고 공통 props가 전 컴포넌트로 전파됨 | 13개 App Router 경로와 공용 command context 사용 |
+| ADR-015 | command receipt + TanStack Query invalidation | 객실 1실 변경에도 30개 쿼리 snapshot을 재계산·재렌더하던 God payload 제거 | POST는 변경 참조만 반환하고 UI가 관련 projection cache를 무효화 |
+| ADR-016 | PostgreSQL service 기반 CI behavior gate | 소스 정규식과 테스트 내부 SQLite trigger는 운영 schema drift를 잡지 못함 | PR마다 빈 PostgreSQL 17에 전체 migration을 적용하고 실제 RLS·trigger·경합 실행 |
+
+## 화면 및 기능 명세
+
+### 1. 오늘의 오퍼레이션
+
+- 오늘 도착 건수와 객실 배정 완료 수
+- 현재 투숙 건수와 VIP 고객 수
+- 물리 객실 기준 실시간 점유율
+- 오늘 투숙 예약 기준 예상 객실 매출과 ADR
+- ETA 기반 도착 플로우와 예약 상세 진입
+- 청소/점검 완료, 청소 필요, 판매 중지 객실 현황
+- 객실 준비 우선순위를 안내하는 운영 인사이트
+- 알림 패널에서 도착, 객실, 인터페이스 문제 화면으로 즉시 이동
+
+### 2. 프런트 데스크
+
+- 고객명, 예약번호, 객실번호 통합 검색
+- 전체/도착 예정/재실 상태 필터
+- 예약 상세 Drawer
+- 예약 일정·객실 타입·인원·요금·ETA 수정
+- 미배정 예약의 객실 배정
+- 체크인, 체크아웃, 노쇼, 예약 취소
+- 재실 고객 룸 무브와 사유 기록
+- 캐셔 세션이 열린 경우 비용 전기와 결제
+- `Cmd/Ctrl + K`로 검색창 즉시 포커스
+
+### 3. 재고 & 요금
+
+- 30/90/180/365일 프리셋과 임의 시작·종료일을 지원하는 최대 730일 판매 캘린더
+- 객실 타입·요일·기간을 선택하는 최대 5,000셀 벌크 변경
+- 물리 객실, 예약, 그룹 hold를 반영한 가용 수량
+- 날짜별 판매 한도(sell limit)
+- 판매 중지(stop-sell)
+- 최소 숙박(MLOS)
+- CTA/CTD
+- PMS 호텔 판매가와 날짜별 요금 override
+- 채널 매핑별 고객 판매가와 호텔 입금가
+- 수수료 계약의 판매가 대비 수수료율 동시 표시
+- 날짜·객실 타입 sticky header와 가로 스크롤 캘린더
+- 예약 수량 아래로 판매 한도를 내리는 잘못된 변경 차단
+
+### 4. 그룹 & 세일즈
+
+- 회사, 여행사, Source, 그룹 프로필 생성
+- 현금/후불 승인 상태와 협상 요금 코드
+- Tentative/Definite 비즈니스 블록 생성
+- Deduct/Non-deduct 블록
+- 날짜·객실 타입별 original/current/picked-up 수량
+- Rooming list 등록
+- Rooming entry를 실제 예약으로 원자 픽업
+- Cutoff 시 미픽업 수량 자동 반환
+
+### 5. 폴리오 & AR
+
+- Guest ledger, AR ledger, gross revenue, net payments 요약
+- 예약별 다중 폴리오 창
+- 고객/회사/여행사/그룹 payee
+- 거래 코드별 폴리오 라우팅
+- 세금·봉사료 포함 금액 분해
+- 전표 분할, 반대전표, 결제 환불
+- 회사 후불 AR 이관과 청구서 생성
+- 신용 한도 검증
+- AR 부분/전액 수납과 완납 처리
+
+### 6. 회계 & 손익
+
+- 계정과목표(Chart of Accounts), 계정 코드, 부서·코스트센터
+- 기간별 총매출, 총비용, 영업손익, 채널 미수금, 채널 유통 비용 KPI
+- 한 전표 안에서 차변·대변 합계가 일치하는 복식부기 분개
+- 객실 매출, 기타 매출, 운영 비용, 유통 비용, 현금, 미수금, 미지급금 기본 계정
+- 수기 매출·비용·조정 전표와 거래처·적요 기록
+- 확정 원장 line 수정·삭제 금지
+- 잘못된 전표는 동일 금액의 차변·대변을 뒤집은 반대전표로만 정정
+- 채널 정산 발생과 입금·지급 완료 시 회계 전표 자동 생성
+- 전표별 상세 line drill-down과 원전표/반대전표 상태 추적
+
+### 7. 채널 허브
+
+- 샌드박스 채널 연결
+- 연결별 수수료 계약/입금가 계약, 유효 기간, 정산 주기, 지급 조건
+- 수수료형: 판매가 × 수수료율을 채널 유통 비용과 미지급금으로 인식
+- 입금가형: 판매가 − 호텔 입금가를 채널 유통 비용으로 인식
+- 예약별 총 판매가, 채널 비용, 호텔 입금가, 만기일, 지급 상태 대사
+- 외부 Room/Rate ID와 내부 객실 타입/요금제 매핑
+- 날짜별 ARI delta 생성
+- `roomstosell`, closed, MLOS, CTA, CTD, rate payload
+- ACK와 장애 주입
+- NEW/MODIFY/CANCEL 예약 메시지
+- Message ID 멱등 처리와 revision 순서 검증
+- 실패 메시지 격리와 DLQ 재처리
+- Outbox 전송 실패와 재전송
+
+### 8. 룸 & 하우스키핑
+
+- 전체/청소 필요/청소 완료/점검 완료 필터
+- 공실·재실 상태와 하우스키핑 상태 동시 표시
+- 담당자와 작업 상태 표시
+- 청소 완료, 점검 완료 처리
+- 체크아웃·룸 무브 발생 시 출발 객실 자동 Dirty 처리
+- 판매 중지 객실의 예약 배정 차단
+
+### 9. 리포트 센터
+
+- 표준 리포트 11종
+- 키워드, 기간, 상태, 채널, 객실 타입 복합 필터
+- 서버 페이지네이션과 요약 KPI
+- 권한에 따른 개인정보 마스킹
+- CSV와 실제 `.xlsx` 워크북 다운로드
+- 감사 가능한 export history 기록
+
+### 10. 객실 마스터
+
+- 객실 타입 생성·수정·활성화
+- 실물 객실 생성·수정·활성화
+- 연속 객실번호 최대 500실 대량 생성
+- 중복 객실번호가 하나라도 있으면 전체 작업 차단
+- 미래 예약이 연결된 타입/객실의 위험한 비활성화 차단
+- 재실 객실 비활성화 차단
+- 편집 모달 높이를 뷰포트에 제한하고 입력 영역만 스크롤
+- 저장·취소 action bar를 하단 고정해 작은 화면에서도 항상 노출
+
+### 11. 매출 & 인사이트
+
+- 7일 객실료 순매출
+- 반대전표 반영
+- 예약 채널별 생산 비중
+- 원장과 동일한 데이터를 사용한 시각화
+
+### 12. 야간 감사
+
+- 미처리 도착, 열린 캐셔, 실패 인터페이스, 판매 중지 객실 검증
+- 차단 항목에서 해당 업무 화면으로 이동
+- 재실 객실의 미전기 객실료 미리보기
+- 영업일별 중복 객실료 전기 차단
+- 조건 충족 시 객실료 전기, 블록 cutoff, 영업일 전환을 원자 실행
+
+### 전역 검색·버튼·오버레이 UX 규약
+
+Aurora PMS의 대량 목록 검색은 공용 `ListSearch` 컴포넌트를 사용합니다. 입력 즉시 클라이언트 목록을 필터링하고 현재 결과 건수를 `aria-live`로 알리며, 검색어가 있을 때만 지우기 버튼을 노출합니다. 서버 집계가 필요한 리포트는 필터 입력과 `조회`를 분리하고 `초기화`로 영업일 기본값을 복원합니다.
+
+| 화면 | 검색·필터 대상 | 검색 결과와 빈 상태 |
+| --- | --- | --- |
+| 프런트 데스크 | 고객명, 예약번호, 객실번호 | 전체/도착/재실 상태와 조합, 결과 0건 안내 |
+| 재고 & 요금 | 객실 타입 코드·이름 | 선택 기간은 유지하고 캘린더 행만 즉시 축소 |
+| 홈페이지 관리 | 타입 코드·객실명·홈페이지 노출 상태 | 편집 대상 목록과 결과 건수 동기화 |
+| 그룹 & 세일즈 | 블록 코드·명칭·계정·상태·일자, 세일즈 계정·외부 ID·신용 상태 | 블록과 계정 검색 상태를 독립 관리 |
+| 폴리오 & AR | 고객·예약번호·폴리오 창·청구서 | 폴리오와 AR 양쪽의 합산 결과 건수 표시 |
+| 회계 & 손익 | 전표번호·적요·거래처 | 총계정원장 행과 결과 건수 동기화 |
+| 채널 허브 | 채널·연결명·계약 유형·계약 상태 | 상업 계약 카드와 미설정 계약을 함께 검색 |
+| 룸 & 하우스키핑 | 객실번호·타입·층·담당자 | 청소 상태 필터와 조합 가능 |
+| 리포트 센터 | 키워드·기간·상태·채널/사용자·객실 타입 | 11종 서버 리포트에 동일 필터 계약 적용 |
+| 객실 마스터 | 타입 코드·명칭·설명 또는 객실번호·타입·층 | 타입/실물 객실 탭에 맞춰 placeholder와 건수 전환 |
+
+팝업과 Drawer는 다음 접근성·가시성 규약을 공유합니다.
+
+1. 열기 직전 포커스를 저장하고, 팝업이 열리면 첫 편집 필드로 포커스를 이동합니다.
+2. 편집 필드가 없는 안내 팝업만 닫기 버튼 또는 dialog 자체를 포커스 fallback으로 사용합니다.
+3. `Tab`/`Shift+Tab`은 최상단 팝업 안에서 순환하고 `Escape`는 중첩된 최상단 팝업 하나만 닫습니다.
+4. 닫힌 뒤 포커스는 해당 팝업을 연 버튼으로 복원됩니다. 중첩 팝업도 각 origin을 별도로 보존합니다.
+5. 제목과 닫기 버튼에는 dialog label과 `aria-label`을 보강하고, 배경 클릭은 최상단 overlay만 닫습니다.
+6. 긴 폼은 본문만 스크롤하고 제목과 저장/취소 action bar는 고정합니다. 작은 객실 타입 폼은 콘텐츠 높이만 차지합니다.
+7. 760px 이하에서는 중앙 모달을 최대 `92dvh` 하단 시트로 전환하고 safe-area를 포함한 action bar를 항상 화면 안에 둡니다.
+8. CSP는 Production에서 `unsafe-eval`을 허용하지 않습니다. React 개발 진단이 QA 클릭을 방해하지 않도록 로컬 development에서만 제한적으로 추가합니다.
+
+## 업무 도메인 상세
+
+### 예약 상태 모델
+
+```mermaid
+stateDiagram-v2
+  [*] --> DUE_IN: 예약 생성 / OTA NEW / 그룹 픽업
+  DUE_IN --> IN_HOUSE: 체크인
+  DUE_IN --> CANCELLED: 예약 취소 / OTA CANCEL
+  DUE_IN --> NO_SHOW: 영업일 도착 미도착 처리
+  IN_HOUSE --> CHECKED_OUT: 잔액 0 확인 후 체크아웃
+  CHECKED_OUT --> [*]
+  CANCELLED --> [*]
+  NO_SHOW --> [*]
+```
+
+예약 변경, 객실 배정과 룸 무브는 `expectedVersion`을 사용합니다. 다른 운영자가 먼저 변경한 경우 `409 Conflict`를 반환하고 최신 화면으로 다시 확인하도록 안내합니다.
+
+### 객실 타입 재고 계산
+
+날짜별 판매 가능 수량은 다음 의미를 갖습니다.
+
+```text
+물리 판매 객실 = active 객실 - OUT_OF_SERVICE 객실
+하우스 재고 사용 = 확정 예약 객실박 + deduct 블록 미픽업 hold
+판매 가능 = closed ? 0 : max(0, sellLimit - 하우스 재고 사용)
+```
+
+예약과 블록이 동시에 같은 마지막 객실을 가져가는 경쟁 조건은 PostgreSQL advisory lock과 트리거에서 직렬화합니다.
+
+### 그룹 블록과 픽업
+
+- Rooming list 등록만으로 예약 재고를 추가 차감하지 않습니다.
+- Deduct 블록은 `current_rooms - picked_up`만큼 이미 하우스 재고를 hold합니다.
+- 픽업 시 block hold가 감소하고 예약 객실박이 증가하므로 전체 하우스 사용량은 보존됩니다.
+- 예약 취소 시 그룹 픽업 박과 예약 박을 함께 해제합니다.
+- Cutoff는 `current_rooms = picked_up`으로 만들어 미픽업 hold만 반환합니다.
+
+### 폴리오 계산 규칙
+
+| 종류 | Guest ledger 영향 |
+| --- | ---: |
+| `CHARGE` | `+amount` |
+| `PAYMENT` | `-amount` |
+| `CHARGE_REVERSAL` | `-amount` |
+| `PAYMENT_REVERSAL` | `+amount` |
+| `REFUND` | `+amount` |
+
+체크아웃은 위 합계의 절대값이 `0.01` 이하인 경우에만 허용됩니다.
+
+### AR 원장
+
+- 폴리오 창 잔액이 양수이고 계정이 `DIRECT_BILL` 승인 상태여야 합니다.
+- 기존 AR 잔액과 신규 이관액이 신용 한도를 초과하면 차단합니다.
+- AR 이관 시 invoice debit과 폴리오 `DIRECT_BILL` payment를 같은 트랜잭션으로 기록합니다.
+- AR 수납은 ledger credit을 추가하고 남은 잔액이 0이면 invoice를 `PAID`로 전환합니다.
+
+### OTA 및 Outbox
+
+| 계약 | 보호 장치 |
+| --- | --- |
+| ARI | 날짜·매핑별 revision, Delta 전송, ACK/FAILED 기록 |
+| Inbound NEW | 외부 Room/Rate 매핑 검증 후 예약 생성 |
+| Inbound MODIFY | 기존 링크와 증가 revision 검증 후 예약 변경 |
+| Inbound CANCEL | 예약·객실박·타입박 해제 |
+| Message ID | 연결별 유일성으로 중복 수신 멱등 처리 |
+| Revision | 현재 revision 이하 메시지 거부 |
+| DLQ | payload와 오류를 보존하고 동일 계약으로 재처리 |
+| Outbox | 코어 commit 이후 PENDING/FAILED/PUBLISHED 상태로 전달 |
+
+### 채널 상업 계약과 가격 모델
+
+채널 매핑은 기술적인 Room/Rate ID 연결이고, 채널 계약은 금액 계산 규칙입니다. 두 개를 분리해 외부 ID 변경이 과거 계약·정산 금액을 훼손하지 않도록 했습니다.
+
+| 계약 | 계산 | 회계 인식 |
+| --- | --- | --- |
+| `COMMISSION` | `채널 비용 = 총 판매가 × 수수료율`, `호텔 순액 = 총 판매가 - 채널 비용` | 채널 미수금·객실 매출과 유통 비용·수수료 미지급금 |
+| `NET_RATE` | `채널 비용 = 총 판매가 - 투숙일별 호텔 입금가 합계` | 호텔 입금액만 채널 미수금, 차액은 유통 비용 |
+
+- 계약에는 유효 시작/종료일, 건별/주간/월간 주기, 지급 조건 일수와 버전을 저장합니다.
+- `channel_rate_overrides`는 채널 매핑·투숙일별 고객 판매가와 호텔 입금가를 보존합니다.
+- 입금가 계약의 예약 정산은 모든 투숙일에 입금가가 있어야만 확정됩니다.
+- 예약·채널 조합별 정산은 한 번만 발생하며 `ACCRUED → PAID` 상태를 추적합니다.
+- 계약을 나중에 편집해도 이미 확정한 `gross_sell_amount`, `channel_cost_amount`, `hotel_net_amount`는 다시 계산하거나 덮어쓰지 않습니다.
+
+### 호텔 회계 원장
+
+```mermaid
+flowchart LR
+  SALE["예약 판매가"] --> CONTRACT{"채널 계약"}
+  CONTRACT -->|"수수료"| COMM["수수료 비용 / 미지급금"]
+  CONTRACT -->|"입금가"| NET["호텔 입금액 / 유통 비용"]
+  COMM --> SETTLE["채널 정산"]
+  NET --> SETTLE
+  SETTLE --> JOURNAL["복식부기 전표 Header"]
+  JOURNAL --> DEBIT["차변 Lines"]
+  JOURNAL --> CREDIT["대변 Lines"]
+  JOURNAL -->|"정정"| REVERSAL["반대전표"]
+```
+
+- `accounting_journal_entries`는 전표번호, 영업일, 유형, 출처, 적요, 거래처, 상태를 저장합니다.
+- `accounting_journal_lines`는 계정과목별 차변 또는 대변 한쪽만 양수로 기록합니다.
+- 서버는 전표 확정 전에 차변 합계와 대변 합계의 0.01원 단위 균형을 검증합니다.
+- PostgreSQL trigger가 line의 `UPDATE`/`DELETE`를 금지하고, header는 `POSTED → REVERSED` 상태 전이 외 변경을 거부합니다.
+- 수기 비용 예: `차변 호텔 운영 비용 / 대변 현금 및 예금`.
+- 입금가 정산 발생 예: `차변 채널 미수금 + 채널 유통 비용 / 대변 객실 매출`.
+- 수수료 정산 발생 예: `차변 채널 미수금 + 채널 유통 비용 / 대변 객실 매출 + 수수료 미지급금`.
+- 지급 완료 시 현금·채널 미수금과, 수수료 계약이면 미지급금·현금을 함께 대체합니다.
+
+## 호텔 홈페이지와 직접 예약 엔진
+
+Aurora 공개 호텔 사이트는 PMS와 별도 콘텐츠·객실·가격·재고 원장을 유지하지 않습니다. PMS의 `홈페이지 관리`가 소개와 이미지를 관리하고, `/hotel`의 검색 조건은 `/hotel/book`으로 전달됩니다. 공개 API는 매 조회·확정 시점에 PMS의 게시 객실, 물리 객실, 판매 제한, 확정 예약, deduct block hold와 일별 요금을 다시 계산합니다. 관리자 저장 후 공개 페이지는 `force-dynamic` 서버 projection으로 다음 요청부터 최신 DB 값을 읽습니다.
+
+### 홈페이지 관리 기능
+
+| 관리 영역 | PMS 입력 | 공개 사이트 반영 |
+| --- | --- | --- |
+| 호텔 기본 | 호텔명, 브랜드 문구, 메인 제목·설명, 체크인·체크아웃 | 내비게이션, Hero, 검색 기본 정보 |
+| 호텔 소개 | 객실 섹션, 경험 섹션, 위치 섹션 제목·본문, 주소·전화·이메일 | `/hotel`의 소개·경험·위치·Footer |
+| 객실 콘텐츠 | 게시 여부, 노출 순서, 마케팅명, 짧은/상세 소개, 편의시설 | 홈페이지 객실 카드와 `/hotel/book` 판매 offer |
+| 객실 타입 | 코드, 타입명, 기준가, 기준 인원, 기본 설명 | `room_types` 생성 후 CMS 콘텐츠·게시 설정 가능 |
+| 이미지 | 호텔/객실 연결, HERO/CARD/GALLERY 역할, alt text, 정렬 순서 | Hero 배경, 객실 카드, 예약 offer 이미지 |
+| 전체 공개 | `website_settings.published` | 끄면 공개 호텔 route는 `notFound` 처리 |
+| 타입 공개 | `room_type_website.published` | 끄면 해당 타입은 홈페이지와 직접 예약 검색에서 제외 |
+| 일자 공개 | `inventory_controls.website_closed` | 해당 타입·숙박일만 공식 홈페이지 판매 중지; OTA 전체 stop-sell과 독립 |
+
+이미지는 브라우저가 Supabase service key를 받지 않습니다. PMS 서버가 MIME(JPEG/PNG/WebP)과 3MB 애플리케이션 상한을 검사하고 `hotel-media` Storage bucket에 업로드한 다음 `website_media`에 공개 URL·object path·alt text를 기록합니다. 이 상한은 base64 JSON 전송 오버헤드를 포함해 Vercel 요청 크기 안에 안전하게 머물도록 정했습니다. 삭제 시 Storage object와 DB metadata를 함께 제거하고 모든 변경을 `audit_logs`에 남깁니다. Bucket은 공개 읽기 전용 용도로 사용하고 쓰기는 서버 service role만 수행합니다.
+
+콘텐츠 저장은 `website_settings.version`과 `room_type_website.version`의 낙관적 버전을 확인합니다. 오래 열린 편집 화면의 저장은 `409`로 차단되어 다른 관리자의 최신 변경을 덮어쓰지 않습니다.
+
+```mermaid
+sequenceDiagram
+  participant Guest as 호텔 고객
+  participant CMS as PMS Website Studio
+  participant Web as /hotel/book
+  participant API as /api/booking
+  participant DB as Supabase PostgreSQL
+  CMS->>DB: 콘텐츠·게시·이미지·WEB OFF 저장
+  Guest->>Web: 홈페이지 조회와 날짜·인원 검색
+  Web->>API: GET availability
+  API->>DB: 타입·물리 객실·control·sold·held 조회
+  DB-->>API: 일별 판매 상태
+  API-->>Web: 판매 가능한 offer와 총액
+  Guest->>Web: 예약자 정보·동의·예약 확정
+  Web->>API: POST reservation + Idempotency-Key
+  API->>DB: 예약·타입박·요금 snapshot·folio·감사·outbox 원자 batch
+  DB->>DB: advisory lock + capacity trigger
+  DB-->>API: commit 또는 sold-out 409
+  API-->>Web: 예약번호·일정·현장결제 안내
+```
+
+### 공개 판매 계산
+
+각 객실 타입과 숙박일의 가용 수량은 다음 식을 사용합니다.
+
+```text
+physical = active rooms excluding OUT_OF_SERVICE
+effective sell limit = min(physical, configured sell_limit) or physical
+available = max(0, effective sell limit - confirmed type nights - deduct block holds)
+stay availability = minimum available across all stay nights
+```
+
+서버는 최대 30박, 객실 기준 인원, 영업일 이전 날짜, 전체 stop-sell, 홈페이지 전용 `website_closed`, MLOS, 도착일 CTA, 출발일 CTD를 검증합니다. 요금은 날짜별 `price_override`가 있으면 이를, 없으면 객실 타입 기준가를 사용하며 브라우저가 보낸 금액은 신뢰하지 않습니다. 공개 판매 대상은 코드 하드코딩이 아니라 `room_type_website.published=1`인 활성 타입입니다. 초기 migration은 `DLX`, `TWN`, `STE`만 게시하고 나머지 QA/신규 타입은 관리자가 검토해 개별 게시하도록 합니다.
+
+### 홈페이지 검색 안정성
+
+- 서울 기준 다음 날을 최초 체크인으로 사용하고 과거 날짜는 URL로 직접 입력해도 안전한 기본값으로 교정합니다.
+- 체크인을 체크아웃 이상으로 변경하면 체크아웃을 자동으로 체크인 다음 날로 보정합니다.
+- 체크아웃은 체크인 다음 날부터 최대 30박까지 `min`/`max`와 서버 검증을 함께 적용합니다.
+- `/hotel/book` URL의 날짜·인원은 허용 형식과 범위로 정규화한 뒤 첫 검색을 실행합니다.
+- 이전 availability 요청은 `AbortController`로 중단하고 sequence가 최신인 응답만 화면에 반영하여 느린 이전 응답이 새 검색을 덮지 못하게 합니다.
+- 예약 확정 시 availability를 서버에서 다시 계산하므로 검색 후 재고·요금·게시 상태가 바뀌면 `OFFER_CHANGED 409`를 반환합니다.
+
+### 예약 원자성·재시도·초과 판매 방지
+
+- 모든 예약 확정은 8~200자의 `Idempotency-Key`가 필요합니다.
+- `booking_requests(property_id,idempotency_key)` unique index가 브라우저 재시도와 동시 중복 제출을 하나의 예약으로 수렴시킵니다.
+- 고객, 예약, 기본 folio window, `reservation_type_nights`, `reservation_rate_nights`, booking request, 감사 로그, Outbox event를 하나의 PostgreSQL transaction으로 commit합니다.
+- 동일 객실 타입·날짜의 insert는 `pms_lock_inventory` advisory lock과 `pms_reservation_capacity_guard`를 거치므로 서로 다른 고객의 동시 확정도 물리·판매 재고를 초과할 수 없습니다.
+- 예약 당시 일별 판매가는 `reservation_rate_nights`에 immutable snapshot으로 남고 야간 감사 객실료는 snapshot을 우선 사용합니다.
+
+### 온라인 취소
+
+웹 예약 취소는 예약번호, 예약 이메일 SHA-256 검증값, 성을 함께 확인합니다. `DUE_IN`이고 호텔 영업일 기준 도착일 전인 예약만 허용합니다. 취소 상태 전이, 타입박·객실박 반환, 감사 로그와 Outbox를 원자 처리하며 일별 요금 snapshot은 감사 근거로 보존합니다. 반복 취소 요청은 이미 취소된 동일 결과를 반환합니다.
+
+### 결제 경계
+
+현재 부킹 엔진은 결제대행사 자격증명이 없으므로 `현장 결제`만 명시합니다. 카드번호·CVV를 수집하거나 성공한 것처럼 가장하지 않습니다. 향후 PG를 연결할 때는 PMS가 카드 원문을 저장하지 않는 hosted/tokenized checkout과 payment webhook idempotency를 사용해야 합니다.
+
+### 공개 Booking API
+
+| Method | Route | 책임 |
+| --- | --- | --- |
+| `GET` | `/api/booking/availability?arrival&departure&adults&children` | 안전한 공개 필드만 포함한 실시간 offer 반환, IP별 read rate limit |
+| `POST` | `/api/booking/reservations` | same-origin·payload 제한·write rate limit·멱등 예약 확정 |
+| `DELETE` | `/api/booking/reservations` | 예약번호·이메일·성 검증 후 온라인 취소·재고 복원 |
+
+## 리포트와 Excel 내보내기
+
+### 표준 리포트
+
+| Key | 리포트 | 주요 데이터 |
+| --- | --- | --- |
+| `reservations` | 예약 상세 | 고객, 일정, 객실, 상태, 채널, 요금, 잔액 |
+| `occupancy` | 점유율·ADR·RevPAR | 날짜/타입별 판매 객실, 점유율, 객실 매출 |
+| `financials` | 정산·전표 | charge, payment, refund, reversal, 세금 |
+| `accounting_journal` | 회계 분개장·손익 | 계정과목, 부서, 차변, 대변, 매출, 비용, 반대전표 |
+| `channel_settlements` | 채널 판매가·입금가 | 계약 유형, 판매가, 채널 비용, 호텔 입금, 만기, 상태 |
+| `ar` | 매출채권·미수금 | 거래처, 청구서, 만기일, 수납, 잔액 |
+| `housekeeping` | 객실·하우스키핑 | 객실 상태, 청소 상태, 담당자, 작업 |
+| `groups` | 그룹·블록 | 일정, 할당, 픽업, 잔여 수량, 요금 |
+| `channels` | 채널·인터페이스 | inbound/outbound, provider, 시도, 오류 |
+| `audit` | 감사 로그 | actor, action, entity, before/after |
+| `room_inventory` | 객실 마스터 | 객실 타입, 객실번호, 층, 운영/청소 상태 |
+
+### 조회 제한
+
+- 한 번의 조회 기간: 최대 367일
+- 화면 페이지 크기: 최대 100행
+- 내보내기: 최대 25,000행
+- 검색어: 최대 120자
+- 개인정보: `REPORT_EXPORT` 권한이 없는 사용자는 고객명·이메일·전화번호 마스킹
+- Excel: 숫자, 통화, 백분율, 날짜 열 형식과 요약 시트 포함
+
+## 권한과 보안
+
+### 역할
+
+| 역할 | 핵심 권한 |
+| --- | --- |
+| `PROPERTY_ADMIN` | 전체 운영, 재고, 그룹, 정산, 회계, 연동, 리포트, 마스터 |
+| `NIGHT_AUDITOR` | 폴리오, AR, 캐셔, 야간 마감, 리포트 |
+| `FRONT_DESK` | 예약, 체크인/아웃, 폴리오, 캐셔, 그룹 픽업 |
+| `CASHIER` | 폴리오, AR, 캐셔, 리포트 |
+| `HOUSEKEEPING` | 객실 조회, 청소·점검 상태 변경 |
+| `REVENUE_MANAGER` | 재고·요금, 그룹, 채널, 리포트 |
+| `SALES_MANAGER` | 예약, 그룹·블록·픽업, 리포트 |
+| `ACCOUNTANT` | 폴리오, AR, 호텔 회계·손익, 채널 정산, 리포트 |
+| `VIEWER` | 읽기 전용 |
+
+### Capability
+
+`READ`, `RESERVATION_WRITE`, `STAY_WRITE`, `FOLIO_WRITE`, `AR_WRITE`, `HOUSEKEEPING_WRITE`, `CASHIER_WRITE`, `EOD_RUN`, `INVENTORY_WRITE`, `GROUP_WRITE`, `GROUP_PICKUP`, `INTEGRATION_WRITE`, `ACCOUNTING_WRITE`, `REPORT_EXPORT`, `ADMIN`
+
+### 보안 계층
+
+1. Vercel Production HTTPS와 암호화 환경 변수
+2. Supabase Auth password login과 ES256/RS256 access token의 JWKS 서명·issuer·audience·만료 검증; legacy HS256 또는 JWKS 장애 시 `/auth/v1/user` 검증 fallback
+3. 만료 access token은 server-side refresh token 교환으로 갱신
+4. access/refresh token은 JavaScript가 읽을 수 없는 `HttpOnly`, Production `Secure`, `SameSite=Lax` cookie에만 저장
+5. `role_assignments`의 활성 email/property/role을 서버에서 조회하고 capability를 매 요청에 적용
+6. 사용자가 선택한 `x-aurora-property-id`는 실제 assignment에 포함된 경우에만 허용
+7. scoped database adapter가 모든 `'prop-seoul'` query literal을 검증된 현재 property로 치환
+8. 모든 PMS 쓰기 요청의 same-origin, action capability, 입력·상태 전이와 `Idempotency-Key` 검증
+9. 로그인·공개 부킹·`POST /api/pms`의 HMAC 주소/사용자 기반 DB 원자 rate limit, same-origin write, 16KB payload limit, server-side 가격 재계산
+10. Supabase RLS 활성화, `anon`/`authenticated` table 권한 제거, 임의 SQL `SECURITY DEFINER` RPC 미존재
+11. CSP, HSTS, frame deny, nosniff, strict referrer, permissions policy, COOP 보안 헤더
+12. 미분류 서버 오류는 UUID 오류 ID만 응답하고 원인은 server log에 남기는 오류 마스킹
+13. 감사 로그, reservation mutation/transition, immutable 원장, transactional outbox
+14. 카드 원문·CVV 미수집·미저장
+
+Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV !== production`, `PMS_ALLOW_DEMO_AUTH=true`, 32자 이상 `PMS_DEMO_AUTH_TOKEN`, 같은 값의 `x-aurora-demo-token`, `PMS_DEMO_USER_EMAIL`, 그리고 해당 이메일의 수동 `role_assignments`가 모두 있어야만 성립합니다. 런타임 초기화와 seed는 어떤 관리자 역할도 생성하지 않습니다.
+
+`SUPABASE_SECRET_KEY`, `DATABASE_URL`, `DIRECT_URL`은 Git에 커밋하지 않습니다. 로컬 `.env.local` 또는 배포 플랫폼의 암호화 환경 변수에만 저장합니다.
+
+## 데이터 모델
+
+운영 스키마는 51개 테이블을 11개 도메인으로 구성합니다. 79개 property-aware 외래키는 모두 validated 상태입니다.
+
+| 도메인 | 테이블 |
+| --- | --- |
+| 프로퍼티·권한 | `properties`, `role_assignments` |
+| 객실·재고 | `room_types`, `rooms`, `inventory_controls`, `housekeeping_tasks` |
+| 예약·투숙 | `guests`, `reservations`, `reservation_nights`, `reservation_type_nights`, `reservation_transitions`, `reservation_mutations`, `room_moves` |
+| 그룹·세일즈 | `account_profiles`, `business_blocks`, `block_inventory`, `rooming_list_entries`, `block_pickup_nights` |
+| 폴리오 | `folio_windows`, `folio_entries`, `folio_entry_details`, `folio_routing_rules`, `transaction_codes` |
+| AR·캐셔·EOD | `ar_accounts`, `ar_invoices`, `ar_ledger_entries`, `cashier_sessions`, `night_audits` |
+| 채널·전달 | `channel_connections`, `channel_mappings`, `channel_contracts`, `channel_rate_overrides`, `channel_settlements`, `ari_updates`, `channel_reservation_links`, `inbound_channel_messages`, `integration_delivery_attempts`, `outbox_events` |
+| 회계·손익 | `accounting_accounts`, `accounting_journal_entries`, `accounting_journal_lines` |
+| 직접 예약 | `booking_requests`, `reservation_rate_nights` |
+| 홈페이지 CMS | `website_settings`, `room_type_website`, `website_media` |
+| 감사·운영 | `audit_logs`, `idempotency_keys`, `api_rate_limits`, `report_exports`, `pms_schema_migrations` |
+
+### 주요 불변식
+
+- 프로퍼티별 객실번호 유일
+- 프로퍼티별 객실 타입 코드 유일
+- 객실별 날짜 예약 유일
+- 예약별 타입·날짜 유일
+- 연결별 Message ID 유일
+- 연결별 외부 예약 ID 유일
+- 예약별 폴리오 창 번호 유일
+- 예약·거래 코드별 활성 라우팅 유일
+- 영업일별 야간 감사 유일
+- 폴리오와 AR 원장 핵심 열 수정·삭제 금지
+- 회계 journal line 수정·삭제 금지, header는 반대 상태 전이만 허용
+- 회계 전표 차변·대변 합계 일치
+- 채널·예약별 정산 유일성과 `판매가 - 채널 비용 = 호텔 입금가`
+- 채널 입금가는 채널 판매가 이하
+- 블록 current 수량은 picked-up 수량 아래로 감소 금지
+- 활성 재고를 초과하는 예약·블록 생성 금지
+- 같은 원전표의 반대 회계 전표는 한 번만 생성
+- 같은 정산 source의 회계 전표는 한 번만 생성
+- 직접 예약 요청 key와 연결된 예약은 프로퍼티별 유일
+- 예약·투숙일별 판매가 snapshot은 수정·삭제 금지
+- 홈페이지 설정과 객실 콘텐츠는 property/type별 하나이며 version으로 동시 편집 충돌 차단
+- `ROOM_TYPE` 이미지는 유효한 property·객실 타입에만 연결하고 `HOTEL` 이미지는 타입 ID를 갖지 않음
+- 홈페이지 게시 타입과 일자별 `website_closed=0` 조건을 모두 만족해야 직접 예약 offer에 포함
+
+## 마이그레이션 카탈로그
+
+마이그레이션은 파일명 순서대로 한 번만 적용되며 `pms_schema_migrations`에 기록됩니다. 적용 기록 테이블 자체도 RLS와 revoke로 보호합니다.
+
+| Migration | 책임 | 주요 산출물 |
+| --- | --- | --- |
+| `202607160001_aurora_pms.sql` | PMS 코어 스키마 | 예약, 객실, 재고, 그룹, 폴리오, AR, 채널, 감사, 리포트 39개 테이블과 기본 인덱스·트리거 |
+| `202607160002_pms_data_api.sql` | 과거 HTTPS SQL adapter | 과거 RPC 생성 이력; 현재는 `202607170009`에서 전부 삭제됨 |
+| `202607160003_lock_migration_history.sql` | migration 기록 보호 | `pms_schema_migrations` RLS, `anon`/`authenticated` revoke |
+| `202607160004_channel_revenue_accounting.sql` | 채널 수익·호텔 회계 | 계약, 날짜별 채널 요금, 정산, 계정과목, journal header/line 6개 테이블과 불변 원장 트리거 |
+| `202607160005_settlement_contract_snapshot.sql` | 역사적 정산 조건 고정 | `contract_type`, `commission_percent` snapshot과 열린 정산이 있는 계약 변경 guard |
+| `202607170001_relational_integrity.sql` | 관계 무결성·회계 경쟁 보호 | property/id composite key, 70개 validated FK, 반대전표·source journal unique index |
+| `202607170002_large_atomic_batch.sql` | 과거 RPC batch 확장 | 과거 600 statement 상한 이력; 현재 원자 batch는 PostgreSQL transaction이 담당 |
+| `202607170003_booking_engine.sql` | PMS 직접 예약 | `booking_requests`, immutable `reservation_rate_nights`, 4개 validated FK, RLS/revoke |
+| `202607170004_website_cms.sql` | 호텔 홈페이지 CMS | `website_settings`, `room_type_website`, `website_media`, `website_closed`, Storage `hotel-media` bucket, 5개 FK, RLS/revoke와 초기 콘텐츠 |
+| `202607170005_website_seed_visibility.sql` | 공개 객실 초기화 | 운영 3개 타입만 초기 게시하고 신규·QA 타입은 관리자 검토 후 게시하도록 분리 |
+| `202607170006_default_admin_identity.sql` | 과거 관리자 migration 호환 마커 | 기존 적용 ID는 유지하되 fresh install에서도 역할을 생성하지 않음; 현재 역할은 operator가 별도 provisioning |
+| `202607170007_remove_seed_admin.sql` | 관리자 backdoor 제거 | 역사적 seed ID만 삭제; 이후 runtime·seed 자동 관리자 생성 금지 |
+| `202607170008_distributed_rate_limits.sql` | serverless 공유 rate limit | `api_rate_limits` 원자 counter, expiry index, RLS/revoke |
+| `202607170009_remove_arbitrary_sql_rpc.sql` | 임의 SQL RPC 폐기 | service role 포함 전 권한 revoke 후 `pms_execute`, `pms_batch`, helper function 삭제 |
+| `202607170010_tenant_context_rls.sql` | DB 강제 테넌트 격리 | `aurora_app` NOBYPASSRLS 역할, transaction-local `app.property_id`, 49개 tenant table RLS policy, property별 idempotency composite PK |
+| `202607170011_native_temporal_types.sql` | 날짜·시각 native type | 28+ date, 66+ timestamptz, time 컬럼 전환, date 기반 inventory lock·pickup trigger |
+| `202607170012_rate_plan_domain.sql` | 정규화 Rate Plan | 요금제·객실 매핑·일자별 요금 3개 테이블, 예약·채널 rate code FK, 3개 RLS policy와 직판 기본값 |
+
+### 핵심 PostgreSQL 함수와 트리거
+
+| 이름 | 역할 |
+| --- | --- |
+| `pms_lock_inventory` | 프로퍼티·객실타입·투숙일 단위 advisory lock 획득 |
+| `pms_reservation_capacity_guard` | 예약 타입박 insert 시 예약+deduct block 사용량이 판매 재고를 넘는지 확인 |
+| `pms_block_inventory_guard` | block original/current/picked-up 수량과 하우스 capacity 검증 |
+| `pms_block_pickup_guard` | rooming entry 픽업 가능 수량과 날짜 검증 |
+| `pms_block_pickup_apply` | pickup insert/delete에 따라 block `picked_up`을 증감 |
+| `pms_inventory_control_guard` | sell limit을 기존 확정 예약 아래로 내리는 변경 차단 |
+| `pms_immutable_guard` | 폴리오·AR·전달 시도·회계 line의 update/delete 거부 |
+| `pms_accounting_line_guard` | debit/credit 한쪽만 양수인지, 활성 계정인지 검증 |
+| `pms_accounting_header_guard` | journal header는 `POSTED → REVERSED` 이외 변경을 거부 |
+| `pms_channel_settlement_contract_snapshot` | 정산 insert 시 계약 유형·수수료율을 복사 |
+| `pms_channel_contract_open_settlement_guard` | `ACCRUED` 정산이 있으면 계약 유형·수수료율 변경 차단 |
+| `pms_booking_rate_immutable_guard` | 예약 당시 투숙일별 판매가 snapshot의 update/delete 거부 |
+
+### 마이그레이션 작성 규칙
+
+1. 이미 배포된 migration 파일은 수정하지 않고 새 번호의 additive migration을 추가합니다.
+2. 테이블 생성과 함께 조회 패턴에 필요한 index, RLS, revoke, trigger를 같은 migration에서 정의합니다.
+3. destructive DDL은 사전 backup, staging 검증, 명시적 운영 승인 없이 실행하지 않습니다.
+4. 새 테이블은 `property_id`를 포함하고 `202607170010`의 tenant table policy 목록과 grants에 추가합니다.
+5. 원장·감사 테이블에는 delete cascade를 사용하지 않습니다.
+6. migration 후 `npm run db:supabase:smoke`로 table/trigger/RLS, pooled runtime 연결, 임의 SQL RPC 0개를 다시 검증합니다.
+
+## API 계약
+
+### Snapshot
+
+```http
+GET /api/pms
+```
+
+응답은 현재 사용자의 권한을 반영한 `property`, `reservations`, `rooms`, `metrics`, `controls`, `inventory`, `groups`, `finance`, `integrations`를 포함합니다.
+
+장기 캘린더와 회계처럼 기간에 따라 응답량이 크게 달라지는 화면은 전용 조회를 사용합니다.
+
+```http
+GET /api/pms?view=inventory&from=2026-07-16&to=2027-07-15
+GET /api/pms?view=accounting&from=2026-07-01&to=2026-07-31
+GET /api/pms?view=report&report=channel_settlements&from=2026-07-01&to=2026-07-31
+```
+
+### Command
+
+```http
+POST /api/pms
+Content-Type: application/json
+Idempotency-Key: <unique-key>
+
+{
+  "action": "create_reservation",
+  "firstName": "Aurora",
+  "lastName": "Guest"
+}
+```
+
+성공하면 전체 snapshot 대신 아래와 같은 작은 mutation receipt를 반환합니다. `entity`는 payload에서 식별 가능한 변경 대상을 가리키며, 생성처럼 서버에서 ID를 만든 작업은 `null`일 수 있습니다. 리포트 export는 조회 결과 자체가 산출물이므로 예외적으로 리포트 데이터와 `exportId`를 반환합니다.
+
+```json
+{
+  "ok": true,
+  "mutation": {
+    "id": "retry-001",
+    "action": "edit_reservation",
+    "domain": "reservation",
+    "replayed": false,
+    "entity": { "type": "reservation", "id": "reservation-42" }
+  },
+  "invalidates": ["core", "full", "reservations", "inventory"]
+}
+```
+
+### 쓰기 Action
+
+| 도메인 | Action |
+| --- | --- |
+| 예약 | `create_reservation`, `edit_reservation`, `assign_room`, `move_room`, `cancel_reservation`, `mark_no_show`, `check_in`, `check_out` |
+| 객실·재고 | `create_room_type`, `update_room_type`, `create_room`, `bulk_create_rooms`, `update_room`, `update_inventory_control`, `bulk_update_inventory_controls`, `housekeeping` |
+| 그룹 | `create_account_profile`, `create_business_block`, `update_block_inventory`, `add_rooming_entry`, `pickup_rooming_entry`, `cutoff_block` |
+| 폴리오 | `post_charge`, `post_payment`, `create_folio_window`, `create_routing_rule`, `split_folio_entry`, `reverse_folio_entry`, `refund_payment` |
+| AR | `transfer_to_ar`, `post_ar_payment` |
+| 채널 | `create_channel_connection`, `create_channel_mapping`, `upsert_channel_contract`, `queue_ari_delta`, `dispatch_ari_update`, `ingest_channel_message`, `replay_channel_message`, `dispatch_outbox_event` |
+| 회계·정산 | `post_accounting_entry`, `reverse_accounting_entry`, `accrue_channel_settlement`, `mark_channel_settlement_paid` |
+| 홈페이지 CMS | `update_website_settings`, `update_room_type_website`, `upload_website_media`, `delete_website_media` |
+| 영업일 | `open_cashier`, `close_cashier`, `run_night_audit` |
+| 리포트 | `export_report` |
+
+### 대표 상태 코드
+
+| 코드 | 의미 |
+| --- | --- |
+| `200` | 처리 완료 또는 멱등 replay |
+| `400` | 입력 형식·범위·지원 Action 오류 |
+| `401` | 로그인 사용자 정보 없음 |
+| `403` | 역할에 필요한 capability 없음 |
+| `409` | 재고, 상태 전이, version, 캐셔, 원장 조건 충돌 |
+| `413` | 리포트 export 최대 행 또는 벌크 재고 5,000셀 초과 |
+
+## API 상세 개발 명세
+
+### 인증·권한 해석 순서
+
+1. `Authorization: Bearer` 또는 `aurora-pms-access` cookie의 access token header를 읽습니다. ES256/RS256이면 Supabase JWKS로 서명·`iss`·`aud=authenticated`·`exp`를 서버에서 검증하고, legacy HS256 또는 JWKS 장애일 때만 `/auth/v1/user`로 검증합니다.
+2. access token이 만료됐고 bearer 요청이 아니라면 HttpOnly refresh cookie로 새 session을 발급하고 두 cookie를 rotation합니다.
+3. Production에서는 검증된 Supabase identity가 없으면 `401`입니다.
+4. localhost·127.0.0.1·Host header는 인증 근거로 사용하지 않습니다.
+5. Production이 아닌 환경에서만 `PMS_ALLOW_DEMO_AUTH=true`, `PMS_DEMO_USER_EMAIL`, 32자 이상 `PMS_DEMO_AUTH_TOKEN`, 일치하는 `x-aurora-demo-token`이 함께 있을 때 explicit demo identity 검증을 시도합니다.
+6. `role_assignments`에서 해당 email의 활성 property/role을 조회합니다. `x-aurora-property-id`가 있으면 assignment에 포함된 property인지 확인합니다.
+7. access token identity와 역할/property assignment는 각각 30초 cache하며 키는 token hash 또는 `email + requested property`로 격리합니다. 같은 Vercel instance에 동시에 도착한 동일 token/assignment 검증은 하나의 in-flight Promise로 병합합니다.
+8. action에 연결된 capability가 없거나 사용자에게 capability가 없으면 `403`입니다.
+9. 검증된 property ID만 scoped database adapter에 전달되며 `[A-Za-z0-9_-]{1,64}` 형식을 벗어나면 실행하지 않습니다.
+
+### GET query parameter
+
+| View | 필수/선택 parameter | 반환 |
+| --- | --- | --- |
+| `core` | 없음 | 초기 shell용 property, principal, 핵심 metrics·controls·reservations·rooms·14일 inventory |
+| 기본 | 없음 | `property`, `principal`, `metrics`, `controls`, `reservations`, `rooms`, `inventory`, `groups`, `finance`, `integrations` |
+| `inventory` | `from`, `to` (`YYYY-MM-DD`, 최대 730일) | dates, room types, physical/reserved/held/available, inventory controls, mappings, contracts, channel rate overrides |
+| `accounting` | `from`, `to` (최대 367일) | accounts, journals, lines, settlements, contracts, eligible reservations, P/L summary |
+| `website` | 없음 | 홈페이지 설정, 전체 객실 타입별 CMS 게시 상태·설명·편의시설, 미디어 metadata |
+| `report` | `report`, `from`, `to`, `q`, `status`, `source`, `roomTypeId`, `page`, `pageSize` | catalog, definition, filters, columns, rows, summary, pagination, export policy |
+
+### Command 공통 규칙
+
+- Content type은 `application/json`입니다.
+- 현재 UI 호환을 위해 action payload의 많은 값은 문자열로 전송하며 서버가 숫자·boolean·JSON 배열을 명시적으로 파싱합니다.
+- 모든 PMS 변경 명령은 고유한 `Idempotency-Key`를 반드시 보냅니다. 형식은 영문·숫자와 `:._-`, 최대 200자입니다.
+- 중복 키가 확인되면 같은 업무를 다시 실행하지 않고 `X-Idempotent-Replay: true`, `mutation.replayed=true`인 동일 형태 receipt를 반환합니다.
+- DB commit이 끝나면 server read cache를 비우고 receipt의 `invalidates`로 client query key를 stale 처리합니다.
+- 상태 충돌은 정상적인 업무 결과이므로 `409`로 처리하고 UI가 관련 projection을 다시 읽도록 합니다.
+
+### Action 입력 계약 요약
+
+| Action | 주요 payload | 핵심 서버 검증 |
+| --- | --- | --- |
+| `create_reservation` | 고객명, 연락처, `roomTypeId`, 선택 `roomId`, arrival/departure, 인원, source/ratePlan/nightlyRate | 날짜, 타입 활성, CTA/CTD/MLOS, 타입 capacity, 객실 중복 |
+| `edit_reservation` | `reservationId`, `expectedVersion`, 일정·타입·인원·요금 | `DUE_IN`, group pickup 제외, optimistic version, 새 일정 재고 |
+| `assign_room` | `reservationId`, `roomId`, `expectedVersion` | 예약 타입 일치, OOS 제외, 객실 night 유일성 |
+| `move_room` | `reservationId`, `roomId`, `expectedVersion`, `reason` | `IN_HOUSE`, 공실·청소/점검 완료, 남은 숙박일, 기존 객실 Dirty |
+| `check_in` / `check_out` | `reservationId` | 상태 전이, 체크인 객실 준비, 체크아웃 folio 잔액 0 |
+| `cancel_reservation` / `mark_no_show` | `reservationId`, `reason` | `DUE_IN`, 타입/객실 nights와 group pickup 복원 |
+| `update_inventory_control` | `roomTypeId`, `stayDate`, sellLimit, closed, `websiteClosed`, minStay, CTA/CTD, priceOverride | 물리 객실·확정 예약 이하 sell limit 금지, 공식 홈페이지 판매 독립 제어 |
+| `bulk_update_inventory_controls` | `from`, `to`, `roomTypeIds`, `weekdays`, 재고 필드, `websiteClosed`, 선택 mapping/channel sell/net | 730일, 5,000셀, 타입 유효, 홈페이지 노출 유지/허용/중지, 입금가≤판매가, 계약 존재 |
+| `update_website_settings` | 버전, 공개 여부, 호텔/브랜드/Hero/섹션/연락처/체크인·아웃 필드 | `ADMIN`, 필수 길이·이메일·시간, optimistic version |
+| `update_room_type_website` | `roomTypeId`, 버전, 공개, 순서, 마케팅명, 짧은/상세 소개, amenities JSON | 활성 타입, 최대 20개 편의시설, optimistic version |
+| `upload_website_media` | scope, 선택 `roomTypeId`, role, alt, order, filename, image data URL | `ADMIN`, JPEG/PNG/WebP, 3MB, scope/type 관계, server-only Storage write |
+| `delete_website_media` | `mediaId` | property scope, Storage object와 metadata 삭제, 감사 로그 |
+| `create_business_block` | 프로필, block code/name, 일정, status, deduct flag, cutoff | 일정·코드·프로필 검증 |
+| `update_block_inventory` | `blockId`, 타입·날짜별 original/current/rate | picked-up 이하 감소 금지, 하우스 capacity |
+| `add_rooming_entry` / `pickup_rooming_entry` | block, 고객, 일정, 타입, 요금 | block 일정·할당, 중복 pickup, 예약 재고 원자 전환 |
+| `cutoff_block` | `blockId` | 미픽업 hold만 반환하고 pickup 수량 보존 |
+| `post_charge` / `post_payment` | 예약, window, 거래코드/수단, amount | open cashier, open window, 양수 금액, routing |
+| `split_folio_entry` | source entry, target window, amount | 원전표 잔액 안에서 reversal+재전기 |
+| `reverse_folio_entry` / `refund_payment` | entry, amount/reason | append-only 반대 기록, 중복·초과 정정 금지 |
+| `transfer_to_ar` | folio window, account profile | direct-bill 승인, 양수 잔액, credit limit, invoice+folio 원자 처리 |
+| `post_ar_payment` | `invoiceId`, amount, method | open cashier, invoice 잔액 이하, 완납 상태 전환 |
+| `create_channel_connection` | provider, name, external property ID | provider/property 유일성 |
+| `create_channel_mapping` | connection, external room/rate IDs, internal type/rate plan | 활성 connection, 외부 mapping 유일성 |
+| `upsert_channel_contract` | connection, `COMMISSION`/`NET_RATE`, percent, cycle, terms, validity | 0~100%, 유효 기간, open settlement 계약 변경 guard |
+| `queue_ari_delta` | `mappingId`, start/end date | 활성 mapping, 날짜별 revision 증가, inventory payload 구성 |
+| `dispatch_ari_update` | `ariId`, success/failure simulation | immutable delivery attempt 추가, 상태·attempt 증가 |
+| `ingest_channel_message` | connection/message/external reservation IDs, revision, NEW/MODIFY/CANCEL payload | message 멱등, revision 증가, mapping, 예약 상태·재고 |
+| `replay_channel_message` | 실패 inbound message ID | 원 payload 보존, 같은 검증 경로 재실행 |
+| `dispatch_outbox_event` | event ID, success/failure simulation | PENDING/FAILED만 재시도, attempt와 오류 보존 |
+| `post_accounting_entry` | date, REVENUE/EXPENSE/ADJUSTMENT, debit/credit account, amount, description, vendor, department | 서로 다른 활성 계정, 양수 금액, 차대 균형 |
+| `reverse_accounting_entry` | `entryId`, `reason` | POSTED 원전표, line debit/credit 반전, 원전표 REVERSED |
+| `accrue_channel_settlement` | `connectionId`, `reservationId` | 활성 계약, 예약별 유일성, 투숙일 rate coverage, 정산 공식 |
+| `mark_channel_settlement_paid` | `settlementId` | ACCRUED 상태, 현금·미수금·미지급금 전표 |
+| `open_cashier` / `close_cashier` | opening amount / counted amount | 사용자별 단일 open session, expected/variance 계산 |
+| `run_night_audit` | 없음 | 미처리 도착·open cashier·failed outbox blocker 0, 일별 중복 전기 차단 |
+| `export_report` | report filters, `CSV`/`XLSX` | `REPORT_EXPORT`, 최대 25,000행, export/audit 기록 |
+
+### 장기 재고 벌크 예시
+
+```json
+{
+  "action": "bulk_update_inventory_controls",
+  "from": "2026-08-01",
+  "to": "2026-10-31",
+  "roomTypeIds": "[\"room-type-deluxe\",\"room-type-suite\"]",
+  "weekdays": "[1,2,3,4,5]",
+  "sellLimit": "12",
+  "priceOverride": "185000",
+  "minStay": "2",
+  "closed": "false",
+  "cta": "false",
+  "ctd": "false",
+  "mappingId": "channel-mapping-id",
+  "channelSellRate": "195000",
+  "channelNetRate": "158000"
+}
+```
+
+### 채널 계약과 정산 예시
+
+```json
+{
+  "action": "upsert_channel_contract",
+  "connectionId": "channel-connection-id",
+  "contractType": "COMMISSION",
+  "commissionPercent": "12.5",
+  "settlementCycle": "PER_STAY",
+  "paymentTermsDays": "30",
+  "validFrom": "2026-07-16",
+  "validTo": ""
+}
+```
+
+```json
+{
+  "action": "accrue_channel_settlement",
+  "connectionId": "channel-connection-id",
+  "reservationId": "reservation-id"
+}
+```
+
+### 회계 전표 예시
+
+```json
+{
+  "action": "post_accounting_entry",
+  "businessDate": "2026-07-16",
+  "entryType": "EXPENSE",
+  "debitAccountId": "hotel-operating-expense-account-id",
+  "creditAccountId": "cash-account-id",
+  "amount": "25000",
+  "description": "세탁 외주 비용",
+  "vendor": "Aurora Linen",
+  "department": "HOUSEKEEPING"
+}
+```
+
+### Snapshot 응답 축약 구조
+
+```json
+{
+  "property": { "id": "prop-seoul", "business_date": "2026-07-16" },
+  "principal": { "email": "...", "role": "PROPERTY_ADMIN", "capabilities": [] },
+  "metrics": { "arrivals": 0, "inHouse": 0, "occupancy": 0, "roomRevenue": 0 },
+  "controls": { "blockers": [], "openCashier": null, "audit": null },
+  "reservations": [],
+  "rooms": [],
+  "inventory": { "dates": [], "types": [] },
+  "groups": { "accounts": [], "blocks": [], "inventory": [], "rooming": [] },
+  "finance": { "windows": [], "entries": [], "arAccounts": [], "arInvoices": [], "trialBalance": {} },
+  "integrations": { "connections": [], "contracts": [], "mappings": [], "ari": [], "inbound": [], "attempts": [], "outbox": [] }
+}
+```
+
+## 성능과 확장성
+
+### 현재 최적화
+
+- 준비된 SQL과 bind parameter 사용
+- POST는 30개 query snapshot을 생성하지 않고 mutation receipt만 반환; TanStack Query가 `core/full/domain` key를 선택적으로 무효화
+- 로그인 직후에는 heavy group/finance/channel 데이터를 제외한 `view=core`를 먼저 로드하고 필요한 모듈 진입 시 full snapshot 지연 로드
+- Core/full Snapshot을 property·사용자별 3초 short cache로 분리
+- 동일 사용자 동시 Snapshot 요청 Promise 병합 및 직렬화 결과 재사용
+- `Accept-Encoding: gzip` 클라이언트에는 core/full JSON 직렬화와 gzip 결과를 각각 재사용
+- Supabase asymmetric JWT의 JWKS local verification, access token identity·역할/property 할당 30초 short cache, 동일 검증 in-flight Promise 병합
+- Vercel cold instance는 필수 table과 property를 읽기 전용으로 probe하며 schema 또는 역할을 runtime에서 변경하지 않음
+- Report 사용자·필터별 5초 short cache
+- 쓰기 성공 시 snapshot/report cache 무효화
+- 예약, 날짜, 객실 타입, 상태, 채널, 원장 중심 복합 인덱스
+- Supavisor transaction pooler와 `prepare:false`를 통한 serverless Functions 친화적 연결
+- Vercel Functions를 한국 사용자의 가까운 Seoul `icn1`에 배치하고 Fluid Compute로 동일 instance의 동시 요청·cache를 공유
+- `postgres.begin` transaction으로 모든 command statement를 원자 실행
+- 최대 200개 report cache entry 유지 및 만료 청소
+- Outbox와 외부 전달 분리
+- 장기 캘린더를 기본 Snapshot과 분리해 선택한 기간만 지연 조회
+- 날짜 범위·객실 타입·채널 매핑 복합 인덱스
+- 500객실 생성은 500 room insert + 감사 + 멱등키, 총 502 statement를 하나의 PostgreSQL transaction으로 실행
+- 장기 재고 5,000셀은 bounded 하위 batch로 처리하며 각 셀은 유일키·검증 trigger로 보호
+- 금전 command의 unique idempotency receipt는 도메인 전기와 같은 transaction에 strict insert되어 동시 retry의 loser 전체를 rollback
+- 로그인 8회/분, 공개 조회 60회/분, 공개 예약 10회/분, 인증 PMS write 120회/분을 `api_rate_limits` UPSERT로 모든 instance가 공유
+
+`npm run benchmark`는 요청 수·동시성·path를 환경 변수로 바꿀 수 있고 p95 250ms 미만과 오류 0건을 release gate로 사용합니다. Supabase Auth가 필요한 환경은 `PMS_TEST_EMAIL`과 `PMS_TEST_PASSWORD`를 함께 전달하면 먼저 로그인한 뒤 HttpOnly session cookie로 측정합니다. 2026-07-17 core snapshot 로컬 production 측정은 warm-up 10회 후 100요청/동시성 10에서 실패 0건, 530.60 req/s, p50 18.48ms, p95 21.68ms, p99 24.74ms였습니다. 같은 날 Vercel Seoul `icn1` 프로덕션은 warm-up 20회 후 200요청/동시성 10에서 실패 0건, 252.04 req/s, p50 36.13ms, p95 53.20ms, p99 96.01ms로 게이트를 통과했습니다. 쓰기 직후에는 core/full/report cache를 모두 비우므로 작업 결과가 오래된 Snapshot에 가려지지 않습니다.
+
+500객실 실제 경쟁 검증은 동일 객실번호 500개를 두 요청이 동시에 생성하도록 실행했습니다. 결과는 한 요청 `200`, 경쟁 요청 `409`, 최종 생성 수 정확히 500, winner key 재실행 `X-Idempotent-Replay: true`였으며 500개 미만의 부분 commit은 없었습니다. 검증 데이터는 확인 직후 transaction으로 정리했습니다.
+
+### 생성 한도
+
+| 항목 | 제한 |
+| --- | --- |
+| 객실 타입 총수 | 데이터베이스 고정 상한 없음 |
+| 실물 객실 총수 | 데이터베이스 고정 상한 없음 |
+| 한 번의 대량 객실 생성 | 1~500실 |
+| 객실 타입 기준 인원 | 1~20명 |
+| 객실 타입 코드 | 영문·숫자·`_`·`-`, 2~12자 |
+| 객실번호 | 최대 16자 |
+| 층 | -10~250 |
+| 객실 특성 | 최대 20개 token |
+| 재고 캘린더 조회·제어 horizon | 한 요청 최대 730일 |
+| 재고 벌크 변경 | 한 번에 최대 5,000 타입·일자 셀 |
+| 회계·리포트 조회 | 한 요청 최대 367일 |
+
+실제 운영 규모는 Supabase compute, connection/pooling 정책, 리포트 기간과 동시 사용자 수에 따라 capacity test로 결정해야 합니다. 객실 수 자체보다 날짜별 예약 객실박과 리포트 조회량이 주요 용량 지표입니다.
+
+## Aurora Flow UI
+
+Aurora Flow UI는 Toss Design System을 복제하지 않고, 공개된 Toss UX 원칙을 호텔 B2B 업무 화면에 맞게 해석한 디자인 레이어입니다. Aurora는 Toss와 제휴하거나 Toss의 공식 제품이 아닙니다.
+
+### 적용 원칙
+
+- Toss Blue 계열의 명확한 primary action
+- `#191F28` 중심의 높은 텍스트 가독성
+- `#F2F4F6`, `#E5E8EB` 기반의 가벼운 레이어
+- Toss 공식 CDN의 `Toss Product Sans` Regular/Bold 웹폰트 로드와 시스템 fallback
+- fill/weak 버튼으로 주요·보조 행동 구분
+- 12~24px 라운드와 최소한의 그림자
+- 로딩·비활성·선택·오류 상태의 시각적 일관성
+- `Cmd/Ctrl + K`, `Escape`, `aria-current`, `aria-pressed`, `focus-visible`
+- `prefers-reduced-motion` 존중
+- 모바일 하단 가로 스크롤 업무 내비게이션
+- 가치와 결과를 먼저 설명하는 한국어 마이크로카피
+
+### 참고한 공개 자료
+
+- [Toss Design System Button](https://tossmini-docs.toss.im/tds-mobile/components/button/)
+- [Toss Design System Colors](https://tossmini-docs.toss.im/tds-mobile/foundation/colors/)
+- [토스 디자이너가 제품에만 집중할 수 있는 방법](https://toss.tech/article/toss-design-system)
+- [토스 디자인 원칙: Value first, Cost later](https://toss.tech/article/value-first-cost-later)
+- [토스 디자인 원칙: Easy to answer](https://toss.tech/article/insurance-claim-process)
+- [Supabase JSON Web Token 검증](https://supabase.com/docs/guides/auth/jwts): 프로젝트 JWKS endpoint, asymmetric token 서명 검증, issuer와 표준 claim
+- [Supabase JWT Signing Keys](https://supabase.com/docs/guides/auth/signing-keys): ES256 공개키, Edge 10분 cache와 key rotation 주의사항
+
+### PMS·회계 벤치마크 근거
+
+- [Oracle OPERA Cloud Commission Codes](https://docs.oracle.com/en/industries/hospitality/opera-cloud/25.3/ocsuh/c_configuration_codes_commission_codes.htm): checkout 이후 적격 매출 기반 비율/정액 수수료 계산 모델
+- [Oracle OPERA Cloud Process Commission Payments](https://docs.oracle.com/en/industries/hospitality/opera-cloud/23.5/ocsuh/t_commissions_processing_commission_payments.htm): 수수료 hold, 지급과 처리 상태
+- [Oracle OPERA Cloud Channel Negotiated Rates](https://docs.oracle.com/en/industries/hospitality/opera-cloud/25.5/ocsuh/t_managing_profile_channel_negotiated_rates.htm): 채널별 rate code와 유효 기간
+- [Oracle OPERA Cloud Channel Rate Mapping](https://docs.oracle.com/en/industries/hospitality/opera-cloud/25.1/ocsuh/t_admin_financial_configuring_channel_rate_mapping.htm): 내부 요금과 채널 요금 매핑 분리
+- [Oracle OPERA Cloud Transaction Codes](https://docs.oracle.com/en/industries/hospitality/opera-cloud/25.2/ocsuh/c_admin_financial_cashiering_about_transaction_codes.htm): 매출·비매출·세금·결제 분류와 ledger 연결
+- [Oracle OPERA Cloud End of Day Reports](https://docs.oracle.com/en/industries/hospitality/opera-cloud/25.4/ocsuh/c_reports_end_of_day.htm): guest/AR/deposit/package ledger와 trial balance
+- [Oracle OPERA Cloud Financial Reports](https://docs.oracle.com/en/industries/hospitality/opera-cloud/24.1/ocsuh/c_reports_financials.htm): journal, transaction summary, net/VAT/gross 보고
+- [Mews Accounting Report](https://help.mews.com/s/article/accounting-report): 기간별 불변 원장, 매출·결제·예치금, net/VAT/gross
+- [Mews Accounting Categories](https://help.mews.com/s/article/create-an-accounting-category?Language=en_US&language=en_US): ledger account code, cost center, external code 구조
+- [Cloudbeds Custom Accounting Codes](https://myfrontdesk.cloudbeds.com/hc/en-us/articles/36722395474843-Custom-accounting-codes-overview): PMS transaction과 GL grouping/export
+
+Aurora의 `COMMISSION`/`NET_RATE` 이중 계약은 위 상용 PMS의 채널 rate mapping과 수수료 원장 원칙을 바탕으로, 국내 호텔 실무의 판매가·입금가 대사를 하나의 정산 모델로 확장한 것입니다. 회계 원장은 상용 PMS의 append-only journal과 trial balance 개념을 구현하되, 운영 ERP로 전송할 수 있도록 계정 코드·부서·외부 코드를 분리했습니다.
+- [Toss Product Sans 소개](https://toss.im/simplicity-21/sessions/3-3)
+
+## 설치 및 Supabase 연결
+
+### 요구사항
+
+- Node.js `24.x` (`package.json#engines`와 동일)
+- npm
+- Supabase 프로젝트
+- GitHub CLI는 게시 작업에만 필요
+
+### 설치
+
+```bash
+npm install
+npm run dev
+```
+
+기본 개발 주소는 `http://localhost:3000`입니다.
+
+### 환경 변수
+
+`.env.local`에 다음 값을 저장합니다. 실제 키를 README나 Git에 기록하지 마세요.
+
+```dotenv
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SECRET_KEY=<server-secret-key>
+DATABASE_URL=postgresql://<user>:<password>@<pooler-host>:6543/postgres?sslmode=require
+DIRECT_URL=postgresql://<user>:<password>@<session-or-direct-host>:5432/postgres?sslmode=require
+PMS_RATE_LIMIT_SECRET=<32-or-more-random-characters>
+# 개발 회귀에서만 선택적으로 사용
+PMS_ALLOW_DEMO_AUTH=false
+# PMS_DEMO_USER_EMAIL=pms@allmytour.com
+# PMS_DEMO_AUTH_TOKEN=<32-or-more-random-characters>
+```
+
+- `SUPABASE_URL`: Project API URL
+- `SUPABASE_SECRET_KEY`: 서버 런타임 전용이며 브라우저에 노출하지 않음
+- `DATABASE_URL`: 애플리케이션 전용 Supavisor transaction pooler URL, port `6543`
+- `DIRECT_URL`: migration·catalog 검사 전용 session 또는 direct DB URL
+- `PMS_RATE_LIMIT_SECRET`: 주소를 원문 저장하지 않고 HMAC digest로 만드는 production 필수 secret
+- Project URL과 Database URL은 서로 다른 값입니다.
+- `PMS_ALLOW_DEMO_AUTH`, `PMS_DEMO_USER_EMAIL`, `PMS_DEMO_AUTH_TOKEN`: Production에서는 항상 무시됩니다. 비운영에서 세 값과 요청 header token을 모두 명시한 경우만 사용합니다.
+- 운영 로그인은 Supabase Auth user와 같은 email의 활성 `role_assignments`가 모두 필요합니다.
+
+### Vercel 배포
+
+Vercel은 표준 `next build`와 Node.js Functions 런타임을 사용합니다. Auth/Storage용 Supabase API 설정과 별도로, PMS query/transaction은 serverless에 적합한 Supavisor transaction-mode `DATABASE_URL`을 사용합니다. `DIRECT_URL`은 Vercel runtime에 배포하지 않습니다.
+
+```bash
+vercel link
+vercel env add SUPABASE_URL production
+vercel env add SUPABASE_SECRET_KEY production --sensitive
+vercel env add DATABASE_URL production --sensitive
+vercel env add PMS_RATE_LIMIT_SECRET production --sensitive
+vercel --prod
+```
+
+`.vercelignore`는 `.env*`, 로컬 빌드 결과, 작업 디렉터리와 Sites 설정이 Vercel source upload에 포함되지 않도록 차단합니다.
+
+현재 `vercel.json`은 다음과 같이 동적 함수를 Seoul 한 리전에 배치합니다. Fluid Compute는 Vercel 프로젝트 기본 설정에서 활성화합니다.
+
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["icn1"]
+}
+```
+
+정적 JS/CSS/이미지는 Vercel CDN에서 사용자와 가까운 POP으로 전달되고, Next.js Function은 `icn1`에서 실행됩니다. 한국 PMS 사용자의 snapshot cache hit와 인증 응답은 Seoul에서 끝나고, cache miss와 쓰기만 Supabase `ap-south-1` 데이터 플레인으로 전달됩니다. 응답 헤더의 `x-vercel-id`는 `접속 POP::함수 리전::request` 형태이므로 한국에서 `icn1::icn1::...`으로 확인할 수 있습니다.
+
+### Toss Product Sans 로딩
+
+`app/layout.tsx`가 Toss 공식 CDN에 preconnect한 뒤 `https://static.toss.im/tps/main.css`를 로드합니다. 이 stylesheet는 Regular 400과 Bold 700을 유니코드 범위별 WOFF2 subset으로 제공합니다.
+
+`app/globals.css` 마지막의 `--aurora-font-product`와 `html,body,body *` 규칙이 과거 Georgia 숫자 스타일, 제목, KPI, 폼, 표, modal까지 모두 같은 제품 폰트로 통일합니다. CDN 요청이 실패하면 Apple/system/Pretendard/Noto Sans KR 순서로 fallback합니다.
+
+### 마이그레이션
+
+```bash
+npm run db:supabase:migrate
+npm run db:supabase:smoke
+```
+
+| 명령 | 역할 |
+| --- | --- |
+| `db:supabase:migrate` | migration history lock 후 미적용 migration 실행 |
+| `db:supabase:smoke` | 테이블·트리거·RLS·pooler·RPC 부재·동시성 보호 검증 |
+
+`generate-supabase-migration.mjs`처럼 기존 migration을 다시 생성하거나 덮어쓰는 명령은 존재하지 않습니다. 새 schema 변경은 새 번호의 SQL 파일로만 추가하고, CI가 빈 PostgreSQL에 전체 history를 재적용합니다.
+
+## 개발자 가이드
+
+### 기술 스택
+
+| 분류 | 기술 | 선택 이유 |
+| --- | --- | --- |
+| Web | Next.js 16 App Router, React 19, TypeScript 5.9 | SSR/route handler와 client 업무 UI를 한 코드베이스에서 운영 |
+| Auth | Supabase Auth + `jose` remote JWKS verifier | Auth 서버를 매 요청 hot path에 두지 않고 asymmetric JWT를 검증하며 key rotation을 추적 |
+| Style | 단일 `globals.css`, Tailwind PostCSS import, Aurora Flow tokens | 외부 컴포넌트 런타임 없이 세밀한 B2B 화면 제어 |
+| DB access | `postgres` + Supavisor transaction pooler | Vercel instance별 연결을 pooler로 수렴하고 server-side transaction 보장 |
+| Schema | `supabase/migrations/` 단일 원본 | 운영 DDL과 테스트 DDL의 drift 및 이미 적용된 파일 덮어쓰기 제거 |
+| Excel | `fflate` 기반 직접 Open XML writer | 무거운 `xlsx` runtime dependency 없이 실제 `.xlsx` 생성 |
+| Cache | TanStack Query 5 + server read-model cache | command receipt의 invalidation key로 필요한 projection만 재조회 |
+| Test | Node test runner + PostgreSQL 17 service + live staging workflow | 실제 migration, RLS, trigger, advisory lock과 E2E를 같은 계약으로 검증 |
+| Hosting | Vercel Production Seoul `icn1` + Fluid Compute | 한국 사용자 locality, instance concurrency와 표준 Next.js runtime |
+
+### npm 명령 전체 목록
+
+| 명령 | 설명 | 외부 상태 변경 |
+| --- | --- | --- |
+| `npm run dev` | Next 개발 서버 | 없음 |
+| `npm run build` | production bundle과 TypeScript 검증 | 없음 |
+| `npm start` | 빌드 결과 실행 | 없음 |
+| `npm run lint` | ESLint 전체 검사 | 없음 |
+| `npm test` | production build 후 모든 Node test | 없음 |
+| `npm run test:unit` | route·schema·보안 정책·UI 행동의 빠른 behavior test | 없음 |
+| `npm run test:integration` | migrated PostgreSQL에서 RLS·RPC·rate limit·원장·동시성 검증 | 전용 test DB에 격리 fixture 생성 후 삭제 |
+| `npm run test:ci` | lint → build → unit → PostgreSQL integration 순서의 전체 gate | 전용 test DB 필요 |
+| `npm run benchmark` | 기본 Snapshot 30 warm-up + 300 요청 성능 gate | 읽기 요청 |
+| `npm run qa:workflow` | 24 checkpoint end-to-end 업무 QA | staging proof 통과 후 QA 레코드 생성 |
+| `npm run qa:booking` | 공개 조회·예약·동일 key replay·취소·재고 원복·same-origin 방어 E2E | staging proof 통과 후 취소 상태 QA 예약 생성 |
+| `npm run db:supabase:migrate` | 미적용 SQL migration 실행 | DB schema 변경 |
+| `npm run db:supabase:smoke` | Supabase 구조·RLS·pooler·RPC 부재·원장 검증 | rollback-only 검증 트랜잭션 |
+| `npm run db:provision-role` | 명시 confirmation·property·email·role로 운영자 assignment provisioning | 지정 사용자 권한 변경 |
+| `npm run db:test:bootstrap` | plain PostgreSQL에 CI용 Supabase role/storage 최소 표면 생성 | 전용 test DB만 변경 |
+
+### 새 Command 추가 절차
+
+1. `app/api/pms/action-registry.ts`에 action, 최소 capability, 도메인, Zod transport schema를 등록합니다.
+2. 코어 예약·폴리오 action이면 `command-gateway.ts`, 재고·채널·회계·CMS action이면 해당 domain handler에 구현합니다.
+3. Zod는 transport shape를, handler는 현재 재고·상태·version·금액 불변식을 검증합니다.
+4. 업무 데이터 + audit + idempotency + 필요한 outbox를 하나의 `db.batch`에 넣습니다.
+5. 재무·재고 불변식은 UI/TypeScript만이 아니라 migration의 constraint/trigger로도 추가합니다.
+6. `scripts/qa-full-workflow.mjs`에 정상 경로와 대표 차단 경로를 추가합니다.
+7. 순수 규칙은 unit behavior test에, constraint/trigger/RLS/경합은 `postgres-*.integration.mjs`에 추가합니다.
+8. 이 README의 Action 표, 데이터 모델, QA 범위를 같이 갱신합니다.
+
+### 새 Report 추가 절차
+
+1. `app/api/pms/reporting.ts`의 `reportCatalog`에 key, label, group, description을 추가합니다.
+2. 모든 사용자 입력은 bind parameter로 전달하고 property/date scope를 포함합니다.
+3. count query와 rows query가 같은 filter를 사용하도록 작성합니다.
+4. `columns`, `rows`, `summary`를 반환하고 개인정보 열의 마스킹 정책을 결정합니다.
+5. `app/reports-center.tsx` fallback catalog와 상태 filter를 추가합니다.
+6. CSV/XLSX export에서 숫자·통화·날짜 형식과 최대 25,000행을 확인합니다.
+7. workflow QA의 표준 report 목록과 rendered test를 갱신합니다.
+
+### 데이터베이스 adapter 계약
+
+`PmsDatabase`는 다음 네 동작만 도메인 코드에 노출합니다.
+
+```ts
+interface PmsDatabase {
+  prepare(query: string): PmsPreparedStatement;
+  batch(statements: PmsPreparedStatement[]): Promise<PmsResult[]>;
+  forProperty(propertyId: string): PmsDatabase;
+}
+
+interface PmsPreparedStatement {
+  bind(...values: unknown[]): PmsPreparedStatement;
+  first<T>(): Promise<T | null>;
+  all<T>(): Promise<PmsResult<T>>;
+  run<T>(): Promise<PmsResult<T>>;
+}
+```
+
+- adapter는 PostgreSQL만 지원하며 `?` placeholder를 quote/comment-aware lexer로 `$1...$n`에 변환합니다.
+- PostgreSQL 경로는 Supavisor transaction pooler를 사용하고 `prepare:false`로 transaction-mode 제약을 지킵니다.
+- `scopePmsDatabase()`는 property ID를 검증하고 매 statement/batch transaction에서 `SET LOCAL ROLE aurora_app`과 `set_config('app.property_id', ...)`를 설정합니다.
+- tenant table을 root scope에서 조회하면 adapter가 거부합니다. 유일한 예외는 로그인 뒤 property assignment를 찾는 제한된 `role_assignments` query입니다.
+- SQL text를 HTTP RPC에 전달하는 adapter를 다시 추가하지 않습니다.
+- SQL 문자열 안의 작은따옴표·큰따옴표 내부 `?`는 placeholder로 변환하지 않습니다.
+- prepared bind를 우회한 사용자 입력 문자열 연결은 금지합니다.
+
+### 소스 주석 품질 기준
+
+Aurora PMS의 유지보수 대상은 `app`, `db`, `scripts`, `tests` 아래의 TypeScript, TSX, JavaScript, MJS 파일입니다. 파일 상단에는 책임을 설명하고, 보안 경계·트랜잭션·회계/재고 불변식처럼 코드만으로 의도가 불명확한 곳에는 “왜”를 기록합니다. 줄 수나 주석 개수를 품질 대리 지표로 강제하지 않습니다.
+
+주석은 문법을 다시 읽어 주는 대신 다음 내용을 기록합니다.
+
+- 테넌트/property scope, 권한 확인 순서, 서버 전용 credential 경계
+- 예약·재고의 원자성, 초과 판매 방지, idempotency와 optimistic concurrency
+- folio·AR·회계 journal의 append-only 및 reversal 불변조건
+- 판매가·채널 판매가·입금가·수수료 계약의 계산 기준
+- CMS 게시 여부와 PMS 내부 판매 가능 상태가 분리되는 이유
+- 캐시 키의 범위, 쓰기 후 무효화 시점, 제한값의 운영상 근거
+- UI에서 서버 데이터와 로컬 검색·draft state를 분리하는 이유
+- QA fixture가 남는 범위, 예상 실패가 성공 조건인 checkpoint
+
+반대로 변수명이나 `if` 조건을 그대로 번역한 주석, 현재 코드와 다른 미래 계획, 비밀키·토큰·고객 개인정보 예시는 남기지 않습니다. 핵심 동작을 바꾸는 커밋은 구현·행동 테스트·README와 함께 관련 주석도 갱신합니다.
+
+### 코드 변경 원칙
+
+- 기존 dirty worktree의 관련 없는 사용자 변경을 덮어쓰지 않습니다.
+- 금액은 UI 표시 값이 아니라 원장 합계에서 계산합니다.
+- 날짜는 호텔 영업일과 투숙일을 구분하고 API에서는 `YYYY-MM-DD`를 사용합니다.
+- 확정 원장은 update/delete하지 않고 reversal action을 추가합니다.
+- 외부 전달은 코어 transaction 안에서 직접 HTTP 호출하지 않고 outbox를 기록합니다.
+- 새 UI 버튼은 `onClick`, submit contract 또는 의도된 disabled 상태 중 하나를 가져야 합니다.
+- 긴 modal은 `100dvh` 안에서 body만 scroll하고 action bar는 sticky로 유지합니다.
+- 기능 구현과 README 업데이트를 같은 commit/PR에 포함합니다.
+
+## 테스트 및 Loop QA
+
+### 빠른 검증
+
+```bash
+npm run lint
+npm test
+npm run test:integration
+npm run db:supabase:smoke
+```
+
+`npm test`는 production build와 빠른 unit/behavior suite를 실행합니다. PostgreSQL integration suite는 `TEST_DATABASE_URL`이 있을 때 실행하며 CI에서는 `AURORA_REQUIRE_POSTGRES_TESTS=true`로 skip을 금지합니다.
+
+현재 release gate는 12개 unit/behavior test와 5개 실제 PostgreSQL integration test로 구성됩니다.
+
+| Suite | 검증 내용 |
+| --- | --- |
+| `action-registry.test.mjs` | 51개 action registry의 capability/domain/Zod 계약과 안정된 오류 매핑 행동 |
+| `database-adapter.test.mjs` | SQL literal·identifier·comment를 침범하지 않는 placeholder lexer와 bind mismatch 거부 |
+| `application-behavior.test.mjs` | 13개 route round-trip, 작은 mutation receipt, production demo-auth 차단, proxy trust, staging QA hard gate, inert button 부재 |
+| `postgres-core.integration.mjs` | 실제 migration의 booking table, 위험 RPC 0개, RLS 교차 접근 거부, 동시 rate limit, append-only folio, 마지막 1실 20건 경합 |
+| `api-benchmark.mjs` | 동시성 30, 총 300 Snapshot, 실패 0, p95 250ms 미만 |
+
+### GitHub Actions PR gate
+
+`.github/workflows/ci.yml`은 `pull_request`와 `main` push에서 다음 순서를 강제합니다.
+
+1. Node.js 24 locked dependency install (`npm ci`)
+2. ESLint
+3. Next.js production build와 TypeScript
+4. unit/behavior tests
+5. 격리 PostgreSQL 17 service에 Supabase 호환 role/storage bootstrap
+6. 빈 DB를 `202607170009`까지 구축·seed한 뒤 현재 migration으로 업그레이드해 fresh install과 populated upgrade 경로를 함께 검증
+7. `AURORA_REQUIRE_POSTGRES_TESTS=true` integration/concurrency tests
+
+CI는 production 또는 staging Supabase secret을 사용하지 않습니다. 각 job의 임시 DB는 job 종료 시 폐기되므로 테스트 fixture가 운영 데이터에 남지 않습니다. GitHub 저장소 설정에서는 `Lint, build, behavior and PostgreSQL tests` check를 `main` 병합 필수 status check로 지정해야 합니다.
+
+### 전체 더미데이터 Workflow QA
+
+Stateful QA는 로컬 URL이라도 production Supabase에 연결될 수 있으므로 기본 실행을 허용하지 않습니다. 전용 Supabase staging 프로젝트와 staging Vercel deployment를 준비한 뒤, target health가 `environment=staging`, `qaAllowed=true`, 실제 `databaseProjectRef` 일치를 증명해야 합니다.
+
+현재 격리 환경은 Vercel 프로젝트 `allmytour/aurora-pms-staging`의 공개 Production target과 Supabase Micro 프로젝트 `tkfcnkxxcsgslqfnoclg`를 결합합니다. URL은 [aurora-pms-staging.vercel.app](https://aurora-pms-staging.vercel.app)이며 `/api/health`가 `environment=staging`, `qaAllowed=true`, `databaseProjectRef=tkfcnkxxcsgslqfnoclg`를 반환합니다. Vercel target은 배포 보호 없는 실제 E2E를 위해 Production이지만 애플리케이션 환경은 명시적으로 staging입니다. `NODE_ENV=production`이므로 demo authentication은 `PMS_ALLOW_DEMO_AUTH=false`로 닫혀 있고, QA는 수동 provision된 `qa-staging@aurora.local` assignment와 확인된 Supabase Auth 사용자의 임시 비밀번호로만 로그인합니다. 비밀번호는 저장소·README·Vercel 환경 변수에 저장하지 않고 실행마다 회전합니다.
+
+```bash
+PMS_BASE_URL=https://<staging>.vercel.app \
+PMS_QA_ENVIRONMENT=staging \
+PMS_QA_CONFIRM=AURORA_STAGING_ONLY \
+PMS_QA_PROJECT_REF=<staging-project-ref> \
+PMS_TEST_EMAIL=<staging-user> \
+PMS_TEST_PASSWORD='<temporary-secret>' \
+npm run qa:workflow
+```
+
+동일한 네 가지 target proof 변수는 `qa:booking`, `qa:website`에도 필수입니다. 비밀번호는 파일에 기록하지 말고 현재 shell에만 전달합니다.
+
+```bash
+PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONFIRM=AURORA_STAGING_ONLY PMS_QA_PROJECT_REF=<staging-project-ref> npm run qa:booking
+PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONFIRM=AURORA_STAGING_ONLY PMS_QA_PROJECT_REF=<staging-project-ref> npm run qa:website
+```
+
+> Production URL `aurora-pms-gilt.vercel.app`, production project ref `tnbxreeidezidckemflb`, staging opt-in이 없는 deployment, 선언 ref와 실제 pooler ref가 다른 target은 코드에서 즉시 거부합니다. 운영 DB 실행은 “권장하지 않음”이 아니라 불가능한 release invariant입니다.
+
+2026-07-17 검증 결과:
+
+아래 production workflow 기록은 hard gate 도입 전의 역사적 감사 기록이며 안전한 관행의 근거로 사용하지 않습니다. 현재 스크립트로 같은 production URL/DB에 재실행하면 사전 검사 단계에서 실패합니다.
+
+| 환경 | 결과 |
+| --- | --- |
+| 격리 Vercel/Supabase staging | 24/24 checkpoints 통과, run `OGZVBIH7`; health ref proof·실제 Supabase Auth·중단 캐셔 복구 포함 |
+| 로컬 Next.js Production build + 실제 Supabase | 24/24 checkpoints 통과, run `O8ZC601U` |
+| Vercel Seoul Production + 실제 Supabase | 24/24 checkpoints 통과, run `O3NBB67I` |
+| Node test suite | 36/36 tests 통과, production build·TypeScript 포함 |
+| 홈페이지 CMS E2E | 공개 projection, 동일 콘텐츠 version 저장, 잘못된 날짜 400, WEB OFF 제외·복원, Storage upload/public read/delete 통과 |
+| Supabase smoke | 51 tables, 29 application triggers(public schema), 79 validated FK, 51 RLS tables, 3개 공개 객실, Storage bucket·pooler 정상, 임의 SQL RPC 0 |
+| 데이터 감사 | 26개 관계·재고·원장·상태 검사, violation 0 |
+| Auth E2E | login 200, access/refresh HttpOnly·Secure·SameSite=Lax, `PROPERTY_ADMIN`, cross-property 401, logout 200 |
+| 500객실 경쟁 | 동시 응답 200/409, 최종 500실, 부분 commit 0, replay header true, QA 객실 정리 완료 |
+| 직접 예약 E2E | 실시간 조회, 예약 201, 동일 key 200, 취소 200, 중복 취소 200, 재고 원복 |
+| 격리 홈페이지 CMS E2E | homepage 200, 게시 객실 3, 검색 offer 3, 잘못된 날짜 400, 설정 version 증가, WEB OFF 제외·복원, media lifecycle 통과 |
+| 반응형 브라우저 QA | 1440px desktop·390px mobile, 가로 scroll 0, 홈페이지 검색 날짜 자동 보정, 공개 객실 3개, CMS 3개 탭·16개 기본 필드, 재고 WEB 노출 selector, 콘솔 오류 0 |
+| PMS 헤드리스 UI 전수 QA | 13개 업무 화면 가로 overflow 0, 10개 업무 검색 영역 필터·초기화 정상, 17개 dialog/drawer 포커스·Escape·action bar 정상, 객실 타입 modal 860px→416px, 모바일 modal 최대 92dvh |
+| 리포트 브라우저 QA | 11/11 서버 리포트 오류 0, 키워드 0건·초기화 복원, CSV `Aurora_room_inventory_2026-07-16.csv`, XLSX `Aurora_객실_마스터_2026-07-16.xlsx` 실제 다운로드 |
+| Core benchmark | Vercel `icn1`, 200 requests, concurrency 10, 실패 0, 252.04 req/s, p50 36.13ms, p95 53.20ms, p99 96.01ms |
+| Security | health 200, CSP/HSTS/DENY/nosniff, cross-origin write 403, production dependency vulnerability 0 |
+
+### Loop QA 범위
+
+기존 25개 운영 요구사항은 실행 스크립트에서 관련 업무를 묶어 24개의 checkpoint로 보고하며, 인증·대량 경쟁·보안·직접 예약은 별도 E2E와 invariant test에서 검증합니다.
+
+1. 대시보드와 Snapshot 로딩
+2. 리포트 11종 조회와 필터
+3. CSV/XLSX export
+4. 객실 타입 생성·수정·멱등 replay
+5. 단일/대량 객실 생성과 수정
+6. 하우스키핑 청소·점검 전환
+7. 판매 한도·MLOS·CTA·요금
+8. 회사·그룹 프로필
+9. 블록·할당·rooming·pickup·cutoff
+10. 캐셔 개시·마감
+11. 예약 생성·수정·배정·체크인·룸 무브
+12. 폴리오 창·라우팅·분할·반대전표·결제·환불
+13. 체크아웃 후 housekeeping 생성
+14. AR 이관·청구·수납·완납
+15. 노쇼·취소·재고 복원
+16. 채널 연결·매핑·ARI·NEW/MODIFY/CANCEL
+17. Message ID 멱등·DLQ replay
+18. Outbox 장애 주입·재전송
+19. 야간 감사 blocker
+20. 감사 로그 추적
+21. 최대 730일 재고 조회와 타입·요일·기간 벌크 변경
+22. 수수료/입금가 채널 계약과 날짜별 판매가·입금가
+23. 채널 정산 발생·지급 완료와 판매가/비용/입금가 보존
+24. 수기 복식전표·차대 균형·반대전표·원장 불변성
+25. 회계 분개장과 채널 정산 리포트·XLSX export
+
+### Loop Engineering 완료 조건
+
+```text
+기능 목록화
+  → 정상 경로 실행
+  → 오류/차단 경로 실행
+  → 데이터베이스 결과 확인
+  → 결함 수정
+  → build/lint/unit/invariant/workflow 재실행
+  → Git commit/push
+  → 운영 배포
+  → 배포 상태 확인
+```
+
+## 프로젝트 구조
+
+```text
+Aurora_PMS/
+├─ .github/workflows/ci.yml     # PR lint/build/PostgreSQL behavior gate
+├─ app/
+│  ├─ (pms)/
+│  │  ├─ _components/pms-shell.tsx # Shared shell, drawers and operational panels
+│  │  └─ {overview..audit}/page.tsx # 13 bookmarkable workspace routes
+│  ├─ api/auth/                 # Supabase login/logout session routes
+│  ├─ api/booking/              # Public availability + reservation/cancellation
+│  ├─ api/health/               # Database readiness probe
+│  ├─ api/pms/
+│  │  ├─ route.ts               # Thin GET/POST boundary
+│  │  ├─ auth.ts                # Identity, assignment and capability principal
+│  │  ├─ action-registry.ts     # 51 Zod-validated commands
+│  │  ├─ command-gateway.ts     # Domain dispatch + mutation receipts
+│  │  ├─ read-model.ts          # Core/full projections and read cache
+│  │  ├─ error-map.ts           # Stable database error mapping
+│  │  ├─ extended.ts            # Inventory/channel/accounting/CMS handlers
+│  │  └─ reporting.ts           # 11 report queries
+│  ├─ hotel/                    # Dynamic public site and direct booking UI
+│  ├─ accounting-center.tsx     # Hotel accounting & P/L
+│  ├─ channel-contracts.tsx     # Commission/net-rate contracts
+│  ├─ homepage-manager.tsx      # Hotel content, room publish and media CMS
+│  ├─ inventory-calendar.tsx    # 730-day rate/inventory calendar
+│  ├─ pms-action-context.tsx    # Shared command execution context
+│  ├─ pms-mutation.ts           # Small receipt + invalidation contract
+│  ├─ pms-workspaces.ts         # Canonical route registry
+│  ├─ query-provider.tsx        # TanStack Query client lifecycle
+│  ├─ reports-center.tsx        # Report center
+│  ├─ room-master.tsx           # Room master
+│  ├─ supabase-session.ts       # Verified access/refresh cookie session
+│  └─ xlsx-export.ts            # XLSX workbook writer
+├─ db/
+│  ├─ pms-database.ts           # PostgreSQL pool + transaction tenant context
+│  └─ postgres-parameters.mjs   # Quote-aware positional parameter compiler
+├─ scripts/
+│  ├─ bootstrap-test-postgres.mjs # Plain PostgreSQL CI bootstrap
+│  ├─ migrate-supabase.mjs       # Ordered immutable migration runner
+│  ├─ qa-full-workflow.mjs       # Entire dummy workflow QA
+│  ├─ qa-booking-engine.mjs      # Booking/cancel/idempotency E2E
+│  ├─ qa-website-cms.mjs         # CMS/WEB OFF/Storage E2E
+│  ├─ qa-target.mjs              # Production URL/ref hard gate
+│  └─ smoke-supabase.mjs
+├─ supabase/
+│  ├─ migrations/
+│  │  ├─ 202607160001_aurora_pms.sql ... 202607170009_remove_arbitrary_sql_rpc.sql
+│  │  └─ 202607170010_tenant_context_rls.sql
+│  └─ seed.sql
+├─ tests/
+│  ├─ action-registry.test.mjs
+│  ├─ application-behavior.test.mjs
+│  ├─ database-adapter.test.mjs
+│  ├─ postgres-core.integration.mjs
+│  └─ api-benchmark.mjs
+├─ vercel.json                  # Vercel Function region icn1 + Fluid Compute
+└─ .vercelignore                # secret/local artifact upload exclusion
+```
+
+## 운영 체크리스트
+
+### 배포 전
+
+- [ ] Vercel Production에 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `DATABASE_URL`, `PMS_RATE_LIMIT_SECRET` 존재
+- [ ] Secret Key가 Git diff에 없음
+- [ ] migration과 migration history 일치
+- [ ] `npm run lint`
+- [ ] `npm test`
+- [ ] `npm run db:supabase:smoke`
+- [ ] 별도 project ref를 health에서 확인한 staging에서 `npm run qa:workflow`
+- [ ] 같은 staging에서 `npm run qa:website`
+- [ ] RLS와 browser role grant 재검증
+
+### 매일 운영
+
+- [ ] 도착 예정 미처리 건 확인
+- [ ] 캐셔 세션 마감
+- [ ] 실패 inbound/outbox/ARI 확인
+- [ ] 판매 중지 객실 확인
+- [ ] 야간 감사 blocker 해소
+- [ ] 영업일 마감 실행
+
+## 장애 대응 Runbook
+
+### 1. API 전체 장애 또는 500 증가
+
+1. Vercel deployment 상태와 최근 build log를 확인합니다.
+2. `/api/health`의 `status`, `database`, `latencyMs`와 HTTP 200/503을 먼저 확인합니다. 응답에는 연결 문자열이나 DB 오류가 포함되지 않습니다.
+3. `/api/pms` 응답 status, `x-vercel-id`, cold/warm latency와 응답의 `errorId`를 기록하고 같은 UUID를 Vercel server log에서 찾습니다.
+4. Supabase Project Health와 Supavisor pooler 상태를 확인합니다.
+5. `npm run db:supabase:smoke`로 pooler, RLS, trigger, 임의 SQL RPC 0개를 검증합니다.
+6. Secret 환경 변수 이름이 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `DATABASE_URL`, `PMS_RATE_LIMIT_SECRET`와 정확히 일치하는지 확인합니다. 값 자체를 log에 출력하지 않습니다.
+7. 최근 migration이 실패했다면 migration history와 실제 catalog를 비교하고 새 corrective migration을 작성합니다.
+8. 애플리케이션 회귀라면 Vercel에서 직전 정상 deployment를 promote합니다. DB migration은 애플리케이션 rollback과 자동으로 되돌아가지 않습니다.
+
+### 2. 재고 불일치 또는 예약 409
+
+1. `reservation_type_nights`, `reservation_nights`, `block_inventory`, `block_pickup_nights`, `inventory_controls`를 같은 room type/date로 조회합니다.
+2. 물리 판매 객실, 확정 예약, deduct hold, sell limit 공식을 다시 계산합니다.
+3. `room type sold out`, `room type closed`, `reservation_type_night_uq`, `room_night_uq` 중 어떤 DB guard가 차단했는지 확인합니다.
+4. 사용자에게 최신 Snapshot을 다시 읽게 하고 같은 expected version을 재사용하지 않습니다.
+5. night row를 직접 삭제해 해결하지 않습니다. 예약 취소·일정 수정·block cutoff 같은 도메인 action을 사용합니다.
+
+### 3. OTA inbound 또는 ARI 장애
+
+1. `channel_connections.status`와 `channel_mappings.active`를 확인합니다.
+2. inbound는 `message_id`, `external_reservation_id`, `revision`, `status`, `error_message`를 확인합니다.
+3. mapping 오류를 수정한 뒤 `replay_channel_message`를 실행합니다.
+4. ARI는 날짜·mapping별 최신 revision과 `integration_delivery_attempts`를 확인합니다.
+5. outbox는 `PENDING`/`FAILED`, attempts, last error를 확인한 뒤 `dispatch_outbox_event`로 재전송합니다.
+6. 이미 `ACKED`/`PUBLISHED`인 전달을 새 ID로 임의 재생성하지 않습니다.
+
+### 3-A. 공개 부킹 검색·확정 장애
+
+1. `/api/health`와 `/api/booking/availability`를 같은 날짜·인원으로 확인합니다.
+2. 객실 타입의 물리 객실, `inventory_controls`, `reservation_type_nights`, deduct `block_inventory`를 같은 투숙일로 대조합니다.
+3. `OFFER_CHANGED`/`SOLD_OUT` 409는 정상 경쟁 결과이므로 새 availability를 읽고 다시 선택하게 합니다.
+4. 고객이 네트워크 오류 후 재시도했다면 같은 `Idempotency-Key`의 `booking_requests`와 연결 예약번호를 확인합니다. 새 예약을 임의 생성하지 않습니다.
+5. 예약 당시 금액은 `reservation_rate_nights`로 확인하고 직접 update/delete하지 않습니다.
+6. 온라인 취소가 차단되면 호텔 영업일, 도착일과 예약 상태가 `DUE_IN`인지 확인합니다.
+
+### 3-B. 홈페이지 콘텐츠·이미지·노출 장애
+
+1. `website_settings.published`, `room_type_website.published`, 객실 타입 `active`를 순서대로 확인합니다.
+2. 특정 날짜만 검색에서 사라지면 `inventory_controls.closed`와 `website_closed`, CTA/CTD/MLOS를 같은 타입·날짜로 확인합니다.
+3. 공개 가격은 `inventory_controls.price_override` 또는 `room_types.base_rate`이며 CMS에 별도 가격 복사본을 만들지 않습니다.
+4. 이미지가 깨지면 `website_media.object_path/public_url/active`와 `storage.buckets.id='hotel-media'`, 실제 object 존재를 확인합니다.
+5. Storage object만 직접 지우거나 DB metadata만 직접 삭제하지 말고 `delete_website_media` action을 사용합니다.
+6. 편집 저장 `409`는 version 충돌이므로 `GET /api/pms?view=website`로 최신 값을 읽고 다시 편집합니다.
+7. 변경 후 `npm run qa:website`로 공개 HTML, availability, WEB OFF 복원과 이미지 lifecycle을 재검증합니다.
+
+### 4. 폴리오·AR·회계 불일치
+
+1. 예약별 folio entry를 kind 규칙으로 다시 합산합니다.
+2. AR invoice는 `SUM(debit-credit)`, 회계 journal은 entry별 `SUM(debit)=SUM(credit)`를 확인합니다.
+3. channel settlement는 `gross_sell_amount - channel_cost_amount = hotel_net_amount`를 확인합니다.
+4. 확정 line을 update/delete하지 말고 reversal/refund action을 사용합니다.
+5. 수수료 계약의 비용·미지급금과 입금가 계약의 판매가·입금가 차이를 혼동하지 않습니다.
+6. cashier variance와 business date를 함께 확인합니다.
+
+### 5. 야간 감사 차단
+
+| Blocker | 조치 |
+| --- | --- |
+| `UNRESOLVED_ARRIVALS` | 도착 예약을 체크인·취소·노쇼 처리 |
+| `OPEN_CASHIERS` | 각 cashier의 counted amount 입력 후 마감 |
+| failed outbox/interface | 실패 원인 수정 후 재전송 또는 운영 승인 절차 수행 |
+| 미전기 객실료 | audit preview 확인; 정상 audit 실행 시 일별 중복 없이 자동 전기 |
+
+### 6. 성능 저하
+
+1. cold start와 warm request를 구분합니다.
+2. Vercel 응답의 function region이 `icn1`인지 확인합니다.
+3. Snapshot 크기, gzip header, cache invalidation 빈도를 확인합니다.
+4. 장기 inventory/accounting/report를 기본 Snapshot에서 요청하고 있지 않은지 확인합니다.
+5. query plan과 복합 index 사용을 Supabase SQL editor에서 확인합니다.
+6. `npm run benchmark`를 같은 데이터 크기와 동시성으로 다시 실행합니다.
+
+### 감사·관찰 데이터
+
+| 데이터 | 질문 |
+| --- | --- |
+| `audit_logs` | 누가 어떤 entity를 어떤 before/after로 변경했는가? |
+| `reservation_transitions` | 예약 상태가 누가 언제 전이했는가? |
+| `reservation_mutations` | 어떤 expected version으로 수정 경쟁이 있었는가? |
+| `integration_delivery_attempts` | 외부 전달의 각 시도가 성공/실패했는가? |
+| `outbox_events` | 코어 commit 이후 발행 대기·실패·완료 상태는 무엇인가? |
+| `report_exports` | 누가 어떤 필터로 몇 행을 내보냈는가? |
+| `cashier_sessions` | expected/count/variance와 마감자는 누구인가? |
+| `night_audits` | 영업일 blocker와 마감 결과는 무엇인가? |
+
+### 백업과 복구 원칙
+
+- migration은 schema 재현 수단이며 예약·원장 business data의 backup이 아닙니다.
+- Supabase의 자동 backup/PITR 활성 여부와 보존 기간은 프로젝트 요금제·Dashboard에서 별도로 확인해야 합니다.
+- 운영 전 RPO/RTO를 정하고 restore rehearsal를 수행합니다.
+- 위험 migration 전 logical backup 또는 PITR restore point를 확보합니다.
+- append-only 원장 문제를 backup restore로 덮기 전에 reversal로 해결 가능한지 먼저 판단합니다.
+
+## 프로덕션 전환 전 필수 작업
+
+현재 URL은 기능 검증용 완성형 확장 버전입니다. 실제 호텔 고객·결제·법정 회계 데이터를 처리하기 전 다음 항목이 남아 있습니다.
+
+### 인증과 조직
+
+- [x] Production demo identity 비활성화
+- [x] Supabase Auth login, token 검증, refreshable HttpOnly session 연결
+- [x] email/role/property assignment와 capability 기반 서버 권한 적용
+- [x] 할당되지 않은 property 접근 차단과 scoped query adapter 적용
+- [ ] 사용자 초대·비활성화·비밀번호/세션 정책 구축
+- [ ] 역할 변경 audit와 최소 권한 정기 검토
+
+### 개인정보·결제·보안
+
+- [ ] 개인정보 처리방침, 보존·삭제 정책, 접근 기록 정책 확정
+- [ ] 민감 필드 암호화/토큰화와 데이터 분류
+- [ ] 실제 PG 연동 시 카드번호·CVV를 PMS에 저장하지 않는 hosted/tokenized payment flow 적용
+- [ ] Secret rotation, Vercel/Supabase 접근자 MFA, incident response 확정
+- [ ] service-role SQL RPC에 대한 정기 침투·권한 검토
+- [ ] Toss Product Sans 상업 사용 조건과 사용 권한 확인
+
+### 호텔 운영 설정
+
+- [ ] 호텔별 timezone, currency, business date, 세금·봉사료·거래코드 구성 UI
+- [ ] 객실 타입·객실·요금제·회사·채널 master data migration
+- [ ] 취소·노쇼·보증·deposit 정책
+- [ ] fiscal invoice, VAT, local tourism tax 요구사항
+- [ ] 실제 채널 manager/OTA certification과 서명된 webhook
+- [ ] 실제 ERP/GL mapping, batch export, 월 마감 대사
+
+### 신뢰성·운영
+
+- [x] 별도 staging Supabase/Vercel 프로젝트와 staging Auth 사용자 provisioning (`tkfcnkxxcsgslqfnoclg`, `aurora-pms-staging`)
+- [x] stateful QA의 production URL/ref 차단과 staging health proof 강제
+- [ ] 보안 gate 도입 전 production QA에서 생성된 과거 `QA-*` 레코드 보존·정리 정책 승인
+- [ ] Supabase backup/PITR와 정기 restore rehearsal
+- [ ] Vercel/Supabase monitoring, alert, error tracking, uptime check
+- [ ] 대량 데이터·동시 사용자 capacity test와 목표 SLA
+- [ ] outbox/background dispatcher를 수동 simulation에서 scheduler/queue worker로 전환
+- [ ] migration rollback/corrective migration runbook 승인
+
+### 현재 알려진 경계
+
+- PMS API는 Supabase Auth assignment에서 property를 선택하고 adapter가 transaction마다 `aurora_app` 역할과 `app.property_id`를 설정합니다. RLS가 교차 tenant 읽기·쓰기를 DB에서 거부합니다. 현재 seed와 공개 부킹 사이트가 판매하는 실제 호텔은 `prop-seoul` 한 곳이며, 다중 호텔 UI selector는 아직 제공하지 않습니다.
+- 공개 부킹 엔진은 결제사 키가 없어 현장 결제만 지원합니다. 초기 게시값은 `DLX`, `TWN`, `STE` 세 타입이지만 이후 판매 대상은 코드가 아니라 `room_type_website.published`로 관리합니다.
+- 채널 전송 버튼은 실제 OTA 인증 endpoint가 아니라 ACK/FAILED를 검증하기 위한 sandbox delivery simulation입니다.
+- 회계 모듈은 PMS operational subledger이며 국가별 법정 총계정원장이나 세무 신고 시스템을 대체하지 않습니다.
+- in-memory cache는 Vercel instance 간 공유되지 않습니다. DB 무결성에는 영향을 주지 않지만 instance별 cold read 비용이 존재합니다.
+- rate limit은 cache와 달리 `api_rate_limits`에 저장되어 Vercel instance 간 공유됩니다. production에서 counter DB를 사용할 수 없으면 login·booking·PMS write는 fail closed 합니다.
+- 외부 Toss font CDN 장애 시 fallback 폰트로 표시됩니다.
+
+## 구현 변경 이력
+
+| Commit | 작업 |
+| --- | --- |
+| 2026-07-17 P2 platform hardening | 배포 schema gate, 닫힌 auth capability, native temporal types, Rate Plan/WEB-DIRECT, 실제 dashboard 비교, 호텔 SEO, CSS·README 모듈화 |
+| 2026-07-17 structural debt remediation | migration 단일 원본, tenant RLS context, API registry/Zod 모듈화, 13개 실제 route와 action Context, mutation receipt/TanStack Query, PostgreSQL CI, 20-way last-room concurrency test |
+| 2026-07-17 seven-finding security remediation | runtime/seed admin 제거, Host 기반 localhost 인증 제거, 금전 strict 멱등 receipt, 임의 SQL RPC 폐기와 pooler 전환, booking schema readiness, production QA hard gate, DB 분산 rate limit |
+| 2026-07-17 isolated staging validation | 별도 Supabase Micro/Vercel 프로젝트, 실제 Auth QA 사용자, fresh migration/seed 교정, public trigger smoke, 나이트 오디트 pool 고착 제거, workflow·booking·CMS E2E 통과 |
+| 2026-07-17 admin identity reset | Supabase Auth `pms@allmytour.com` 운영자 생성·확인, PROPERTY_ADMIN 할당, 기존 frontdesk 기본 할당 비활성화, local seed·fallback·QA·migration 동기화 |
+| 2026-07-17 source comment audit | 전체 유지보수 소스 주석 재감사, PMS API·직접 예약·DB adapter·재고·회계·채널 계약·인증·migration·workflow QA의 설계 이유와 불변조건 보강, 대형 파일 주석 품질 자동 gate 및 문서화 기준 추가 |
+| 2026-07-17 search & overlay audit | 13개 PMS 화면 헤드리스 재검증, 공용 목록 검색·빈 상태·결과 건수, 리포트 초기화, 중첩 dialog 포커스 복원, sticky action bar, 객실 modal 높이 충돌 제거, 모바일 390px QA, 개발 CSP 보정 |
+| 2026-07-17 website CMS release | 호텔/객실 소개 CMS, Supabase Storage 이미지, 객실 게시·정렬·편의시설, 재고 WEB OFF, 날짜 검색 보정, 모바일 UI, CMS/Storage E2E와 전체 코드 주석 감사 |
+| 2026-07-17 release | Supabase Auth/RBAC/property scope, 74 FK, 회계 경쟁 guard, 500객실 원자 batch, core 성능, 보안·health, 호텔 홈페이지·직접 예약 엔진, 확장 QA 문서 |
+| `aac1007` | Toss 공식 CDN stylesheet 연결, 모든 요소의 Product Sans 강제 통일, font delivery 회귀 테스트 |
+| `c9989a9` | Vercel Node Functions를 Supabase에 가까운 `bom1` 리전으로 이동 |
+| `56d7202` | 730일 재고 캘린더, 채널 수수료/입금가 계약, 정산, 호텔 회계·손익, 신규 리포트, room modal UX |
+| `af50684` | 표준 Next.js 16 Vercel Production 배포와 환경 설정 |
+| `377816c` | 전체 PMS workflow QA, Aurora Flow UI, README/운영 문서 1차 확장 |
+
+릴리스 변경은 `main` 브랜치에 커밋하고 GitHub origin으로 push한 뒤 연결된 Vercel Production 프로젝트에 배포합니다. 배포 전후에는 같은 Supabase smoke, workflow, health, auth, booking 검증을 반복합니다.
+
+## 라이선스 및 브랜드 고지
+
+Aurora PMS는 독립 프로젝트입니다. Toss, Toss Design System, OPERA PMS 또는 기타 언급된 제품과 제휴하거나 그 공식 제품임을 의미하지 않습니다. 공개된 UX 원칙과 업계 운영 패턴을 참고했으며, 타사 로고·전용 컴포넌트 코드·비공개 자산은 포함하지 않습니다. `Toss Product Sans` 파일은 저장소나 배포 번들에 복제하지 않고 Toss 공식 CDN 스타일시트를 런타임에 참조합니다. 실제 상업 운영 전에는 해당 외부 폰트의 최신 사용 조건과 사용 권한을 별도로 확인해야 합니다.
