@@ -166,6 +166,8 @@ npm run release:build
 
 - 인증·property assignment 필수
 - `?view=core`: 첫 화면용 예약, 객실, 재고, 실제 대시보드 비교 지표
+- `?view=groups|finance|channels`: 해당 화면만 위한 bounded projection(각 4/8/8 query)
+- `?view=inventory|accounting|website|report`: 기간 또는 도메인 전용 projection
 - 기본 view: 그룹, 재무, 채널을 포함한 전체 read model
 - 응답은 `private, no-store`, gzip representation cache를 사용합니다.
 

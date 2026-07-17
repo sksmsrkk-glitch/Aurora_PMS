@@ -126,6 +126,51 @@ export async function snapshot(db: D1, principal?: Principal | null) {
   return { property, reservations, rooms, metrics, principal, controls, inventory, groups, finance, integrations };
 }
 
+export type WorkspaceProjection = "groups" | "finance" | "channels";
+
+/**
+ * Loads the three data-heavy workspaces without rebuilding the 31-query legacy
+ * compatibility snapshot. Each branch is a closed projection name, runs in one
+ * property-scoped transaction, and returns only the entity collections consumed
+ * by that workspace. Finance also receives active account profiles because AR
+ * transfer uses the property's direct-bill account selector.
+ */
+export async function workspaceProjection(db: D1, view: WorkspaceProjection) {
+  if (view === "groups") {
+    const [accounts, blocks, inventory, rooming] = await db.batch([
+      db.prepare("SELECT * FROM account_profiles WHERE property_id=pms_current_property_id() AND active ORDER BY type,name"),
+      db.prepare("SELECT bb.*,ap.name account_name,gp.name group_name,COALESCE(SUM(bi.original_rooms),0) original_room_nights,COALESCE(SUM(bi.current_rooms),0) current_room_nights,COALESCE(SUM(bi.picked_up),0) picked_up_room_nights FROM business_blocks bb LEFT JOIN account_profiles ap ON ap.id=bb.account_profile_id LEFT JOIN account_profiles gp ON gp.id=bb.group_profile_id LEFT JOIN block_inventory bi ON bi.block_id=bb.id WHERE bb.property_id=pms_current_property_id() GROUP BY bb.id,ap.id,gp.id ORDER BY bb.arrival_date,bb.code"),
+      db.prepare("SELECT bi.*,rt.code room_type_code,rt.name room_type_name FROM block_inventory bi JOIN room_types rt ON rt.id=bi.room_type_id WHERE bi.property_id=pms_current_property_id() ORDER BY bi.block_id,bi.stay_date,rt.code"),
+      db.prepare("SELECT rl.*,rt.code room_type_code,rt.name room_type_name FROM rooming_list_entries rl JOIN room_types rt ON rt.id=rl.room_type_id WHERE rl.property_id=pms_current_property_id() ORDER BY rl.block_id,rl.last_name,rl.first_name"),
+    ]);
+    return { groups: { accounts: accounts.results, blocks: blocks.results, inventory: inventory.results, rooming: rooming.results } };
+  }
+  if (view === "finance") {
+    const [windows, entries, routing, transactionCodes, arAccounts, arInvoices, trialBalance, accountProfiles] = await db.batch([
+      db.prepare(`SELECT w.*,g.first_name||' '||g.last_name guest_name,r.confirmation_no,COALESCE(SUM(CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'PAYMENT' THEN -f.amount WHEN 'CHARGE_REVERSAL' THEN -f.amount WHEN 'PAYMENT_REVERSAL' THEN f.amount WHEN 'REFUND' THEN f.amount ELSE 0 END),0) balance,COALESCE(SUM(CASE WHEN f.kind='CHARGE' THEN d.net_amount WHEN f.kind='CHARGE_REVERSAL' THEN -d.net_amount ELSE 0 END),0) net_total,COALESCE(SUM(CASE WHEN f.kind='CHARGE' THEN d.tax_amount WHEN f.kind='CHARGE_REVERSAL' THEN -d.tax_amount ELSE 0 END),0) tax_total,COALESCE(SUM(CASE WHEN f.kind='CHARGE' THEN d.service_amount WHEN f.kind='CHARGE_REVERSAL' THEN -d.service_amount ELSE 0 END),0) service_total FROM folio_windows w JOIN reservations r ON r.id=w.reservation_id JOIN guests g ON g.id=r.guest_id LEFT JOIN folio_entry_details d ON d.folio_window_id=w.id LEFT JOIN folio_entries f ON f.id=d.entry_id WHERE w.property_id=pms_current_property_id() GROUP BY w.id,r.id,g.id ORDER BY r.updated_at DESC,w.window_no`),
+      db.prepare("SELECT f.*,d.folio_window_id,d.net_amount,d.tax_amount,d.service_amount,d.currency,d.source_entry_id,d.reason,w.window_no,w.name window_name,r.confirmation_no,g.first_name||' '||g.last_name guest_name FROM folio_entries f LEFT JOIN folio_entry_details d ON d.entry_id=f.id LEFT JOIN folio_windows w ON w.id=d.folio_window_id JOIN reservations r ON r.id=f.reservation_id JOIN guests g ON g.id=r.guest_id WHERE f.property_id=pms_current_property_id() ORDER BY f.created_at DESC LIMIT 250"),
+      db.prepare("SELECT rr.*,w.window_no,w.name window_name,r.confirmation_no FROM folio_routing_rules rr JOIN folio_windows w ON w.id=rr.target_window_id JOIN reservations r ON r.id=rr.reservation_id WHERE rr.property_id=pms_current_property_id() AND rr.active ORDER BY rr.created_at DESC"),
+      db.prepare("SELECT * FROM transaction_codes WHERE property_id=pms_current_property_id() AND active ORDER BY category,code"),
+      db.prepare("SELECT a.*,p.name profile_name,COALESCE(SUM(l.debit-l.credit),0) balance FROM ar_accounts a JOIN account_profiles p ON p.id=a.account_profile_id LEFT JOIN ar_ledger_entries l ON l.ar_account_id=a.id WHERE a.property_id=pms_current_property_id() GROUP BY a.id,p.id ORDER BY a.account_no"),
+      db.prepare("SELECT i.*,a.account_no,a.name account_name,COALESCE(SUM(l.debit-l.credit),0) balance FROM ar_invoices i JOIN ar_accounts a ON a.id=i.ar_account_id LEFT JOIN ar_ledger_entries l ON l.invoice_id=i.id WHERE i.property_id=pms_current_property_id() GROUP BY i.id,a.id ORDER BY i.issued_date DESC,i.invoice_no DESC"),
+      db.prepare(`SELECT COALESCE(SUM(CASE kind WHEN 'CHARGE' THEN amount WHEN 'PAYMENT' THEN -amount WHEN 'CHARGE_REVERSAL' THEN -amount WHEN 'PAYMENT_REVERSAL' THEN amount WHEN 'REFUND' THEN amount ELSE 0 END),0) guest_ledger,(SELECT COALESCE(SUM(debit-credit),0) FROM ar_ledger_entries WHERE property_id=pms_current_property_id()) ar_ledger,COALESCE(SUM(CASE WHEN kind='CHARGE' THEN amount WHEN kind='CHARGE_REVERSAL' THEN -amount ELSE 0 END),0) gross_revenue,COALESCE(SUM(CASE WHEN kind='PAYMENT' THEN amount WHEN kind='PAYMENT_REVERSAL' THEN -amount WHEN kind='REFUND' THEN -amount ELSE 0 END),0) net_payments FROM folio_entries WHERE property_id=pms_current_property_id()`),
+      db.prepare("SELECT * FROM account_profiles WHERE property_id=pms_current_property_id() AND active ORDER BY type,name"),
+    ]);
+    return { finance: { windows: windows.results, entries: entries.results, routing: routing.results, transactionCodes: transactionCodes.results, arAccounts: arAccounts.results, arInvoices: arInvoices.results, trialBalance: trialBalance.results[0]??{guest_ledger:0,ar_ledger:0,gross_revenue:0,net_payments:0} }, groups: { accounts: accountProfiles.results } };
+  }
+  const [connections, contracts, mappings, ari, inbound, links, attempts, outbox] = await db.batch([
+    db.prepare("SELECT * FROM channel_connections WHERE property_id=pms_current_property_id() ORDER BY provider,name"),
+    db.prepare("SELECT cc.*,c.provider,c.name connection_name FROM channel_contracts cc JOIN channel_connections c ON c.id=cc.connection_id WHERE cc.property_id=pms_current_property_id() ORDER BY c.provider,c.name"),
+    db.prepare("SELECT m.*,c.provider,c.name connection_name,rt.code room_type_code,rt.name room_type_name FROM channel_mappings m JOIN channel_connections c ON c.id=m.connection_id JOIN room_types rt ON rt.id=m.room_type_id WHERE m.property_id=pms_current_property_id() ORDER BY c.provider,rt.code,m.rate_plan"),
+    db.prepare("SELECT a.*,c.provider,m.external_room_type_id,m.external_rate_plan_id,rt.code room_type_code FROM ari_updates a JOIN channel_connections c ON c.id=a.connection_id JOIN channel_mappings m ON m.id=a.mapping_id JOIN room_types rt ON rt.id=m.room_type_id WHERE a.property_id=pms_current_property_id() ORDER BY a.created_at DESC LIMIT 150"),
+    db.prepare("SELECT i.*,c.name connection_name FROM inbound_channel_messages i JOIN channel_connections c ON c.id=i.connection_id WHERE i.property_id=pms_current_property_id() ORDER BY i.received_at DESC LIMIT 150"),
+    db.prepare("SELECT l.*,c.provider,r.confirmation_no FROM channel_reservation_links l JOIN channel_connections c ON c.id=l.connection_id JOIN reservations r ON r.id=l.reservation_id WHERE l.property_id=pms_current_property_id() ORDER BY l.updated_at DESC LIMIT 150"),
+    db.prepare("SELECT * FROM integration_delivery_attempts WHERE property_id=pms_current_property_id() ORDER BY created_at DESC LIMIT 150"),
+    db.prepare("SELECT * FROM outbox_events WHERE property_id=pms_current_property_id() ORDER BY created_at DESC LIMIT 150"),
+  ]);
+  return { integrations: { connections: connections.results, contracts: contracts.results, mappings: mappings.results, ari: ari.results, inbound: inbound.results, links: links.results, attempts: attempts.results, outbox: outbox.results } };
+}
+
 async function coreSnapshot(db:D1,principal:Principal) {
   // The core projection deliberately omits finance, groups, and integrations for
   // fast first paint; `completeness` prevents consumers from mistaking empty arrays

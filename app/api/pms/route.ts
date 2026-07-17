@@ -3,7 +3,7 @@ import { getPmsDatabase, scopePmsDatabase } from "../../../db/pms-database";
 import { ReportRequestError } from "./reporting";
 import { loadAccountingCenter, loadInventoryCalendar, loadWebsiteAdmin, PmsExtendedError } from "./extended";
 import { principalFor, ready, runtimeBindings } from "./auth";
-import { cachedCoreSnapshotResponse, cachedReport, cachedSnapshotResponse } from "./read-model";
+import { cachedCoreSnapshotResponse, cachedReport, cachedSnapshotResponse, workspaceProjection, type WorkspaceProjection } from "./read-model";
 import { handlePmsPost } from "./command-gateway";
 import { schemaNotReadyResponse } from "../../../db/schema-contract";
 
@@ -19,7 +19,11 @@ export async function GET(request: Request) {
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
   const db = scopePmsDatabase(rootDb, principal.propertyId);
   const url=new URL(request.url);
-  if(url.searchParams.get("view")==="core") return cachedCoreSnapshotResponse(db,principal,request);
+  const view=url.searchParams.get("view");
+  if(view==="core") return cachedCoreSnapshotResponse(db,principal,request);
+  if(view==="groups"||view==="finance"||view==="channels") {
+    return Response.json(await workspaceProjection(db,view as WorkspaceProjection),{headers:{"Cache-Control":"private, no-store"}});
+  }
   if(url.searchParams.get("view")==="inventory") {
     try {
       const property=await db.prepare("SELECT business_date FROM properties WHERE id=pms_current_property_id()").first<{business_date:string}>(),from=url.searchParams.get("from")||String(property?.business_date),to=url.searchParams.get("to")||String(property?.business_date);

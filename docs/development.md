@@ -107,6 +107,8 @@ native type 변환이나 CHECK 재검증처럼 lock·table rewrite 가능성이 
 | Test | Node test runner + PostgreSQL 17 service + live staging workflow | 실제 migration, RLS, trigger, advisory lock과 E2E를 같은 계약으로 검증 |
 | Hosting | Vercel Production Seoul `icn1` + Fluid Compute | 한국 사용자 locality, instance concurrency와 표준 Next.js runtime |
 
+PMS 공통 shell은 workspace URL 사이에서 유지됩니다. 첫 화면은 `view=core`, 그룹·폴리오·채널은 각각 `view=groups|finance|channels`를 사용하며 메뉴 hover/focus/pointer intent 시 route chunk와 projection을 미리 준비합니다. 기본 전체 snapshot은 호환·QA 용도이며 일반 페이지 전환 hot path에는 사용하지 않습니다.
+
 ### npm 명령 전체 목록
 
 | 명령 | 설명 | 외부 상태 변경 |
