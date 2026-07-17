@@ -2,6 +2,7 @@
 
 /** Visual PMS website studio for hotel content, navigation, rooms and managed media. */
 import { FormEvent, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { safeStringArray } from "../lib/format";
 import {
   normalizeWebsiteNavigation,
@@ -76,6 +77,7 @@ function validateImage(file:File) {
 
 export default function HomepageManager({canAdmin}:{canAdmin:boolean}) {
   const {busy,act}=usePmsActions();
+  const queryClient=useQueryClient();
   const [data,setData]=useState<WebsiteAdmin|null>(null);
   const [draft,setDraft]=useState<EditorDraft|null>(null);
   const [error,setError]=useState("");
@@ -87,13 +89,14 @@ export default function HomepageManager({canAdmin}:{canAdmin:boolean}) {
 
   const load=useCallback(async()=>{
     try {
-      const response=await fetch("/api/pms?view=website",{cache:"no-store"});
-      const payload=await response.json() as WebsiteAdmin&{error?:string};
-      if(!response.ok)throw new Error(payload.error||"홈페이지 데이터를 불러오지 못했습니다.");
+      // The sidebar starts this same query on navigation intent, so opening the
+      // editor can reuse an in-flight or fresh projection instead of waiting for
+      // a second CMS request after its code chunk mounts.
+      const payload=await queryClient.fetchQuery({queryKey:["pms","website"],queryFn:async()=>{const response=await fetch("/api/pms?view=website",{cache:"no-store"});const body=await response.json() as WebsiteAdmin&{error?:string};if(!response.ok)throw new Error(body.error||"홈페이지 데이터를 불러오지 못했습니다.");return body;},staleTime:60_000});
       setData(payload);setDraft(payload.settings?draftFromSettings(payload.settings):null);
       setSelectedRoomId(current=>current||payload.rooms[0]?.id||"");setError("");
     } catch(reason) { setError(reason instanceof Error?reason.message:"홈페이지 데이터를 불러오지 못했습니다."); }
-  },[]);
+  },[queryClient]);
 
   // CMS data is intentionally fetched only when this module is opened.
   // eslint-disable-next-line react-hooks/set-state-in-effect

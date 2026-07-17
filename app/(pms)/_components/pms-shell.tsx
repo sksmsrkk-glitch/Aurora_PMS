@@ -115,6 +115,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
         staleTime: 60_000,
       });
     }
+    if(target==="website")void queryClient.prefetchQuery({queryKey:["pms","website"],queryFn:()=>fetchPmsData<unknown>("/api/pms?view=website"),staleTime:60_000});
   }, [queryClient, router]);
   useDialogController();
   const load = useCallback(async():Promise<Data|null>=>{ try { const payload=await queryClient.fetchQuery({queryKey:["pms","core"],queryFn:()=>fetchPmsData("/api/pms?view=core")});setData(payload);setDomainStatus(idleDomains());return payload; } catch(e){if(e instanceof Error&&e.message==="AUTH_REDIRECT")return null;setError(e instanceof Error?e.message:"데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
