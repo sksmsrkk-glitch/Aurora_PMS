@@ -1,7 +1,7 @@
-/** Unified prepared-statement adapter for server-only PostgreSQL and D1. */
+/** Server-only PostgreSQL adapter for the Aurora PMS command/query contract. */
 import postgres from "postgres";
-
-export type PmsDialect = "d1" | "postgres";
+import { compilePostgresParameters } from "./postgres-parameters.mjs";
+export { compilePostgresParameters } from "./postgres-parameters.mjs";
 
 export type PmsResult<T = Record<string, unknown>> = {
   results: T[];
@@ -17,23 +17,18 @@ export interface PmsPreparedStatement {
 }
 
 export interface PmsDatabase {
-  readonly dialect: PmsDialect;
   prepare(query: string): PmsPreparedStatement;
   batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]): Promise<PmsResult<T>[]>;
 }
 
 /**
- * Applies the authenticated property's scope to legacy SQL that still names the
- * seed property. The identifier is deliberately restricted before interpolation;
- * parameter binding cannot be used for a SQL literal that is embedded in existing
- * statements. This is defense in depth—the API must still authorize the principal
- * for the same property before obtaining this adapter.
+ * Temporary tenant boundary retained until the following migration step replaces
+ * legacy seed literals with a transaction-local PostgreSQL property context.
  */
 export function scopePmsDatabase(database: PmsDatabase, propertyId: string): PmsDatabase {
   if (!/^[A-Za-z0-9_-]{1,64}$/u.test(propertyId)) throw new Error("Invalid property scope");
   const quotedPropertyId = `'${propertyId}'`;
   return {
-    dialect: database.dialect,
     prepare(query: string) {
       return database.prepare(query.replaceAll("'prop-seoul'", quotedPropertyId));
     },
@@ -44,91 +39,10 @@ export function scopePmsDatabase(database: PmsDatabase, propertyId: string): Pms
 }
 
 export type PmsRuntimeBindings = {
-  DB?: D1Database;
   DATABASE_URL?: string;
 };
 
 type PostgresExecutor = postgres.Sql | postgres.TransactionSql;
-
-/**
- * Converts D1-style positional placeholders without touching question marks in
- * SQL string or identifier literals. A regular-expression replacement would
- * corrupt notes, JSON paths, and other legitimate literal values.
- */
-function replaceQuestionPlaceholders(query: string) {
-  let index = 0;
-  let singleQuoted = false;
-  let doubleQuoted = false;
-  let output = "";
-
-  for (let position = 0; position < query.length; position += 1) {
-    const character = query[position];
-    const next = query[position + 1];
-
-    if (character === "'" && !doubleQuoted) {
-      output += character;
-      if (singleQuoted && next === "'") {
-        output += next;
-        position += 1;
-      } else {
-        singleQuoted = !singleQuoted;
-      }
-      continue;
-    }
-
-    if (character === '"' && !singleQuoted) {
-      doubleQuoted = !doubleQuoted;
-      output += character;
-      continue;
-    }
-
-    if (character === "?" && !singleQuoted && !doubleQuoted) {
-      index += 1;
-      output += `$${index}`;
-      continue;
-    }
-
-    output += character;
-  }
-
-  return output;
-}
-
-/**
- * Translates the intentionally small SQLite/D1 compatibility surface used by the
- * PMS into PostgreSQL. Keep new rewrites explicit here: this is not a general SQL
- * parser, and silently accepting unsupported dialect syntax is more dangerous than
- * failing a deployment or test.
- */
-export function toPostgresSql(query: string) {
-  let sql = query.trim().replace(/;\s*$/u, "");
-  const ignoresConflict = /\bINSERT\s+OR\s+IGNORE\s+INTO\b/iu.test(sql);
-
-  sql = sql.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\b/giu, "INSERT INTO");
-  sql = sql.replace(
-    /date\(\(SELECT business_date FROM properties WHERE id='prop-seoul'\),\s*'\+13 day'\)/giu,
-    "to_char(((SELECT business_date FROM properties WHERE id='prop-seoul')::date + INTERVAL '13 day'), 'YYYY-MM-DD')",
-  );
-  sql = sql.replace(
-    /date\(stay_date,\s*'\+1 day'\)/giu,
-    "to_char(stay_date::date + INTERVAL '1 day', 'YYYY-MM-DD')",
-  );
-  sql = sql.replace(
-    /julianday\(r\.departure_date\)\s*-\s*julianday\(r\.arrival_date\)/giu,
-    "(r.departure_date::date - r.arrival_date::date)",
-  );
-  sql = replaceQuestionPlaceholders(sql);
-  sql = sql.replace(
-    /WITH RECURSIVE dates\(stay_date\) AS \(SELECT \$1 UNION ALL/iu,
-    "WITH RECURSIVE dates(stay_date) AS (SELECT $1::text UNION ALL",
-  );
-
-  if (ignoresConflict && !/\bON\s+CONFLICT\b/iu.test(sql)) {
-    sql += " ON CONFLICT DO NOTHING";
-  }
-
-  return sql;
-}
 
 class PostgresPreparedStatement implements PmsPreparedStatement {
   constructor(
@@ -160,16 +74,19 @@ class PostgresPreparedStatement implements PmsPreparedStatement {
 }
 
 class PostgresDatabase implements PmsDatabase {
-  readonly dialect = "postgres" as const;
-
   constructor(private readonly client: postgres.Sql) {}
 
   prepare(query: string) {
     return new PostgresPreparedStatement(this, query);
   }
 
-  async execute<T>(query: string, values: unknown[], executor: PostgresExecutor = this.client): Promise<PmsResult<T>> {
-    const rows = await executor.unsafe(toPostgresSql(query), values as never[]);
+  async execute<T>(
+    query: string,
+    values: unknown[],
+    executor: PostgresExecutor = this.client,
+  ): Promise<PmsResult<T>> {
+    const sql = compilePostgresParameters(query, values.length);
+    const rows = await executor.unsafe(sql, values as never[]);
     const resultRows = Array.from(rows) as T[];
     const changes = typeof rows.count === "number" ? rows.count : resultRows.length;
     return { results: resultRows, success: true, meta: { changes } };
@@ -178,77 +95,18 @@ class PostgresDatabase implements PmsDatabase {
   async batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]) {
     if (!statements.length) return [];
 
-    // One database transaction preserves the all-or-nothing semantics expected
+    // One PostgreSQL transaction preserves the all-or-nothing semantics expected
     // by reservation, inventory, audit, outbox, and accounting command batches.
     return this.client.begin(async (transaction) => {
       const results: PmsResult<T>[] = [];
       for (const statement of statements) {
         if (!(statement instanceof PostgresPreparedStatement)) {
-          throw new Error("Cannot mix D1 and PostgreSQL statements in one batch");
+          throw new Error("Cannot execute a statement created by another database adapter");
         }
         results.push(await statement.executeWith<T>(transaction));
       }
       return results;
     });
-  }
-}
-
-class D1PreparedStatementAdapter implements PmsPreparedStatement {
-  constructor(private readonly statement: D1PreparedStatement) {}
-
-  bind(...values: unknown[]) {
-    return new D1PreparedStatementAdapter(this.statement.bind(...values));
-  }
-
-  first<T = Record<string, unknown>>() {
-    return this.statement.first<T>();
-  }
-
-  async all<T = Record<string, unknown>>() {
-    const result = await this.statement.all<T>();
-    return {
-      results: result.results ?? [],
-      success: true as const,
-      meta: { changes: Number(result.meta?.changes ?? 0) },
-    };
-  }
-
-  async run<T = Record<string, unknown>>() {
-    const result = await this.statement.run<T>();
-    return {
-      results: result.results ?? [],
-      success: true as const,
-      meta: { changes: Number(result.meta?.changes ?? 0) },
-    };
-  }
-
-  get native() {
-    return this.statement;
-  }
-}
-
-class D1DatabaseAdapter implements PmsDatabase {
-  readonly dialect = "d1" as const;
-
-  constructor(private readonly database: D1Database) {}
-
-  prepare(query: string) {
-    return new D1PreparedStatementAdapter(this.database.prepare(query));
-  }
-
-  async batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]) {
-    const native = statements.map((statement) => {
-      if (!(statement instanceof D1PreparedStatementAdapter)) {
-        throw new Error("Cannot mix PostgreSQL and D1 statements in one batch");
-      }
-      return statement.native;
-    });
-    const results = await this.database.batch<T>(native);
-    return results.map((result) => ({
-      results: result.results ?? [],
-      success: true as const,
-      meta: { changes: Number(result.meta?.changes ?? 0) },
-    }));
   }
 }
 
@@ -261,26 +119,23 @@ function processDatabaseUrl() {
 }
 
 export function getPmsDatabase(bindings: PmsRuntimeBindings): PmsDatabase {
-  // Serverless production uses Supavisor's transaction-mode DATABASE_URL with
-  // prepared statements disabled. No API credential can submit SQL text to an RPC;
-  // the D1 binding remains the explicit local/edge alternative.
   const databaseUrl = bindings.DATABASE_URL || processDatabaseUrl();
-  if (databaseUrl) {
-    if (!postgresClient || postgresUrl !== databaseUrl) {
-      postgresClient = postgres(databaseUrl, {
-        max: 6,
-        prepare: false,
-        connect_timeout: 12,
-        idle_timeout: 20,
-        max_lifetime: 60 * 15,
-        ssl: "require",
-        transform: { undefined: null },
-      });
-      postgresUrl = databaseUrl;
-    }
-    return new PostgresDatabase(postgresClient);
+  if (!databaseUrl) {
+    throw new Error("PMS database is unavailable. Configure DATABASE_URL.");
   }
 
-  if (bindings.DB) return new D1DatabaseAdapter(bindings.DB);
-  throw new Error("PMS database is unavailable. Configure DATABASE_URL or the DB binding.");
+  if (!postgresClient || postgresUrl !== databaseUrl) {
+    const localDatabase = /^postgres(?:ql)?:\/\/[^/]+@(?:localhost|127\.0\.0\.1)(?::\d+)?\//iu.test(databaseUrl);
+    postgresClient = postgres(databaseUrl, {
+      max: 6,
+      prepare: false,
+      connect_timeout: 12,
+      idle_timeout: 20,
+      max_lifetime: 60 * 15,
+      ssl: localDatabase ? false : "require",
+      transform: { undefined: null },
+    });
+    postgresUrl = databaseUrl;
+  }
+  return new PostgresDatabase(postgresClient);
 }

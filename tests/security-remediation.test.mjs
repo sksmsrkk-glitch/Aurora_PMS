@@ -56,15 +56,13 @@ test("arbitrary SQL RPC bridge is absent from runtime and revoked by migration",
   assert.match(removal,/service_role/u);
 });
 
-test("D1 bootstrap and Drizzle mirror include direct-booking schema",async()=>{
-  const [route,schema]=await Promise.all([read("app/api/pms/route.ts"),read("db/schema.ts")]);
-  for(const source of [route,schema]){
-    assert.match(source,/booking_requests/u);
-    assert.match(source,/reservation_rate_nights/u);
-  }
-  assert.match(route,/reservation_rate_nights_no_update/u);
-  assert.match(route,/reservation_rate_nights_no_delete/u);
-  assert.match(schema,/bookingRequestIdempotency|booking_request_idempotency_uq/u);
+test("Supabase migrations are the only schema source",async()=>{
+  const [route,database,packageJson]=await Promise.all([read("app/api/pms/route.ts"),read("db/pms-database.ts"),read("package.json")]);
+  assert.doesNotMatch(route,/CREATE TABLE|CREATE TRIGGER|PRAGMA table_info/u);
+  assert.doesNotMatch(database,/toPostgresSql|D1Database|INSERT OR IGNORE/u);
+  assert.doesNotMatch(packageJson,/drizzle|supabase:generate|db:generate/u);
+  await assert.rejects(read("db/schema.ts"),/ENOENT/u);
+  await assert.rejects(read("scripts/generate-supabase-migration.mjs"),/ENOENT/u);
 });
 
 test("stateful QA proves staging deployment and database isolation before writes",async()=>{

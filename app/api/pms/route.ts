@@ -44,319 +44,57 @@ const actionCapability: Record<string, string> = {
   update_website_settings: "ADMIN", update_room_type_website: "ADMIN", upload_website_media: "ADMIN", delete_website_media: "ADMIN",
 };
 
-let initialization: Promise<void> | null = null;
+let readiness: Promise<void> | null = null;
 
-const schema = [
-  `CREATE TABLE IF NOT EXISTS properties (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL, timezone TEXT NOT NULL, currency TEXT NOT NULL, business_date TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS room_types (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, base_rate REAL NOT NULL, capacity INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1)`,
-  `CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, number TEXT NOT NULL, floor INTEGER NOT NULL, front_desk_status TEXT NOT NULL, housekeeping_status TEXT NOT NULL, features TEXT NOT NULL DEFAULT '[]', active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1)`,
-  `CREATE TABLE IF NOT EXISTS guests (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, first_name TEXT NOT NULL, last_name TEXT NOT NULL, email TEXT, phone TEXT, vip_level TEXT NOT NULL DEFAULT 'NONE', nationality TEXT, preferences TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, confirmation_no TEXT NOT NULL, property_id TEXT NOT NULL, guest_id TEXT NOT NULL, room_type_id TEXT NOT NULL, room_id TEXT, arrival_date TEXT NOT NULL, departure_date TEXT NOT NULL, status TEXT NOT NULL, adults INTEGER NOT NULL, children INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL, rate_plan TEXT NOT NULL, nightly_rate REAL NOT NULL, eta TEXT, notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS reservation_nights (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, room_id TEXT NOT NULL, stay_date TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS reservation_type_nights (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS booking_requests (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, reservation_id TEXT NOT NULL, email_hash TEXT NOT NULL, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS reservation_rate_nights (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, sell_rate REAL NOT NULL CHECK(sell_rate>=0), currency TEXT NOT NULL, rate_plan TEXT NOT NULL, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS folio_entries (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, kind TEXT NOT NULL, code TEXT NOT NULL, description TEXT NOT NULL, amount REAL NOT NULL, payment_method TEXT, business_date TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, reverses_entry_id TEXT)`,
-  `CREATE TABLE IF NOT EXISTS housekeeping_tasks (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_id TEXT NOT NULL, business_date TEXT NOT NULL, status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 2, assignee TEXT, notes TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, before_json TEXT, after_json TEXT, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS outbox_events (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, topic TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, published_at TEXT)`,
-  `CREATE TABLE IF NOT EXISTS idempotency_keys (key TEXT PRIMARY KEY, property_id TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS api_rate_limits (scope TEXT NOT NULL, key_hash TEXT NOT NULL, window_start TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1, expires_at TEXT NOT NULL, PRIMARY KEY(scope,key_hash,window_start))`,
-  `CREATE TABLE IF NOT EXISTS role_assignments (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS cashier_sessions (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, actor TEXT NOT NULL, business_date TEXT NOT NULL, status TEXT NOT NULL, opening_amount REAL NOT NULL, expected_amount REAL, counted_amount REAL, variance REAL, opened_at TEXT NOT NULL, closed_at TEXT)`,
-  `CREATE TABLE IF NOT EXISTS night_audits (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, business_date TEXT NOT NULL, status TEXT NOT NULL, blockers_json TEXT NOT NULL, summary_json TEXT, started_at TEXT NOT NULL, completed_at TEXT, completed_by TEXT)`,
-  `CREATE TABLE IF NOT EXISTS reservation_transitions (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, from_status TEXT NOT NULL, to_status TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS reservation_mutations (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, expected_version INTEGER NOT NULL, kind TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS inventory_controls (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, sell_limit INTEGER, closed INTEGER NOT NULL DEFAULT 0, min_stay INTEGER NOT NULL DEFAULT 1, close_to_arrival INTEGER NOT NULL DEFAULT 0, close_to_departure INTEGER NOT NULL DEFAULT 0, price_override REAL, website_closed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS website_settings (property_id TEXT PRIMARY KEY, hotel_name TEXT NOT NULL, brand_eyebrow TEXT NOT NULL, hero_title TEXT NOT NULL, hero_subtitle TEXT NOT NULL, overview_title TEXT NOT NULL, overview_body TEXT NOT NULL, experience_title TEXT NOT NULL, experience_body TEXT NOT NULL, location_title TEXT NOT NULL, location_body TEXT NOT NULL, address TEXT NOT NULL, phone TEXT NOT NULL, email TEXT NOT NULL, checkin_time TEXT NOT NULL DEFAULT '15:00', checkout_time TEXT NOT NULL DEFAULT '11:00', published INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS room_type_website (property_id TEXT NOT NULL, room_type_id TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0, display_order INTEGER NOT NULL DEFAULT 0, marketing_name TEXT NOT NULL, short_description TEXT NOT NULL, long_description TEXT NOT NULL, amenities_json TEXT NOT NULL DEFAULT '[]', version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY(property_id,room_type_id))`,
-  `CREATE TABLE IF NOT EXISTS website_media (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, scope TEXT NOT NULL, room_type_id TEXT, role TEXT NOT NULL, object_path TEXT NOT NULL, public_url TEXT NOT NULL, alt_text TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS room_moves (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, from_room_id TEXT, to_room_id TEXT NOT NULL, move_date TEXT NOT NULL, reason TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS account_profiles (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, type TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, email TEXT, phone TEXT, negotiated_rate_code TEXT, credit_status TEXT NOT NULL DEFAULT 'CASH', notes TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS business_blocks (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, account_profile_id TEXT, group_profile_id TEXT, arrival_date TEXT NOT NULL, departure_date TEXT NOT NULL, status TEXT NOT NULL, reservation_method TEXT NOT NULL, deduct_inventory INTEGER NOT NULL DEFAULT 1, cutoff_date TEXT, currency TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, cutoff_processed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS block_inventory (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, block_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, original_rooms INTEGER NOT NULL, current_rooms INTEGER NOT NULL, picked_up INTEGER NOT NULL DEFAULT 0, rate REAL NOT NULL, cutoff_date TEXT, version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS rooming_list_entries (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, block_id TEXT NOT NULL, first_name TEXT NOT NULL, last_name TEXT NOT NULL, email TEXT, phone TEXT, arrival_date TEXT NOT NULL, departure_date TEXT NOT NULL, room_type_id TEXT NOT NULL, status TEXT NOT NULL, reservation_id TEXT, rate REAL NOT NULL, notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS block_pickup_nights (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id TEXT NOT NULL, block_id TEXT NOT NULL, rooming_entry_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS folio_windows (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, window_no INTEGER NOT NULL, name TEXT NOT NULL, payee_type TEXT NOT NULL DEFAULT 'GUEST', payee_account_profile_id TEXT, status TEXT NOT NULL DEFAULT 'OPEN', created_at TEXT NOT NULL, created_by TEXT NOT NULL, closed_at TEXT)`,
-  `CREATE TABLE IF NOT EXISTS folio_entry_details (entry_id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, folio_window_id TEXT NOT NULL, net_amount REAL NOT NULL, tax_amount REAL NOT NULL DEFAULT 0, service_amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL, source_entry_id TEXT, reason TEXT, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS folio_routing_rules (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, reservation_id TEXT NOT NULL, transaction_code TEXT NOT NULL, target_window_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS transaction_codes (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, tax_rate REAL NOT NULL DEFAULT 0, service_rate REAL NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)`,
-  `CREATE TABLE IF NOT EXISTS ar_accounts (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, account_profile_id TEXT NOT NULL, account_no TEXT NOT NULL, name TEXT NOT NULL, credit_limit REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS ar_invoices (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, ar_account_id TEXT NOT NULL, reservation_id TEXT NOT NULL, folio_window_id TEXT NOT NULL, invoice_no TEXT NOT NULL, issued_date TEXT NOT NULL, due_date TEXT NOT NULL, subtotal REAL NOT NULL, tax_amount REAL NOT NULL, service_amount REAL NOT NULL, total REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS ar_ledger_entries (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, ar_account_id TEXT NOT NULL, invoice_id TEXT, kind TEXT NOT NULL, debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0, business_date TEXT NOT NULL, payment_method TEXT, memo TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, reverses_entry_id TEXT)`,
-  `CREATE TABLE IF NOT EXISTS channel_connections (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, provider TEXT NOT NULL, external_property_id TEXT NOT NULL, name TEXT NOT NULL, environment TEXT NOT NULL DEFAULT 'SANDBOX', status TEXT NOT NULL DEFAULT 'ACTIVE', last_sync_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS channel_mappings (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, room_type_id TEXT NOT NULL, external_room_type_id TEXT NOT NULL, rate_plan TEXT NOT NULL, external_rate_plan_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS ari_updates (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, mapping_id TEXT NOT NULL, stay_date TEXT NOT NULL, revision INTEGER NOT NULL, available INTEGER NOT NULL, closed INTEGER NOT NULL DEFAULT 0, min_stay INTEGER NOT NULL DEFAULT 1, close_to_arrival INTEGER NOT NULL DEFAULT 0, close_to_departure INTEGER NOT NULL DEFAULT 0, rate REAL NOT NULL, currency TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, sent_at TEXT, last_error TEXT)`,
-  `CREATE TABLE IF NOT EXISTS channel_reservation_links (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, external_reservation_id TEXT NOT NULL, reservation_id TEXT NOT NULL, last_revision INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS inbound_channel_messages (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, provider TEXT NOT NULL, message_id TEXT NOT NULL, event_type TEXT NOT NULL, external_reservation_id TEXT NOT NULL, revision INTEGER NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0, reservation_id TEXT, last_error TEXT, received_at TEXT NOT NULL, processed_at TEXT)`,
-  `CREATE TABLE IF NOT EXISTS integration_delivery_attempts (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, direction TEXT NOT NULL, provider TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, attempt_no INTEGER NOT NULL, status TEXT NOT NULL, http_status INTEGER, error_code TEXT, error_message TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS report_exports (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, report_key TEXT NOT NULL, format TEXT NOT NULL, filters_json TEXT NOT NULL, row_count INTEGER NOT NULL, status TEXT NOT NULL, requested_by TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT)`,
-  `CREATE TABLE IF NOT EXISTS channel_contracts (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, contract_type TEXT NOT NULL, commission_percent REAL NOT NULL DEFAULT 0, settlement_cycle TEXT NOT NULL DEFAULT 'PER_STAY', payment_terms_days INTEGER NOT NULL DEFAULT 30, currency TEXT NOT NULL DEFAULT 'KRW', valid_from TEXT NOT NULL, valid_to TEXT, status TEXT NOT NULL DEFAULT 'ACTIVE', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS channel_rate_overrides (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, connection_id TEXT NOT NULL, mapping_id TEXT NOT NULL, room_type_id TEXT NOT NULL, stay_date TEXT NOT NULL, sell_rate REAL NOT NULL, net_rate REAL, currency TEXT NOT NULL DEFAULT 'KRW', version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS channel_settlements (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, contract_id TEXT NOT NULL, connection_id TEXT NOT NULL, reservation_id TEXT, business_date TEXT NOT NULL, contract_type TEXT NOT NULL, commission_percent REAL NOT NULL DEFAULT 0, gross_sell_amount REAL NOT NULL, channel_cost_amount REAL NOT NULL, hotel_net_amount REAL NOT NULL, currency TEXT NOT NULL DEFAULT 'KRW', due_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ACCRUED', paid_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS accounting_accounts (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, account_type TEXT NOT NULL, category TEXT NOT NULL, department TEXT, external_code TEXT, active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS accounting_journal_entries (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, entry_no TEXT NOT NULL, business_date TEXT NOT NULL, entry_type TEXT NOT NULL, source_type TEXT NOT NULL, source_id TEXT, description TEXT NOT NULL, vendor TEXT, status TEXT NOT NULL DEFAULT 'POSTED', reversal_of_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS accounting_journal_lines (id TEXT PRIMARY KEY, property_id TEXT NOT NULL, journal_entry_id TEXT NOT NULL, account_id TEXT NOT NULL, debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0, department TEXT, channel_connection_id TEXT, reservation_id TEXT, memo TEXT, created_at TEXT NOT NULL)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS room_number_uq ON rooms(property_id, number)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS confirmation_uq ON reservations(property_id, confirmation_no)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS room_night_uq ON reservation_nights(property_id, room_id, stay_date)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS reservation_type_night_uq ON reservation_type_nights(reservation_id, stay_date)`,
-  `CREATE INDEX IF NOT EXISTS type_night_inventory_idx ON reservation_type_nights(property_id, room_type_id, stay_date)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS booking_request_idempotency_uq ON booking_requests(property_id,idempotency_key)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS booking_request_reservation_uq ON booking_requests(property_id,reservation_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS reservation_rate_night_uq ON reservation_rate_nights(reservation_id,stay_date)`,
-  `CREATE INDEX IF NOT EXISTS reservation_rate_calendar_idx ON reservation_rate_nights(property_id,room_type_id,stay_date)`,
-  `CREATE INDEX IF NOT EXISTS api_rate_limits_expiry_idx ON api_rate_limits(expires_at)`,
-  `CREATE INDEX IF NOT EXISTS arrival_idx ON reservations(property_id, arrival_date, status)`,
-  `CREATE INDEX IF NOT EXISTS hk_board_idx ON housekeeping_tasks(property_id, business_date, status)`,
-  `CREATE INDEX IF NOT EXISTS folio_reservation_idx ON folio_entries(reservation_id, created_at)`,
-  `CREATE INDEX IF NOT EXISTS outbox_pending_idx ON outbox_events(status, created_at)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS role_property_email_uq ON role_assignments(property_id, email)`,
-  `CREATE INDEX IF NOT EXISTS cashier_open_idx ON cashier_sessions(property_id, status, actor)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS cashier_actor_open_uq ON cashier_sessions(property_id, actor) WHERE status='OPEN'`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS night_audit_property_date_uq ON night_audits(property_id, business_date)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS reservation_transition_from_uq ON reservation_transitions(property_id, reservation_id, from_status)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS reservation_mutation_version_uq ON reservation_mutations(property_id, reservation_id, expected_version)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS inventory_control_type_date_uq ON inventory_controls(property_id, room_type_id, stay_date)`,
-  `CREATE INDEX IF NOT EXISTS inventory_control_calendar_idx ON inventory_controls(property_id, stay_date)`,
-  `CREATE INDEX IF NOT EXISTS room_move_reservation_idx ON room_moves(property_id, reservation_id, created_at)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS account_profile_external_uq ON account_profiles(property_id, type, external_id)`,
-  `CREATE INDEX IF NOT EXISTS account_profile_search_idx ON account_profiles(property_id, type, name)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS business_block_code_uq ON business_blocks(property_id, code)`,
-  `CREATE INDEX IF NOT EXISTS business_block_dates_idx ON business_blocks(property_id, arrival_date, departure_date, status)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS block_inventory_type_date_uq ON block_inventory(block_id, room_type_id, stay_date)`,
-  `CREATE INDEX IF NOT EXISTS block_inventory_house_idx ON block_inventory(property_id, room_type_id, stay_date)`,
-  `CREATE INDEX IF NOT EXISTS rooming_list_block_idx ON rooming_list_entries(block_id, status, last_name)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS rooming_list_reservation_uq ON rooming_list_entries(reservation_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS block_pickup_entry_date_uq ON block_pickup_nights(rooming_entry_id, stay_date)`,
-  `CREATE INDEX IF NOT EXISTS block_pickup_block_date_idx ON block_pickup_nights(block_id, room_type_id, stay_date)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS folio_window_reservation_no_uq ON folio_windows(reservation_id, window_no)`,
-  `CREATE INDEX IF NOT EXISTS folio_window_property_idx ON folio_windows(property_id, status)`,
-  `CREATE INDEX IF NOT EXISTS folio_detail_window_idx ON folio_entry_details(folio_window_id, created_at)`,
-  `CREATE INDEX IF NOT EXISTS folio_detail_source_idx ON folio_entry_details(source_entry_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS folio_routing_reservation_code_uq ON folio_routing_rules(reservation_id, transaction_code)`,
-  `CREATE INDEX IF NOT EXISTS folio_routing_target_idx ON folio_routing_rules(target_window_id, active)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS transaction_code_property_uq ON transaction_codes(property_id, code)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS ar_account_profile_uq ON ar_accounts(property_id, account_profile_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS ar_account_no_uq ON ar_accounts(property_id, account_no)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS ar_invoice_no_uq ON ar_invoices(property_id, invoice_no)`,
-  `CREATE INDEX IF NOT EXISTS ar_invoice_account_due_idx ON ar_invoices(ar_account_id, status, due_date)`,
-  `CREATE INDEX IF NOT EXISTS ar_ledger_account_idx ON ar_ledger_entries(ar_account_id, business_date, created_at)`,
-  `CREATE INDEX IF NOT EXISTS ar_ledger_invoice_idx ON ar_ledger_entries(invoice_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS channel_connection_provider_property_uq ON channel_connections(property_id,provider,external_property_id)`,
-  `CREATE INDEX IF NOT EXISTS channel_connection_status_idx ON channel_connections(property_id,status)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS channel_mapping_external_uq ON channel_mappings(connection_id,external_room_type_id,external_rate_plan_id)`,
-  `CREATE INDEX IF NOT EXISTS channel_mapping_internal_idx ON channel_mappings(property_id,room_type_id,rate_plan)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS ari_update_revision_uq ON ari_updates(mapping_id,stay_date,revision)`,
-  `CREATE INDEX IF NOT EXISTS ari_update_dispatch_idx ON ari_updates(status,created_at)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS channel_reservation_external_uq ON channel_reservation_links(connection_id,external_reservation_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS channel_reservation_internal_uq ON channel_reservation_links(connection_id,reservation_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS inbound_channel_message_uq ON inbound_channel_messages(connection_id,message_id)`,
-  `CREATE INDEX IF NOT EXISTS inbound_channel_dlq_idx ON inbound_channel_messages(status,received_at)`,
-  `CREATE INDEX IF NOT EXISTS integration_attempt_aggregate_idx ON integration_delivery_attempts(aggregate_type,aggregate_id,attempt_no)`,
-  `CREATE INDEX IF NOT EXISTS integration_attempt_failure_idx ON integration_delivery_attempts(status,created_at)`,
-  `CREATE INDEX IF NOT EXISTS report_export_actor_idx ON report_exports(property_id,requested_by,created_at)`,
-  `CREATE INDEX IF NOT EXISTS report_export_status_idx ON report_exports(property_id,status,created_at)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS channel_contract_connection_uq ON channel_contracts(connection_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS channel_rate_mapping_date_uq ON channel_rate_overrides(mapping_id,stay_date)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS channel_settlement_reservation_uq ON channel_settlements(connection_id,reservation_id) WHERE reservation_id IS NOT NULL`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS accounting_account_code_uq ON accounting_accounts(property_id,code)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS accounting_journal_no_uq ON accounting_journal_entries(property_id,entry_no)`,
-  `CREATE INDEX IF NOT EXISTS accounting_journal_line_entry_idx ON accounting_journal_lines(journal_entry_id)`,
-  `CREATE INDEX IF NOT EXISTS report_reservation_filter_idx ON reservations(property_id,status,source,room_type_id,arrival_date,departure_date)`,
-  `CREATE INDEX IF NOT EXISTS report_folio_business_idx ON folio_entries(property_id,business_date,kind,payment_method)`,
-  `CREATE INDEX IF NOT EXISTS report_audit_created_idx ON audit_logs(property_id,created_at,action,actor)`,
-  `CREATE TRIGGER IF NOT EXISTS reservation_type_nights_capacity BEFORE INSERT ON reservation_type_nights BEGIN
-    SELECT CASE
-      WHEN COALESCE((SELECT closed FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),0)=1 THEN RAISE(ABORT, 'room type closed')
-      WHEN (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date) + COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0) >= COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date), (SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'room type sold out')
-    END;
-  END`,
-  `CREATE TRIGGER IF NOT EXISTS block_inventory_capacity_insert BEFORE INSERT ON block_inventory BEGIN SELECT CASE
-    WHEN NEW.original_rooms<0 OR NEW.current_rooms<0 OR NEW.picked_up<0 OR NEW.current_rooms<NEW.picked_up OR NEW.rate<0 THEN RAISE(ABORT, 'invalid block inventory')
-    WHEN (SELECT deduct_inventory FROM business_blocks WHERE id=NEW.block_id)=1 AND (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date)+COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0)+(NEW.current_rooms-NEW.picked_up)>COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),(SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'block inventory sold out')
-  END; END`,
-  `CREATE TRIGGER IF NOT EXISTS block_inventory_capacity_update BEFORE UPDATE ON block_inventory BEGIN SELECT CASE
-    WHEN NEW.original_rooms<0 OR NEW.current_rooms<0 OR NEW.picked_up<0 OR NEW.current_rooms<NEW.picked_up OR NEW.rate<0 THEN RAISE(ABORT, 'invalid block inventory')
-    WHEN (SELECT deduct_inventory FROM business_blocks WHERE id=NEW.block_id)=1 AND (SELECT COUNT(*) FROM reservation_type_nights WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date)+COALESCE((SELECT SUM(bi.current_rooms-bi.picked_up) FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id WHERE bi.property_id=NEW.property_id AND bi.room_type_id=NEW.room_type_id AND bi.stay_date=NEW.stay_date AND bi.id<>OLD.id AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE')),0)+(NEW.current_rooms-NEW.picked_up)>COALESCE((SELECT sell_limit FROM inventory_controls WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date),(SELECT COUNT(*) FROM rooms WHERE property_id=NEW.property_id AND room_type_id=NEW.room_type_id AND active=1 AND housekeeping_status<>'OUT_OF_SERVICE')) THEN RAISE(ABORT, 'block inventory sold out')
-  END; END`,
-  `CREATE TRIGGER IF NOT EXISTS block_pickup_validate BEFORE INSERT ON block_pickup_nights WHEN NOT EXISTS (SELECT 1 FROM block_inventory WHERE block_id=NEW.block_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date AND picked_up<current_rooms) BEGIN SELECT RAISE(ABORT, 'block allocation exhausted'); END`,
-  `CREATE TRIGGER IF NOT EXISTS block_pickup_increment AFTER INSERT ON block_pickup_nights BEGIN UPDATE block_inventory SET picked_up=picked_up+1,version=version+1,updated_at=NEW.created_at WHERE block_id=NEW.block_id AND room_type_id=NEW.room_type_id AND stay_date=NEW.stay_date; END`,
-  `CREATE TRIGGER IF NOT EXISTS block_pickup_decrement AFTER DELETE ON block_pickup_nights BEGIN UPDATE block_inventory SET picked_up=MAX(0,picked_up-1),version=version+1,updated_at=datetime('now') WHERE block_id=OLD.block_id AND room_type_id=OLD.room_type_id AND stay_date=OLD.stay_date; END`,
-  `CREATE TRIGGER IF NOT EXISTS inventory_controls_validate_insert BEFORE INSERT ON inventory_controls WHEN NEW.sell_limit < 0 OR NEW.min_stay < 1 OR NEW.price_override < 0 BEGIN SELECT RAISE(ABORT, 'invalid inventory control'); END`,
-  `CREATE TRIGGER IF NOT EXISTS inventory_controls_validate_update BEFORE UPDATE ON inventory_controls WHEN NEW.sell_limit < 0 OR NEW.min_stay < 1 OR NEW.price_override < 0 BEGIN SELECT RAISE(ABORT, 'invalid inventory control'); END`,
-  `CREATE TRIGGER IF NOT EXISTS reservation_rate_nights_no_update BEFORE UPDATE ON reservation_rate_nights BEGIN SELECT RAISE(ABORT, 'reservation rate nights are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS reservation_rate_nights_no_delete BEFORE DELETE ON reservation_rate_nights BEGIN SELECT RAISE(ABORT, 'reservation rate nights are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS folio_entries_validate_insert BEFORE INSERT ON folio_entries WHEN NEW.amount <= 0 OR NEW.kind NOT IN ('CHARGE','PAYMENT','CHARGE_REVERSAL','PAYMENT_REVERSAL','REFUND') BEGIN SELECT RAISE(ABORT, 'invalid folio entry'); END`,
-  `CREATE TRIGGER IF NOT EXISTS folio_entries_no_update BEFORE UPDATE ON folio_entries BEGIN SELECT RAISE(ABORT, 'folio entries are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS folio_entries_no_delete BEFORE DELETE ON folio_entries BEGIN SELECT RAISE(ABORT, 'folio entries are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS folio_details_validate_insert BEFORE INSERT ON folio_entry_details WHEN NEW.net_amount<0 OR NEW.tax_amount<0 OR NEW.service_amount<0 OR ABS((NEW.net_amount+NEW.tax_amount+NEW.service_amount)-(SELECT amount FROM folio_entries WHERE id=NEW.entry_id))>0.011 OR NOT EXISTS (SELECT 1 FROM folio_windows WHERE id=NEW.folio_window_id AND reservation_id=NEW.reservation_id AND status='OPEN') BEGIN SELECT RAISE(ABORT, 'invalid folio detail'); END`,
-  `CREATE TRIGGER IF NOT EXISTS folio_details_no_update BEFORE UPDATE ON folio_entry_details BEGIN SELECT RAISE(ABORT, 'folio details are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS folio_details_no_delete BEFORE DELETE ON folio_entry_details BEGIN SELECT RAISE(ABORT, 'folio details are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS ar_ledger_validate_insert BEFORE INSERT ON ar_ledger_entries WHEN NEW.debit<0 OR NEW.credit<0 OR (NEW.debit=0 AND NEW.credit=0) OR (NEW.debit>0 AND NEW.credit>0) OR NEW.kind NOT IN ('INVOICE','PAYMENT','CREDIT','ADJUSTMENT','REVERSAL') BEGIN SELECT RAISE(ABORT, 'invalid ar ledger entry'); END`,
-  `CREATE TRIGGER IF NOT EXISTS ar_ledger_no_update BEFORE UPDATE ON ar_ledger_entries BEGIN SELECT RAISE(ABORT, 'ar ledger entries are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS ar_ledger_no_delete BEFORE DELETE ON ar_ledger_entries BEGIN SELECT RAISE(ABORT, 'ar ledger entries are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS integration_attempts_validate_insert BEFORE INSERT ON integration_delivery_attempts WHEN NEW.attempt_no<1 OR NEW.direction NOT IN ('INBOUND','OUTBOUND') OR NEW.status NOT IN ('ACKED','FAILED') BEGIN SELECT RAISE(ABORT, 'invalid integration attempt'); END`,
-  `CREATE TRIGGER IF NOT EXISTS integration_attempts_no_update BEFORE UPDATE ON integration_delivery_attempts BEGIN SELECT RAISE(ABORT, 'integration attempts are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS integration_attempts_no_delete BEFORE DELETE ON integration_delivery_attempts BEGIN SELECT RAISE(ABORT, 'integration attempts are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS accounting_journal_lines_validate_insert BEFORE INSERT ON accounting_journal_lines WHEN NEW.debit<0 OR NEW.credit<0 OR (NEW.debit=0 AND NEW.credit=0) OR (NEW.debit>0 AND NEW.credit>0) OR NOT EXISTS (SELECT 1 FROM accounting_accounts WHERE id=NEW.account_id AND property_id=NEW.property_id AND active=1) BEGIN SELECT RAISE(ABORT, 'invalid accounting journal line'); END`,
-  `CREATE TRIGGER IF NOT EXISTS accounting_journal_lines_no_update BEFORE UPDATE ON accounting_journal_lines BEGIN SELECT RAISE(ABORT, 'accounting journal lines are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS accounting_journal_lines_no_delete BEFORE DELETE ON accounting_journal_lines BEGIN SELECT RAISE(ABORT, 'accounting journal lines are immutable'); END`,
-  `CREATE TRIGGER IF NOT EXISTS accounting_journal_entries_no_delete BEFORE DELETE ON accounting_journal_entries BEGIN SELECT RAISE(ABORT, 'accounting journal entries are immutable'); END`,
-];
-
+/**
+ * Runtime startup is deliberately read-only. PostgreSQL schema and seed changes
+ * are applied only through versioned files in supabase/migrations and seed.sql.
+ */
 async function ready(db: D1) {
-  // Share one initialization promise across concurrent requests. A failed attempt
-  // clears the latch so the next request can retry after a transient database error.
-  if (!initialization) initialization = (db.dialect === "postgres" ? initializePostgres(db) : initialize(db)).catch(error => { initialization = null; throw error; });
-  await initialization;
-}
-
-async function initializePostgres(db: D1) {
-  // Production schema changes and administrator provisioning are migration/operator
-  // owned. Runtime startup performs read-only probes and can never create a role.
-  const tables = ["properties", "reservation_type_nights", "reservation_rate_nights", "booking_requests", "api_rate_limits", "business_blocks", "folio_windows", "channel_connections", "report_exports", "channel_contracts", "accounting_accounts", "accounting_journal_entries", "website_settings", "room_type_website", "website_media"];
-  const results = await db.batch([
-    ...tables.map((table)=>db.prepare(`SELECT 1 FROM ${table} LIMIT 1`)),
-    db.prepare("SELECT id FROM properties WHERE id='prop-seoul'"),
-  ]);
-  const property = results[tables.length]?.results[0];
-  if (!property) throw new Error("Supabase PMS schema exists but the property seed is missing.");
-}
-
-async function initialize(db: D1) {
-  // D1/local development is self-bootstrapping for a zero-setup demo. The ensure*
-  // routines are idempotent legacy upgrades; Supabase never executes this DDL path.
-  let propertyExists = false;
-  try { propertyExists = Boolean(await db.prepare("SELECT id FROM properties WHERE id='prop-seoul' LIMIT 1").first()); await db.prepare("SELECT id FROM reservation_type_nights LIMIT 1").first(); await db.prepare("SELECT id FROM reservation_rate_nights LIMIT 1").first(); await db.prepare("SELECT id FROM booking_requests LIMIT 1").first(); await db.prepare("SELECT scope FROM api_rate_limits LIMIT 1").first(); await db.prepare("SELECT id FROM business_blocks LIMIT 1").first(); await db.prepare("SELECT id FROM folio_windows LIMIT 1").first(); await db.prepare("SELECT id FROM channel_connections LIMIT 1").first(); }
-  catch { await db.batch(schema.map((sql) => db.prepare(sql))); }
-  const now = new Date().toISOString();
-  if (propertyExists) { await ensureReportingModel(db); await ensureWebsiteModel(db,now); await ensureInventoryTriggers(db,now); await ensureGroupTriggers(db,now); await ensureFinancialModel(db,now); await ensureIntegrationModel(db,now); await ensureExtendedModel(db,now); await backfillLegacyNights(db,now); return; }
-  await db.batch([
-    db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").bind("prop-seoul", "오로라 서울 호텔", "SEL01", "Asia/Seoul", "KRW", "2026-07-15"),
-    db.prepare("INSERT OR IGNORE INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind("rt-dlx", "prop-seoul", "DLX", "디럭스 킹", 198000, 2, "킹 베드 기반의 대표 객실"),
-    db.prepare("INSERT OR IGNORE INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind("rt-twn", "prop-seoul", "TWN", "프리미어 트윈", 228000, 3, "가족 및 비즈니스 고객용 트윈"),
-    db.prepare("INSERT OR IGNORE INTO room_types(id,property_id,code,name,base_rate,capacity,description,active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind("rt-ste", "prop-seoul", "STE", "시티 스위트", 420000, 4, "거실과 침실이 분리된 스위트"),
-  ]);
-  const rooms = [["101","rt-dlx","CLEAN"],["102","rt-dlx","DIRTY"],["103","rt-twn","INSPECTED"],["201","rt-dlx","CLEAN"],["202","rt-twn","CLEAN"],["203","rt-twn","DIRTY"],["301","rt-ste","INSPECTED"],["302","rt-ste","OUT_OF_SERVICE"]];
-  await db.batch(rooms.map(([n,t,h], i) => db.prepare("INSERT OR IGNORE INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,active,version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)").bind(`room-${n}`, "prop-seoul", t, n, Number(n[0]), i === 3 ? "OCCUPIED" : "VACANT", h, JSON.stringify(i > 5 ? ["한강 전망","고층"] : ["금연"]))));
-  const guests = [["g1","민준","김","GOLD"],["g2","Sofia","Martinez","NONE"],["g3","서연","박","PLATINUM"],["g4","David","Chen","SILVER"]];
-  await db.batch(guests.map(([id,first,last,vip]) => db.prepare("INSERT OR IGNORE INTO guests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id,"prop-seoul",first,last,`${id}@example.com`,`010-20${id.charCodeAt(1)}-8800`,vip,"KR",JSON.stringify(vip !== "NONE" ? ["고층","조용한 객실"] : []),now)));
-  const rs = [
-    ["r1","SEL-260715-0184","g1","rt-dlx","room-101","DUE_IN",2,0,"Direct","BAR","14:00"],
-    ["r2","SEL-260715-0191","g2","rt-twn","room-103","DUE_IN",2,1,"Booking.com","OTA","15:30"],
-    ["r3","SEL-260714-0168","g3","rt-dlx","room-201","IN_HOUSE",1,0,"Corporate","CORP",""],
-    ["r4","SEL-260715-0202","g4","rt-ste",null,"DUE_IN",2,0,"Expedia","OTA","17:00"],
-  ];
-  await db.batch(rs.map((r) => db.prepare("INSERT OR IGNORE INTO reservations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)").bind(r[0],r[1],"prop-seoul",r[2],r[3],r[4],r[0]==="r3"?"2026-07-14":"2026-07-15",r[0]==="r3"?"2026-07-17":"2026-07-16",r[5],r[6],r[7],r[8],r[9],r[3]==="rt-ste"?420000:r[3]==="rt-twn"?228000:198000,r[10],r[0]==="r4"?"Late arrival · airport transfer":"",now,now)));
-  const nightStatements: D1PreparedStatement[] = [];
-  for (const r of rs) {
-    const arrival = r[0] === "r3" ? "2026-07-14" : "2026-07-15"; const departure = r[0] === "r3" ? "2026-07-17" : "2026-07-16";
-    for (const stayDate of datesBetween(arrival, departure)) {
-      nightStatements.push(db.prepare("INSERT OR IGNORE INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES ('prop-seoul',?,?,?)").bind(String(r[0]),String(r[3]),stayDate));
-      if (r[4]) nightStatements.push(db.prepare("INSERT OR IGNORE INTO reservation_nights(property_id,reservation_id,room_id,stay_date) VALUES ('prop-seoul',?,?,?)").bind(String(r[0]),String(r[4]),stayDate));
-    }
+  if (!readiness) {
+    readiness = verifyMigratedSchema(db).catch((error) => {
+      readiness = null;
+      throw error;
+    });
   }
-  if (nightStatements.length) await db.batch(nightStatements);
-  await db.batch([
-    db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-night-backfill-v1','prop-seoul','SYSTEM_BACKFILL','system',?)").bind(now),
-    db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now),
-    db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:group-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now),
-  ]);
-  await db.batch([
-    db.prepare("INSERT INTO folio_entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind("fe1","prop-seoul","r3","CHARGE","ROOM","객실료",198000,null,"2026-07-14",now,"night-audit",null),
-    db.prepare("INSERT INTO housekeeping_tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind("hk102","prop-seoul","room-102","2026-07-15","IN_PROGRESS",1,"이지은","우선 정비",now),
-    db.prepare("INSERT INTO housekeeping_tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind("hk203","prop-seoul","room-203","2026-07-15","PENDING",2,null,"",now),
-  ]);
-  await ensureFinancialModel(db,now);
-  await ensureIntegrationModel(db,now);
-  await ensureReportingModel(db);
-  await ensureExtendedModel(db,now);
-  await ensureWebsiteModel(db,now);
+  await readiness;
 }
 
-/** Upgrades a legacy local D1 database to the same website model as Supabase. */
-async function ensureWebsiteModel(db:D1,now:string){
-  const columns=await db.prepare("PRAGMA table_info(inventory_controls)").all<{name:string}>();
-  if(!columns.results.some(column=>column.name==="website_closed"))await db.prepare("ALTER TABLE inventory_controls ADD COLUMN website_closed INTEGER NOT NULL DEFAULT 0").run();
-  for(const statement of schema.filter(sql=>sql.includes("website_settings")||sql.includes("room_type_website")||sql.includes("website_media")))await db.prepare(statement).run();
-  await db.prepare("INSERT OR IGNORE INTO website_settings(property_id,hotel_name,brand_eyebrow,hero_title,hero_subtitle,overview_title,overview_body,experience_title,experience_body,location_title,location_body,address,phone,email,checkin_time,checkout_time,published,version,updated_at,updated_by) VALUES ('prop-seoul','Aurora Hotel Seoul','URBAN NIGHTS, QUIETLY BRIGHT','도시의 밤이 가장 편안해지는 곳','정제된 객실과 세심한 서비스. 서울의 리듬을 오롯이 누리는 새로운 스테이.','머무는 시간에 집중한 객실','편안한 동선, 부드러운 빛, 깊은 휴식을 설계했습니다.','아침부터 깊은 밤까지 당신의 속도에 맞춰','조식, 라운지, 피트니스가 여행의 리듬을 지켜드립니다.','서울을 만나는 가장 좋은 시작점','비즈니스와 문화, 미식의 중심을 가볍게 잇습니다.','서울특별시 중구 오로라로 1','02-0000-2026','stay@aurora.hotel','15:00','11:00',1,1,?, 'system')").bind(now).run();
-  await db.prepare("INSERT OR IGNORE INTO room_type_website(property_id,room_type_id,published,display_order,marketing_name,short_description,long_description,amenities_json,version,updated_at,updated_by) SELECT property_id,id,CASE WHEN code IN ('DLX','TWN','STE') THEN 1 ELSE 0 END,0,name,description,description,'[\"무료 Wi-Fi\",\"스마트 TV\",\"프리미엄 침구\"]',1,?,'system' FROM room_types WHERE property_id='prop-seoul' AND active=1").bind(now).run();
-}
-
-async function ensureExtendedModel(db:D1,now:string){
-  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:extended-revenue-accounting-v1'").first();if(marker)return;
-  const names=["channel_contracts","channel_rate_overrides","channel_settlements","accounting_accounts","accounting_journal_entries","accounting_journal_lines","channel_contract_connection_uq","channel_rate_mapping_date_uq","channel_settlement_reservation_uq","accounting_account_code_uq","accounting_journal_no_uq","accounting_journal_line_entry_idx","accounting_journal_lines_validate_insert","accounting_journal_lines_no_update","accounting_journal_lines_no_delete","accounting_journal_entries_no_delete"];
-  const statements=schema.filter(sql=>names.some(name=>sql.includes(name))).map(sql=>db.prepare(sql));
-  const accounts=[["1100","현금 및 예금","ASSET","CASH","FINANCE"],["1200","채널 미수금","ASSET","CHANNEL_RECEIVABLE","FINANCE"],["1300","매출채권","ASSET","ACCOUNTS_RECEIVABLE","FINANCE"],["2100","매입채무","LIABILITY","ACCOUNTS_PAYABLE","FINANCE"],["2200","채널 수수료 미지급금","LIABILITY","CHANNEL_COMMISSION_PAYABLE","FINANCE"],["2300","부가세 예수금","LIABILITY","TAX_PAYABLE","FINANCE"],["4100","객실 매출","REVENUE","ROOM_REVENUE","ROOMS"],["4200","기타 영업 매출","REVENUE","OTHER_REVENUE","OPERATIONS"],["5100","채널 유통 비용","EXPENSE","CHANNEL_DISTRIBUTION","SALES"],["5200","호텔 운영 비용","EXPENSE","OPERATING_EXPENSE","OPERATIONS"],["5990","조정 손익","EXPENSE","ADJUSTMENT","FINANCE"]];
-  statements.push(...accounts.map(([code,name,type,category,department])=>db.prepare("INSERT OR IGNORE INTO accounting_accounts(id,property_id,code,name,account_type,category,department,active,version,created_at,updated_at) VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, 1, 1, ?, ?)").bind(`acct-prop-seoul-${code}`,code,name,type,category,department,now,now)),db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:extended-revenue-accounting-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now));
-  await db.batch(statements);
-}
-
-async function ensureReportingModel(db:D1) {
-  const roomTypeColumns=await db.prepare("PRAGMA table_info(room_types)").all<{name:string}>();
-  if(!roomTypeColumns.results.some(column=>column.name==="description")) await db.prepare("ALTER TABLE room_types ADD COLUMN description TEXT NOT NULL DEFAULT ''").run();
-  if(!roomTypeColumns.results.some(column=>column.name==="active")) await db.prepare("ALTER TABLE room_types ADD COLUMN active INTEGER NOT NULL DEFAULT 1").run();
-  if(!roomTypeColumns.results.some(column=>column.name==="version")) await db.prepare("ALTER TABLE room_types ADD COLUMN version INTEGER NOT NULL DEFAULT 1").run();
-  const roomColumns=await db.prepare("PRAGMA table_info(rooms)").all<{name:string}>();
-  if(!roomColumns.results.some(column=>column.name==="active")) await db.prepare("ALTER TABLE rooms ADD COLUMN active INTEGER NOT NULL DEFAULT 1").run();
-  const statements=schema.filter(sql=>sql.includes("report_exports")||sql.includes("report_reservation_filter_idx")||sql.includes("report_folio_business_idx")||sql.includes("report_audit_created_idx"));
-  for(const statement of statements) await db.prepare(statement).run();
-  const capacitySql=schema.find(sql=>sql.includes("reservation_type_nights_capacity"));
-  const blockSql=schema.filter(sql=>sql.includes("block_inventory_capacity_"));
-  if(capacitySql){await db.prepare("DROP TRIGGER IF EXISTS reservation_type_nights_capacity").run();await db.prepare(capacitySql).run();}
-  for(const name of ["block_inventory_capacity_insert","block_inventory_capacity_update"]) await db.prepare(`DROP TRIGGER IF EXISTS ${name}`).run();
-  for(const statement of blockSql) await db.prepare(statement).run();
-}
-
-async function ensureInventoryTriggers(db:D1, now:string) {
-  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:inventory-triggers-v1'").first(); if(marker) return;
-  const triggerSql=schema.filter(sql=>sql.includes("reservation_type_nights_capacity")||sql.includes("inventory_controls_validate_"));
-  await db.batch([...triggerSql.map(sql=>db.prepare(sql)),db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:inventory-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now)]);
-}
-
-async function ensureGroupTriggers(db:D1, now:string) {
-  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:group-triggers-v1'").first(); if(marker) return;
-  const capacitySql=schema.find(sql=>sql.includes("reservation_type_nights_capacity")); const groupSql=schema.filter(sql=>sql.includes("block_inventory_capacity_")||sql.includes("block_pickup_"));
-  if(!capacitySql) throw new Error("inventory capacity trigger is unavailable");
-  await db.batch([db.prepare("DROP TRIGGER IF EXISTS reservation_type_nights_capacity"),db.prepare(capacitySql),...groupSql.map(sql=>db.prepare(sql)),db.prepare("INSERT OR IGNORE INTO idempotency_keys VALUES ('system:group-triggers-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now)]);
-}
-
-async function ensureFinancialModel(db:D1, now:string) {
-  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:financial-model-v1'").first(); if(marker) return;
-  const triggers=schema.filter(sql=>sql.includes("folio_entries_validate_insert")||sql.includes("folio_entries_no_")||sql.includes("folio_details_")||sql.includes("ar_ledger_"));
-  await db.batch([
-    db.prepare("DROP TRIGGER IF EXISTS folio_entries_validate_insert"),db.prepare("DROP TRIGGER IF EXISTS folio_entries_no_update"),db.prepare("DROP TRIGGER IF EXISTS folio_entries_no_delete"),
-    ...triggers.map(sql=>db.prepare(sql)),
-    db.prepare("INSERT OR IGNORE INTO transaction_codes VALUES ('tc-room','prop-seoul','ROOM','객실료','ROOM',0.10,0,1)"),
-    db.prepare("INSERT OR IGNORE INTO transaction_codes VALUES ('tc-fnb','prop-seoul','FNB','식음료','FNB',0.10,0.10,1)"),
-    db.prepare("INSERT OR IGNORE INTO transaction_codes VALUES ('tc-misc','prop-seoul','MISC','기타 매출','MISC',0.10,0,1)"),
-    db.prepare("INSERT OR IGNORE INTO transaction_codes VALUES ('tc-payment','prop-seoul','PAYMENT','결제','PAYMENT',0,0,1)"),
-    db.prepare("INSERT OR IGNORE INTO folio_windows(id,property_id,reservation_id,window_no,name,payee_type,status,created_at,created_by) SELECT 'fw-'||id,property_id,id,1,'Guest Folio','GUEST','OPEN',?,'system' FROM reservations").bind(now),
-    db.prepare("INSERT OR IGNORE INTO folio_entry_details(entry_id,property_id,reservation_id,folio_window_id,net_amount,tax_amount,service_amount,currency,created_at) SELECT f.id,f.property_id,f.reservation_id,'fw-'||f.reservation_id,f.amount,0,0,p.currency,f.created_at FROM folio_entries f JOIN properties p ON p.id=f.property_id"),
-    db.prepare("INSERT INTO idempotency_keys VALUES ('system:financial-model-v1','prop-seoul','SYSTEM_BACKFILL','system',?)").bind(now),
-  ]);
-}
-
-async function ensureIntegrationModel(db:D1, now:string) {
-  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:integration-model-v1'").first();if(marker)return;
-  const triggers=schema.filter(sql=>sql.includes("integration_attempts_"));
-  await db.batch([...triggers.map(sql=>db.prepare(sql)),db.prepare("INSERT INTO idempotency_keys VALUES ('system:integration-model-v1','prop-seoul','SYSTEM_DDL','system',?)").bind(now)]);
-}
-
-async function backfillLegacyNights(db:D1, now:string) {
-  const marker=await db.prepare("SELECT key FROM idempotency_keys WHERE key='system:inventory-night-backfill-v1'").first(); if(marker) return;
-  await db.batch([
-    db.prepare(`WITH RECURSIVE type_dates(property_id,reservation_id,room_type_id,stay_date,departure_date) AS (
-      SELECT property_id,id,room_type_id,arrival_date,departure_date FROM reservations WHERE status NOT IN ('CANCELLED','NO_SHOW')
-      UNION ALL SELECT property_id,reservation_id,room_type_id,date(stay_date,'+1 day'),departure_date FROM type_dates WHERE date(stay_date,'+1 day') < departure_date
-    ) INSERT OR IGNORE INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) SELECT property_id,reservation_id,room_type_id,stay_date FROM type_dates WHERE stay_date < departure_date`),
-    db.prepare(`WITH RECURSIVE room_dates(property_id,reservation_id,room_id,stay_date,departure_date) AS (
-      SELECT property_id,id,room_id,arrival_date,departure_date FROM reservations WHERE room_id IS NOT NULL AND status NOT IN ('CANCELLED','NO_SHOW')
-      UNION ALL SELECT property_id,reservation_id,room_id,date(stay_date,'+1 day'),departure_date FROM room_dates WHERE date(stay_date,'+1 day') < departure_date
-    ) INSERT OR IGNORE INTO reservation_nights(property_id,reservation_id,room_id,stay_date) SELECT property_id,reservation_id,room_id,stay_date FROM room_dates WHERE stay_date < departure_date`),
-    db.prepare("INSERT INTO idempotency_keys VALUES ('system:inventory-night-backfill-v1','prop-seoul','SYSTEM_BACKFILL','system',?)").bind(now),
-  ]);
+async function verifyMigratedSchema(db: D1) {
+  const requiredTables = [
+    "properties",
+    "reservations",
+    "reservation_type_nights",
+    "reservation_rate_nights",
+    "booking_requests",
+    "api_rate_limits",
+    "business_blocks",
+    "folio_windows",
+    "channel_connections",
+    "report_exports",
+    "channel_contracts",
+    "accounting_accounts",
+    "accounting_journal_entries",
+    "website_settings",
+    "room_type_website",
+    "website_media",
+  ];
+  const rows = await db
+    .prepare(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = ANY(?::text[])`,
+    )
+    .bind(requiredTables)
+    .all<{ table_name: string }>();
+  const found = new Set(rows.results.map((row) => row.table_name));
+  const missing = requiredTables.filter((table) => !found.has(table));
+  if (missing.length) {
+    throw new Error(
+      `Aurora PMS database is not migrated. Missing tables: ${missing.join(", ")}. Run npm run db:supabase:migrate.`,
+    );
+  }
 }
 
 function decodedDisplayName(request: Request, email: string) {
@@ -1029,7 +767,7 @@ export async function POST(request: Request) {
       const arAccountId=`ar-${profile.id}`,existingAccount=await db.prepare("SELECT credit_limit FROM ar_accounts WHERE id=? AND property_id='prop-seoul'").bind(arAccountId).first<{credit_limit:number}>(),accountBalance=await db.prepare("SELECT COALESCE(SUM(debit-credit),0) balance FROM ar_ledger_entries WHERE ar_account_id=? AND property_id='prop-seoul'").bind(arAccountId).first<{balance:number}>(),creditLimit=existingAccount?Number(existingAccount.credit_limit):Number(body.creditLimit||0),amount=roundMoney(Number(window.balance));if(creditLimit>0&&Number(accountBalance?.balance??0)+amount>creditLimit)return Response.json({error:"AR 신용 한도를 초과합니다."},{status:409});
       const base=Number(window.net_total)+Number(window.tax_total)+Number(window.service_total),ratio=base>0?amount/base:1,subtotal=roundMoney(Number(window.net_total)*ratio),tax=roundMoney(Number(window.tax_total)*ratio),service=roundMoney(amount-subtotal-tax),invoiceId=crypto.randomUUID(),paymentId=crypto.randomUUID(),invoiceNo=`AR-${businessDate.replaceAll('-','')}-${Math.floor(1000+Math.random()*9000)}`;
       await db.batch([
-        db.prepare("INSERT OR IGNORE INTO ar_accounts VALUES (?, 'prop-seoul', ?, ?, ?, ?, 'ACTIVE', ?, ?)").bind(arAccountId,profile.id,String(profile.external_id||profile.id),String(profile.name),creditLimit,now,now),
+        db.prepare("INSERT INTO ar_accounts VALUES (?, 'prop-seoul', ?, ?, ?, ?, 'ACTIVE', ?, ?) ON CONFLICT DO NOTHING").bind(arAccountId,profile.id,String(profile.external_id||profile.id),String(profile.name),creditLimit,now,now),
         db.prepare("INSERT INTO ar_invoices VALUES (?, 'prop-seoul', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)").bind(invoiceId,arAccountId,window.reservation_id,window.id,invoiceNo,businessDate,dueDate,subtotal,tax,service,amount,now,actor),
         db.prepare("INSERT INTO ar_ledger_entries VALUES (?, 'prop-seoul', ?, ?, 'INVOICE', ?, 0, ?, NULL, ?, ?, ?, NULL)").bind(crypto.randomUUID(),arAccountId,invoiceId,amount,businessDate,`Folio transfer ${invoiceNo}`,now,actor),
         db.prepare("INSERT INTO folio_entries VALUES (?, 'prop-seoul', ?, 'PAYMENT', 'DIRECT_BILL', ?, ?, 'DIRECT_BILL', ?, ?, ?, NULL)").bind(paymentId,window.reservation_id,`AR 이관 · ${invoiceNo}`,amount,businessDate,now,actor),

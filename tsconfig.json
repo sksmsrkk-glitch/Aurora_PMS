@@ -3,7 +3,6 @@
     "target": "ES2017",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
-    "types": ["@cloudflare/workers-types"],
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
@@ -33,9 +32,6 @@
   ],
   "exclude": [
     "node_modules",
-    "vite.config.ts",
-    "build",
-    "worker",
     "examples"
   ]
 }
