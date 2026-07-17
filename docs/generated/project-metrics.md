@@ -12,8 +12,8 @@
 | 등록 PMS action | 52 | action registry key |
 | Unit/behavior test | 24 | `tests/*.test.mjs`의 test case |
 | PostgreSQL integration test | 9 | `tests/*.integration.mjs`의 test case |
-| PMS CSS source | 93,448 bytes / 6 files | root PMS layout imports |
-| Public hotel CSS source | 21,334 bytes / 1 file | isolated `app/hotel/hotel.css` |
+| PMS CSS source | 93,268 bytes / 6 files | root PMS layout imports |
+| Public hotel CSS source | 21,287 bytes / 1 file | isolated `app/hotel/hotel.css` |
 | 상세 문서 | 7 files | `docs/*.md` (generated 제외) |
 
 이 표는 소스 선언 수를 보여 줍니다. 배포 대상의 실제 catalog는 `npm run db:contract:verify`와 `npm run db:supabase:smoke`가 별도로 검증합니다.

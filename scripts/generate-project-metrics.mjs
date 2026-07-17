@@ -1,5 +1,5 @@
 /** Generates deterministic repository metrics; never hand-edit its output. */
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { actionRegistry } from "../app/api/pms/action-registry.ts";
 
@@ -32,8 +32,11 @@ for (const name of testFiles) {
 }
 
 const cssFiles = ["app/globals.css", ...(await readdir(path.join(root, "app", "styles"))).filter((name) => name.endsWith(".css")).map((name) => `app/styles/${name}`)];
-const pmsCssBytes = (await Promise.all(cssFiles.map((file) => stat(path.join(root, file))))).reduce((sum, item) => sum + item.size, 0);
-const publicCssBytes = (await stat(path.join(root, "app", "hotel", "hotel.css"))).size;
+// Git may materialize CRLF on Windows and LF in CI. Count canonical UTF-8
+// source bytes so the generated contract is identical on every platform.
+const canonicalBytes = async (file) => Buffer.byteLength((await read(file)).replace(/\r\n?/gu, "\n"), "utf8");
+const pmsCssBytes = (await Promise.all(cssFiles.map(canonicalBytes))).reduce((sum, size) => sum + size, 0);
+const publicCssBytes = await canonicalBytes("app/hotel/hotel.css");
 const documentFiles = (await readdir(path.join(root, "docs"))).filter((name) => name.endsWith(".md"));
 const format = new Intl.NumberFormat("en-US").format;
 const latestMigration = migrationNames.at(-1)?.replace(/\.sql$/u, "") || "none";
