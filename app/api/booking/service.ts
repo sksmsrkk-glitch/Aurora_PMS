@@ -1,7 +1,7 @@
+/** Direct-booking availability and reservation domain service. */
 import { createHash } from "node:crypto";
 import { getPmsDatabase, type PmsDatabase, type PmsPreparedStatement, type PmsRuntimeBindings } from "../../../db/pms-database";
 
-const PUBLIC_ROOM_TYPE_CODES = ["DLX", "TWN", "STE"];
 const MAX_STAY_NIGHTS = 30;
 
 const bindings: PmsRuntimeBindings = {
@@ -11,8 +11,8 @@ const bindings: PmsRuntimeBindings = {
 };
 
 type PropertyRow = { id: string; name: string; currency: string; business_date: string };
-type RoomTypeRow = { id: string; code: string; name: string; description: string; base_rate: number; capacity: number; physical: number };
-type ControlRow = { room_type_id: string; stay_date: string; sell_limit: number | null; closed: number; min_stay: number; close_to_arrival: number; close_to_departure: number; price_override: number | null };
+type RoomTypeRow = { id: string; code: string; name: string; marketing_name: string; short_description: string; amenities_json: string; image_url: string | null; base_rate: number; capacity: number; physical: number };
+type ControlRow = { room_type_id: string; stay_date: string; sell_limit: number | null; closed: number; website_closed: number; min_stay: number; close_to_arrival: number; close_to_departure: number; price_override: number | null };
 type CountRow = { room_type_id: string; stay_date: string; count: number };
 
 export type PublicNight = { date: string; rate: number; available: number };
@@ -21,6 +21,8 @@ export type PublicRoomOffer = {
   code: string;
   name: string;
   description: string;
+  imageUrl: string | null;
+  amenities: string[];
   capacity: number;
   available: number;
   averageNightlyRate: number;
@@ -88,11 +90,10 @@ function controlKey(roomTypeId: string, stayDate: string) {
 }
 
 async function availabilityRows(db: PmsDatabase, arrival: string, departure: string) {
-  const codePlaceholders = PUBLIC_ROOM_TYPE_CODES.map(() => "?").join(",");
   const [propertyResult, typesResult, controlsResult, soldResult, heldResult] = await db.batch([
     db.prepare("SELECT id,name,currency,business_date FROM properties WHERE id='prop-seoul' LIMIT 1"),
-    db.prepare(`SELECT rt.id,rt.code,rt.name,rt.description,rt.base_rate,rt.capacity,COUNT(r.id) physical FROM room_types rt LEFT JOIN rooms r ON r.room_type_id=rt.id AND r.property_id=rt.property_id AND r.active=1 AND r.housekeeping_status<>'OUT_OF_SERVICE' WHERE rt.property_id='prop-seoul' AND rt.active=1 AND rt.code IN (${codePlaceholders}) GROUP BY rt.id,rt.code,rt.name,rt.description,rt.base_rate,rt.capacity ORDER BY rt.base_rate`).bind(...PUBLIC_ROOM_TYPE_CODES),
-    db.prepare("SELECT room_type_id,stay_date,sell_limit,closed,min_stay,close_to_arrival,close_to_departure,price_override FROM inventory_controls WHERE property_id='prop-seoul' AND stay_date>=? AND stay_date<=?").bind(arrival, departure),
+    db.prepare("SELECT rt.id,rt.code,rt.name,rw.marketing_name,rw.short_description,rw.amenities_json,rt.base_rate,rt.capacity,COUNT(r.id) physical,(SELECT wm.public_url FROM website_media wm WHERE wm.property_id=rt.property_id AND wm.room_type_id=rt.id AND wm.active=1 ORDER BY CASE wm.role WHEN 'CARD' THEN 0 WHEN 'HERO' THEN 1 ELSE 2 END,wm.sort_order LIMIT 1) image_url FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id LEFT JOIN rooms r ON r.room_type_id=rt.id AND r.property_id=rt.property_id AND r.active=1 AND r.housekeeping_status<>'OUT_OF_SERVICE' WHERE rt.property_id='prop-seoul' AND rt.active=1 AND rw.published=1 GROUP BY rt.id,rt.code,rt.name,rw.marketing_name,rw.short_description,rw.amenities_json,rt.base_rate,rt.capacity,rw.display_order ORDER BY rw.display_order,rt.base_rate"),
+    db.prepare("SELECT room_type_id,stay_date,sell_limit,closed,website_closed,min_stay,close_to_arrival,close_to_departure,price_override FROM inventory_controls WHERE property_id='prop-seoul' AND stay_date>=? AND stay_date<=?").bind(arrival, departure),
     db.prepare("SELECT room_type_id,stay_date,COUNT(*) count FROM reservation_type_nights WHERE property_id='prop-seoul' AND stay_date>=? AND stay_date<? GROUP BY room_type_id,stay_date").bind(arrival, departure),
     db.prepare("SELECT bi.room_type_id,bi.stay_date,COALESCE(SUM(bi.current_rooms-bi.picked_up),0) count FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id AND bb.property_id=bi.property_id WHERE bi.property_id='prop-seoul' AND bi.stay_date>=? AND bi.stay_date<? AND bb.deduct_inventory=1 AND bb.status IN ('TENTATIVE','DEFINITE') GROUP BY bi.room_type_id,bi.stay_date").bind(arrival, departure),
   ]);
@@ -135,7 +136,8 @@ export async function getAvailability(input: { arrival: string; departure: strin
       const physical = Number(roomType.physical);
       const sellLimit = control?.sell_limit == null ? physical : Math.min(physical, Number(control.sell_limit));
       const available = Math.max(0, sellLimit - Number(sold.get(key) ?? 0) - Number(held.get(key) ?? 0));
-      if (Number(control?.closed ?? 0) === 1 || available < 1) closed = true;
+      // The direct-channel switch is independent from the global/OTA stop-sell.
+      if (Number(control?.closed ?? 0) === 1 || Number(control?.website_closed ?? 0) === 1 || available < 1) closed = true;
       return { date, rate: Number(control?.price_override ?? roomType.base_rate), available };
     });
     if (closed) continue;
@@ -143,8 +145,17 @@ export async function getAvailability(input: { arrival: string; departure: strin
     offers.push({
       roomTypeId: roomType.id,
       code: roomType.code,
-      name: roomType.name,
-      description: roomType.description,
+      name: roomType.marketing_name || roomType.name,
+      description: roomType.short_description,
+      imageUrl: roomType.image_url || null,
+      amenities: (() => {
+        try {
+          const parsed = JSON.parse(roomType.amenities_json || "[]");
+          return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string").slice(0, 8) : [];
+        } catch {
+          return [];
+        }
+      })(),
       capacity: Number(roomType.capacity),
       available: Math.min(...nights.map((night) => night.available)),
       averageNightlyRate: Math.round(total / nights.length),

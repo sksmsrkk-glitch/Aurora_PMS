@@ -1,3 +1,4 @@
+/** Configurable concurrent API latency and failure-rate release benchmark. */
 import { performance } from "node:perf_hooks";
 
 const baseUrl = process.env.PMS_BASE_URL || "http://localhost:3000";

@@ -1,3 +1,4 @@
+/** Server-side report catalog, filters, masking and export projections. */
 import type { PmsDatabase } from "../../../db/pms-database";
 
 export type ReportPrincipal = { email:string; role:string; capabilities:string[] };

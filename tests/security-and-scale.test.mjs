@@ -1,3 +1,4 @@
+/** Static release gates for authentication, scale limits and public surfaces. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -55,9 +56,9 @@ test("core snapshot, hardened headers and health monitoring are present",async()
 });
 
 test("direct booking engine is PMS-backed, atomic and idempotent",async()=>{
-  const [service,reservations,availability,migration,hotel,booking]=await Promise.all([
+  const [service,reservations,availability,migration,hotel,search,booking]=await Promise.all([
     read("app/api/booking/service.ts"),read("app/api/booking/reservations/route.ts"),read("app/api/booking/availability/route.ts"),
-    read("supabase/migrations/202607170003_booking_engine.sql"),read("app/hotel/page.tsx"),read("app/hotel/book/BookingClient.tsx"),
+    read("supabase/migrations/202607170003_booking_engine.sql"),read("app/hotel/page.tsx"),read("app/hotel/HotelSearchForm.tsx"),read("app/hotel/book/BookingClient.tsx"),
   ]);
   assert.match(service,/reservation_type_nights/);
   assert.match(service,/reservation_rate_nights/);
@@ -71,6 +72,31 @@ test("direct booking engine is PMS-backed, atomic and idempotent",async()=>{
   assert.match(reservations,/isSameOrigin/);
   assert.match(availability,/allowBookingRequest/);
   assert.match(migration,/pms_booking_rate_immutable_guard/);
-  assert.match(hotel,/객실 검색/);
-  assert.match(booking,/예약 확정/);
+  assert.match(hotel,/HotelSearchForm/);
+  assert.match(search,/router\.push\(`\/hotel\/book\?/);
+  assert.match(booking,/fetch\("\/api\/booking\/reservations"/);
+});
+
+test("website CMS publishes managed room content and honors direct-channel stop sell",async()=>{
+  const [service,websiteService,homepage,search,cms,inventory,route,migration]=await Promise.all([
+    read("app/api/booking/service.ts"),read("app/api/booking/website-service.ts"),read("app/hotel/page.tsx"),read("app/hotel/HotelSearchForm.tsx"),
+    read("app/homepage-manager.tsx"),read("app/inventory-calendar.tsx"),read("app/api/pms/route.ts"),read("supabase/migrations/202607170004_website_cms.sql"),
+  ]);
+  assert.match(service,/JOIN room_type_website/);
+  assert.match(service,/website_closed/);
+  assert.doesNotMatch(service,/PUBLIC_ROOM_TYPE_CODES/);
+  assert.match(websiteService,/website_settings/);
+  assert.match(homepage,/getWebsiteContent/);
+  assert.match(search,/departure <= arrival|departure<=arrival/);
+  assert.match(search,/maximumDeparture/);
+  assert.match(cms,/update_website_settings/);
+  assert.match(cms,/upload_website_media/);
+  assert.match(cms,/create_room_type/);
+  assert.match(inventory,/websiteClosed/);
+  assert.match(route,/get\("view"\)==="website"/);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS public\.website_settings/);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS public\.room_type_website/);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS public\.website_media/);
+  assert.match(migration,/hotel-media/);
+  assert.match(migration,/ENABLE ROW LEVEL SECURITY/);
 });

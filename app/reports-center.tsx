@@ -1,5 +1,7 @@
 "use client";
 
+/** Filterable operational reports with CSV/XLSX export controls. */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { downloadReportWorkbook, type ExportReport } from "./xlsx-export";
 

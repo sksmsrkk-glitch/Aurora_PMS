@@ -14,6 +14,7 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "qa:workflow": "node scripts/qa-full-workflow.mjs",
     "qa:booking": "node scripts/qa-booking-engine.mjs",
+    "qa:website": "node scripts/qa-website-cms.mjs",
     "benchmark": "node tests/api-benchmark.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work",
     "db:generate": "drizzle-kit generate",

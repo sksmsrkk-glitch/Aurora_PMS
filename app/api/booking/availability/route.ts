@@ -1,3 +1,4 @@
+/** Public read-only availability HTTP contract. */
 import type { NextRequest } from "next/server";
 import { allowBookingRequest, publicBookingError } from "../guard";
 import { BookingError, getAvailability } from "../service";

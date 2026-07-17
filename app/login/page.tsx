@@ -1,5 +1,7 @@
 "use client";
 
+/** Supabase password-login screen for PMS operators. */
+
 import Image from "next/image";
 import { FormEvent, useState } from "react";
 

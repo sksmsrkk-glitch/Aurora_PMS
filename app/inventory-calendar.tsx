@@ -1,5 +1,7 @@
 "use client";
 
+/** Multi-channel rate and inventory calendar, including direct-web controls. */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type ChannelRate = {
@@ -13,6 +15,7 @@ type Cell = {
   reserved: number;
   available: number;
   closed: boolean;
+  websiteClosed: boolean;
   minStay: number;
   cta: boolean;
   ctd: boolean;
@@ -128,8 +131,7 @@ export default function RevenueInventoryCalendar({
             <p className="eyebrow">CALENDAR RATE & INVENTORY</p>
             <h2>자유 기간 판매 캘린더</h2>
             <p>
-              호텔 판매가·가용 재고와 채널 판매가/입금가를 같은 날짜 축에서
-              관리합니다.
+              호텔 판매가·가용 재고·홈페이지 노출과 채널 판매가/입금가를 같은 날짜 축에서 관리합니다.
             </p>
           </div>
           <div
@@ -244,6 +246,10 @@ export default function RevenueInventoryCalendar({
             <i className="closed" />
             판매 마감
           </span>
+          <span>
+            <i className="web-closed" />
+            홈페이지 숨김
+          </span>
           <p>
             최대 730일까지 조회·변경할 수 있으며, 한 번에 5,000개 타입·일자 셀을
             벌크 저장합니다.
@@ -296,7 +302,7 @@ function InventoryRow({
           type="button"
           key={cell.stayDate}
           disabled={!canWrite}
-          className={`inventory-cell rich ${cell.closed ? "closed" : cell.available <= 1 ? "low" : ""}`}
+          className={`inventory-cell rich ${cell.closed ? "closed" : cell.available <= 1 ? "low" : ""} ${cell.websiteClosed ? "website-hidden" : ""}`}
           onClick={() => edit(cell)}
         >
           <span>{cell.closed ? "마감" : `${cell.available}실`}</span>
@@ -304,6 +310,7 @@ function InventoryRow({
             확정 {cell.reserved} · 한도 {cell.sellLimit}
           </small>
           <strong>{money(cell.price)}</strong>
+          {cell.websiteClosed&&<mark>WEB OFF</mark>}
           {mapped.slice(0, 2).map((mapping) => {
             const rate = cell.channelRates.find(
                 (item) => item.mapping_id === mapping.id,
@@ -384,6 +391,7 @@ function BulkInventoryModal({
       closed: editor.cell ? String(editor.cell.closed) : "false",
       cta: editor.cell ? String(editor.cell.cta) : "false",
       ctd: editor.cell ? String(editor.cell.ctd) : "false",
+      websiteClosed: editor.cell ? String(editor.cell.websiteClosed) : "",
       channelSellRate: rate ? String(rate.sell_rate) : "",
       channelNetRate: rate?.net_rate == null ? "" : String(rate.net_rate),
     }),
@@ -553,6 +561,14 @@ function BulkInventoryModal({
                   set("closed", String(event.target.checked))
                 }
               />
+            </label>
+            <label>
+              <span>공식 홈페이지 노출</span>
+              <select value={form.websiteClosed} onChange={(event)=>set("websiteClosed",event.target.value)}>
+                {!single&&<option value="">기존 설정 유지</option>}
+                <option value="false">노출 · 직접 예약 허용</option>
+                <option value="true">숨김 · 직접 예약 중지</option>
+              </select>
             </label>
             <label className="toggle-field">
               <span>도착 제한 CTA</span>

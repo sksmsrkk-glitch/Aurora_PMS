@@ -1,4 +1,9 @@
 :root{--hotel-ink:#151b26;--hotel-muted:#687385;--hotel-line:#e7ebf0;--hotel-blue:#2764e7;--hotel-night:#091426;--hotel-mint:#8ff1cf}
+/* CMS-provided imagery and validation states intentionally layer over the base art. */
+.hotel-hero.has-cms-image{background-position:center;background-size:cover}.hotel-hero.has-cms-image .aurora-sky{opacity:.48}
+.hotel-search-error{position:absolute;right:24px;bottom:-28px;margin:0;padding:7px 10px;border-radius:8px;color:#fff;background:#b42318;font-size:10px;box-shadow:0 8px 24px #0002}
+.cms-room-image{background-position:center;background-size:cover}.cms-room-image:before,.cms-room-image:after{display:none}
+.experience-body{max-width:760px;margin:30px 0 0;color:rgba(255,255,255,.68);font-size:14px;line-height:1.8}
 .hotel-site,.booking-page{min-height:100dvh;color:var(--hotel-ink);background:#fbfcfe;font-family:var(--aurora-font-product)}
 .hotel-site *,.booking-page *{box-sizing:border-box}
 .hotel-site a,.booking-page a{text-decoration:none;color:inherit}

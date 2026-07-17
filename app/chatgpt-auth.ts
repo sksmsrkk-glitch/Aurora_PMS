@@ -1,3 +1,4 @@
+/** Legacy ChatGPT-host identity helper retained for compatible deployments. */
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 

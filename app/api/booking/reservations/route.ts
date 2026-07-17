@@ -1,3 +1,4 @@
+/** Public create/cancel booking HTTP contract with sanitized errors. */
 import type { NextRequest } from "next/server";
 import { allowBookingRequest, isSameOrigin, publicBookingError } from "../guard";
 import { BookingError, cancelWebReservation, createWebReservation, findWebReservationByIdempotency, type ReservationInput } from "../service";

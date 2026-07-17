@@ -1,3 +1,4 @@
+/** Direct-booking create, replay, cancel and inventory-restoration E2E. */
 import assert from "node:assert/strict";
 
 const baseUrl=(process.env.PMS_BASE_URL||"http://localhost:3000").replace(/\/$/u,"");

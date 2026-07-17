@@ -1,3 +1,5 @@
+/** Extended PMS domains: inventory, accounting, channels and website CMS. */
+import { Buffer } from "node:buffer";
 import type {
   PmsDatabase,
   PmsPreparedStatement,
@@ -48,6 +50,58 @@ const parseJsonArray = (value: string | undefined) => {
     return [] as string[];
   }
 };
+
+const storageBindings = () => ({
+  url: process.env.SUPABASE_URL?.replace(/\/$/u, ""),
+  key: process.env.SUPABASE_SECRET_KEY,
+});
+
+function requiredCmsText(value: string | undefined, label: string, maximum: number) {
+  const text = (value || "").trim();
+  if (!text || text.length > maximum) throw new PmsExtendedError(`${label}은(는) 1~${maximum}자로 입력하세요.`);
+  return text;
+}
+
+export async function loadWebsiteAdmin(db: PmsDatabase, propertyId: string) {
+  const [settings, rooms, media] = await db.batch([
+    db.prepare("SELECT * FROM website_settings WHERE property_id=? LIMIT 1").bind(propertyId),
+    db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rt.description,rt.active,rw.published,rw.display_order,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.version website_version FROM room_types rt LEFT JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id=? ORDER BY COALESCE(rw.published,0) DESC,COALESCE(rw.display_order,9999),rt.code").bind(propertyId),
+    db.prepare("SELECT * FROM website_media WHERE property_id=? AND active=1 ORDER BY scope,room_type_id,sort_order,created_at").bind(propertyId),
+  ]);
+  return { settings: settings.results[0] || null, rooms: rooms.results, media: media.results };
+}
+
+async function uploadWebsiteObject(dataUrl: string, filename: string, propertyId: string) {
+  const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/u.exec(dataUrl);
+  if (!match) throw new PmsExtendedError("JPEG, PNG 또는 WebP 이미지를 선택하세요.");
+  const bytes = Buffer.from(match[2], "base64");
+  // Base64 JSON adds roughly 33% overhead, so 3MB stays below Vercel's request-body ceiling.
+  if (!bytes.length || bytes.length > 3 * 1024 * 1024) throw new PmsExtendedError("이미지는 3MB 이하만 업로드할 수 있습니다.", 413);
+  const extension = match[1] === "image/jpeg" ? "jpg" : match[1].split("/")[1];
+  const stem = filename.replace(/\.[^.]+$/u, "").replace(/[^A-Za-z0-9_-]+/gu, "-").slice(0, 40) || "image";
+  const objectPath = `${propertyId}/${Date.now()}-${crypto.randomUUID()}-${stem}.${extension}`;
+  const bindings = storageBindings();
+  if (!bindings.url || !bindings.key) throw new PmsExtendedError("Supabase Storage 연결이 설정되지 않았습니다.", 503);
+  const encodedPath = objectPath.split("/").map(encodeURIComponent).join("/");
+  const response = await fetch(`${bindings.url}/storage/v1/object/hotel-media/${encodedPath}`, {
+    method: "POST",
+    headers: { apikey: bindings.key, authorization: `Bearer ${bindings.key}`, "content-type": match[1], "x-upsert": "false" },
+    body: bytes,
+  });
+  if (!response.ok) throw new PmsExtendedError(`이미지 저장에 실패했습니다. (${response.status})`, 502);
+  return { objectPath, publicUrl: `${bindings.url}/storage/v1/object/public/hotel-media/${encodedPath}` };
+}
+
+async function deleteWebsiteObject(objectPath: string) {
+  const bindings = storageBindings();
+  if (!bindings.url || !bindings.key) throw new PmsExtendedError("Supabase Storage 연결이 설정되지 않았습니다.", 503);
+  const encodedPath = objectPath.split("/").map(encodeURIComponent).join("/");
+  const response = await fetch(`${bindings.url}/storage/v1/object/hotel-media/${encodedPath}`, {
+    method: "DELETE",
+    headers: { apikey: bindings.key, authorization: `Bearer ${bindings.key}` },
+  });
+  if (!response.ok && response.status !== 404) throw new PmsExtendedError(`이미지 삭제에 실패했습니다. (${response.status})`, 502);
+}
 
 function validateRange(from: string, to: string, maxDays: number) {
   if (!validDate(from) || !validDate(to) || from > to)
@@ -153,6 +207,7 @@ export async function loadInventoryCalendar(
           reserved,
           available: closed ? 0 : Math.max(0, sellLimit - reserved),
           closed,
+          websiteClosed: Boolean(control?.website_closed),
           minStay: Number(control?.min_stay ?? 1),
           cta: Boolean(control?.close_to_arrival),
           ctd: Boolean(control?.close_to_departure),
@@ -414,6 +469,91 @@ export async function handleExtendedAction(
 ) {
   const actor = principal.email;
   const propertyId = principal.propertyId;
+  if (body.action === "update_website_settings") {
+    const current = await db.prepare("SELECT * FROM website_settings WHERE property_id=?").bind(propertyId).first<Record<string, unknown>>();
+    if (!current) throw new PmsExtendedError("홈페이지 설정이 초기화되지 않았습니다.", 409);
+    const version = Math.trunc(asNumber(body.version, "설정 버전", 1));
+    if (version !== Number(current.version)) throw new PmsExtendedError("다른 관리자가 먼저 수정했습니다. 새로고침 후 다시 저장하세요.", 409);
+    const values = {
+      hotelName: requiredCmsText(body.hotelName, "호텔명", 100),
+      brandEyebrow: requiredCmsText(body.brandEyebrow, "브랜드 문구", 120),
+      heroTitle: requiredCmsText(body.heroTitle, "메인 제목", 160),
+      heroSubtitle: requiredCmsText(body.heroSubtitle, "메인 설명", 500),
+      overviewTitle: requiredCmsText(body.overviewTitle, "객실 섹션 제목", 160),
+      overviewBody: requiredCmsText(body.overviewBody, "객실 섹션 설명", 500),
+      experienceTitle: requiredCmsText(body.experienceTitle, "경험 섹션 제목", 160),
+      experienceBody: requiredCmsText(body.experienceBody, "경험 섹션 설명", 500),
+      locationTitle: requiredCmsText(body.locationTitle, "위치 섹션 제목", 160),
+      locationBody: requiredCmsText(body.locationBody, "위치 섹션 설명", 500),
+      address: requiredCmsText(body.address, "주소", 300),
+      phone: requiredCmsText(body.phone, "전화번호", 40),
+      email: requiredCmsText(body.email, "이메일", 254),
+      checkinTime: /^\d{2}:\d{2}$/u.test(body.checkinTime || "") ? body.checkinTime : "15:00",
+      checkoutTime: /^\d{2}:\d{2}$/u.test(body.checkoutTime || "") ? body.checkoutTime : "11:00",
+      published: body.published === "true" ? 1 : 0,
+    };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(values.email)) throw new PmsExtendedError("홈페이지 문의 이메일을 확인하세요.");
+    const statements: PmsPreparedStatement[] = [
+      db.prepare("UPDATE website_settings SET hotel_name=?,brand_eyebrow=?,hero_title=?,hero_subtitle=?,overview_title=?,overview_body=?,experience_title=?,experience_body=?,location_title=?,location_body=?,address=?,phone=?,email=?,checkin_time=?,checkout_time=?,published=?,version=version+1,updated_at=?,updated_by=? WHERE property_id=? AND version=?").bind(values.hotelName,values.brandEyebrow,values.heroTitle,values.heroSubtitle,values.overviewTitle,values.overviewBody,values.experienceTitle,values.experienceBody,values.locationTitle,values.locationBody,values.address,values.phone,values.email,values.checkinTime,values.checkoutTime,values.published,now,actor,propertyId,version),
+      audit(db,propertyId,actor,"UPDATE_WEBSITE_SETTINGS","website_settings",propertyId,{...values,version:version+1},now),
+    ];
+    const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);
+    await db.batch(statements);
+    return true;
+  }
+  if (body.action === "update_room_type_website") {
+    const roomType = await db.prepare("SELECT * FROM room_types WHERE id=? AND property_id=? AND active=1").bind(body.roomTypeId,propertyId).first<Record<string, unknown>>();
+    if (!roomType) throw new PmsExtendedError("활성 객실 타입을 찾지 못했습니다.", 404);
+    const current = await db.prepare("SELECT * FROM room_type_website WHERE property_id=? AND room_type_id=?").bind(propertyId,body.roomTypeId).first<Record<string, unknown>>();
+    if (current && Number(body.version) !== Number(current.version)) throw new PmsExtendedError("다른 관리자가 먼저 객실 콘텐츠를 수정했습니다.", 409);
+    const amenities=parseJsonArray(body.amenities).map(item=>item.trim()).filter(Boolean).slice(0,20);
+    const values={
+      marketingName:requiredCmsText(body.marketingName,"홈페이지 객실명",100),
+      shortDescription:requiredCmsText(body.shortDescription,"짧은 객실 소개",300),
+      longDescription:requiredCmsText(body.longDescription,"상세 객실 소개",2000),
+      displayOrder:Math.trunc(asNumber(body.displayOrder||"0","노출 순서")),
+      published:body.published==="true"?1:0,
+    };
+    const statements:PmsPreparedStatement[]=[
+      db.prepare("INSERT INTO room_type_website(property_id,room_type_id,published,display_order,marketing_name,short_description,long_description,amenities_json,version,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(property_id,room_type_id) DO UPDATE SET published=excluded.published,display_order=excluded.display_order,marketing_name=excluded.marketing_name,short_description=excluded.short_description,long_description=excluded.long_description,amenities_json=excluded.amenities_json,version=room_type_website.version+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by").bind(propertyId,body.roomTypeId,values.published,values.displayOrder,values.marketingName,values.shortDescription,values.longDescription,JSON.stringify(amenities),now,actor),
+      audit(db,propertyId,actor,"UPDATE_ROOM_WEBSITE","room_type_website",body.roomTypeId,{...values,amenities},now),
+    ];
+    const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);
+    await db.batch(statements);
+    return true;
+  }
+  if (body.action === "upload_website_media") {
+    const scope=body.scope==="ROOM_TYPE"?"ROOM_TYPE":"HOTEL",role=["HERO","GALLERY","CARD"].includes(body.role)?body.role:"GALLERY";
+    const roomTypeId=scope==="ROOM_TYPE"?body.roomTypeId:null;
+    if (roomTypeId&&!await db.prepare("SELECT id FROM room_types WHERE id=? AND property_id=? AND active=1").bind(roomTypeId,propertyId).first()) throw new PmsExtendedError("이미지를 연결할 객실 타입을 찾지 못했습니다.");
+    const altText=requiredCmsText(body.altText,"이미지 대체 설명",180);
+    const uploaded=await uploadWebsiteObject(body.dataUrl||"",body.filename||"image",propertyId);
+    const id=crypto.randomUUID(),sortOrder=Math.trunc(asNumber(body.sortOrder||"0","이미지 순서"));
+    try {
+      const statements:PmsPreparedStatement[]=[
+        db.prepare("INSERT INTO website_media(id,property_id,scope,room_type_id,role,object_path,public_url,alt_text,sort_order,active,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)").bind(id,propertyId,scope,roomTypeId,role,uploaded.objectPath,uploaded.publicUrl,altText,sortOrder,now,actor),
+        audit(db,propertyId,actor,"UPLOAD_WEBSITE_MEDIA","website_media",id,{scope,roomTypeId,role,altText,sortOrder},now),
+      ];
+      const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);
+      await db.batch(statements);
+    } catch (error) {
+      await deleteWebsiteObject(uploaded.objectPath).catch(()=>undefined);
+      throw error;
+    }
+    return true;
+  }
+  if (body.action === "delete_website_media") {
+    const media=await db.prepare("SELECT * FROM website_media WHERE id=? AND property_id=? AND active=1").bind(body.mediaId,propertyId).first<Record<string,unknown>>();
+    if(!media)throw new PmsExtendedError("삭제할 홈페이지 이미지를 찾지 못했습니다.",404);
+    await deleteWebsiteObject(String(media.object_path));
+    const statements:PmsPreparedStatement[]=[
+      db.prepare("DELETE FROM website_media WHERE id=? AND property_id=?").bind(body.mediaId,propertyId),
+      audit(db,propertyId,actor,"DELETE_WEBSITE_MEDIA","website_media",body.mediaId,{publicUrl:media.public_url},now),
+    ];
+    const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);
+    await db.batch(statements);
+    return true;
+  }
   if (body.action === "bulk_update_inventory_controls") {
     const from = body.from,
       to = body.to;
@@ -515,11 +655,17 @@ export async function handleExtendedAction(
               ? Number(prior?.close_to_departure ?? 0)
               : body.ctd === "true"
                 ? 1
+                : 0,
+          websiteClosed =
+            body.websiteClosed === "" || body.websiteClosed == null
+              ? Number(prior?.website_closed ?? 0)
+              : body.websiteClosed === "true"
+                ? 1
                 : 0;
         statements.push(
           db
             .prepare(
-              "INSERT INTO inventory_controls(id,property_id,room_type_id,stay_date,sell_limit,closed,min_stay,close_to_arrival,close_to_departure,price_override,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(property_id,room_type_id,stay_date) DO UPDATE SET sell_limit=excluded.sell_limit,closed=excluded.closed,min_stay=excluded.min_stay,close_to_arrival=excluded.close_to_arrival,close_to_departure=excluded.close_to_departure,price_override=excluded.price_override,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
+              "INSERT INTO inventory_controls(id,property_id,room_type_id,stay_date,sell_limit,closed,min_stay,close_to_arrival,close_to_departure,price_override,website_closed,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(property_id,room_type_id,stay_date) DO UPDATE SET sell_limit=excluded.sell_limit,closed=excluded.closed,min_stay=excluded.min_stay,close_to_arrival=excluded.close_to_arrival,close_to_departure=excluded.close_to_departure,price_override=excluded.price_override,website_closed=excluded.website_closed,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
             )
             .bind(
               String(prior?.id || crypto.randomUUID()),
@@ -532,6 +678,7 @@ export async function handleExtendedAction(
               cta,
               ctd,
               price,
+              websiteClosed,
               now,
               actor,
             ),

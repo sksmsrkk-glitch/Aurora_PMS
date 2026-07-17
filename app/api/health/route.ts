@@ -1,3 +1,4 @@
+/** Secret-free readiness and database latency probe. */
 import { getPmsDatabase, type PmsRuntimeBindings } from "../../../db/pms-database";
 
 export const runtime = "nodejs";
