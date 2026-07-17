@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ListSearch } from "./list-search";
+import { usePmsActions } from "./pms-action-context";
 
 type Account = {
   id: string;
@@ -112,12 +113,11 @@ const accountType: Record<string, string> = {
 export default function AccountingCenter({
   businessDate,
   canWrite,
-  act,
 }: {
   businessDate: string;
   canWrite: boolean;
-  act: (action: string, payload: Record<string, string>) => Promise<boolean>;
 }) {
+  const { act } = usePmsActions();
   // The range is applied explicitly so journal and settlement KPIs always come from
   // one server projection. Local search narrows visible journal headers only and
   // deliberately does not recalculate the authoritative period totals.
