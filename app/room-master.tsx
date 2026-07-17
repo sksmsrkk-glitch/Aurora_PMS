@@ -4,6 +4,7 @@
 
 import { useMemo, useState } from "react";
 import { ListSearch } from "./list-search";
+import { usePmsActions } from "./pms-action-context";
 
 type RoomType={id:string;code:string;name:string;base_rate:number;capacity:number;description?:string;active?:number|boolean;version:number;physical:number};
 type Room={id:string;number:string;floor:number;room_type_id:string;room_type_code:string;room_type_name:string;front_desk_status:string;housekeeping_status:string;features?:string;active?:number|boolean;version?:number};
@@ -12,7 +13,8 @@ const money=(value:number)=>new Intl.NumberFormat("ko-KR",{style:"currency",curr
 const isActive=(value:number|boolean|undefined)=>value!==0&&value!==false;
 function featureText(value?:string){try{const parsed=JSON.parse(value||"[]");return Array.isArray(parsed)?parsed.join(", "):String(value||"");}catch{return String(value||"");}}
 
-export default function RoomMaster({types,rooms,canAdmin,busy,act}:{types:RoomType[];rooms:Room[];canAdmin:boolean;busy:string;act:(action:string,payload:Record<string,string>)=>Promise<boolean>}){
+export default function RoomMaster({types,rooms,canAdmin}:{types:RoomType[];rooms:Room[];canAdmin:boolean}){
+  const {busy,act}=usePmsActions();
   const [tab,setTab]=useState<"types"|"rooms">("types"),[query,setQuery]=useState(""),[editor,setEditor]=useState<Editor>(null);
   const filteredTypes=useMemo(()=>{const keyword=query.trim().toLowerCase();return types.filter(type=>!keyword||`${type.code} ${type.name} ${type.description||""}`.toLowerCase().includes(keyword));},[types,query]);
   const filtered=useMemo(()=>{const keyword=query.toLowerCase();return rooms.filter(room=>!keyword||`${room.number} ${room.room_type_code} ${room.room_type_name} ${room.floor}`.toLowerCase().includes(keyword));},[rooms,query]);

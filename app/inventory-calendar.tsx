@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ListSearch } from "./list-search";
+import { usePmsActions } from "./pms-action-context";
 
 type ChannelRate = {
   mapping_id: string;
@@ -73,12 +74,11 @@ const weekdays = ["일", "월", "화", "수", "목", "금", "토"];
 export default function RevenueInventoryCalendar({
   businessDate,
   canWrite,
-  act,
 }: {
   businessDate: string;
   canWrite: boolean;
-  act: (action: string, payload: Record<string, string>) => Promise<boolean>;
 }) {
+  const { act } = usePmsActions();
   // Draft dates stay separate from `applied`: changing an input must not trigger a
   // server projection until the user submits or chooses a preset. This keeps wide
   // multi-month calendars from refetching on every intermediate edit.

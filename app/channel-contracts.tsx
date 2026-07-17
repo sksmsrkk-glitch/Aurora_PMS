@@ -4,6 +4,7 @@
 
 import { useMemo, useState } from "react";
 import { ListSearch } from "./list-search";
+import { usePmsActions } from "./pms-action-context";
 
 type Connection = {
   id: string;
@@ -32,14 +33,13 @@ export default function ChannelContracts({
   contracts,
   businessDate,
   canWrite,
-  act,
 }: {
   connections: Connection[];
   contracts: Contract[];
   businessDate: string;
   canWrite: boolean;
-  act: (action: string, payload: Record<string, string>) => Promise<boolean>;
 }) {
+  const { act } = usePmsActions();
   const [selected, setSelected] = useState<Connection | null>(null);
   const [query, setQuery] = useState("");
   // Search starts from connections rather than contracts so a newly connected OTA

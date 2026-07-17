@@ -3,6 +3,7 @@
 /** PMS website CMS for hotel copy, room merchandising and managed media. */
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ListSearch } from "./list-search";
+import { usePmsActions } from "./pms-action-context";
 
 type Settings = Record<string, string | number> & { version:number;published:number };
 type WebsiteRoom = {
@@ -32,7 +33,8 @@ function parsedAmenities(value:string|null) {
   try { const parsed=JSON.parse(value||"[]");return Array.isArray(parsed)?parsed.join(", "):""; } catch { return ""; }
 }
 
-export default function HomepageManager({canAdmin,busy,act}:{canAdmin:boolean;busy:string;act:(action:string,payload:Record<string,string>)=>Promise<boolean>}) {
+export default function HomepageManager({canAdmin}:{canAdmin:boolean}) {
+  const {busy,act}=usePmsActions();
   const [data,setData]=useState<WebsiteAdmin|null>(null);
   const [error,setError]=useState("");
   const [tab,setTab]=useState<"hotel"|"rooms"|"media">("hotel");

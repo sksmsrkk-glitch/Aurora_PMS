@@ -1,0 +1,35 @@
+/** Behavioral contracts for registry-driven PMS command validation and errors. */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { actionRegistry, registrationFor } from "../app/api/pms/action-registry.ts";
+import { mapPmsError } from "../app/api/pms/error-map.ts";
+
+test("every registered action has one capability, domain, and Zod schema",()=>{
+  assert.equal(actionRegistry.size,51);
+  for(const [action,registration] of actionRegistry){
+    assert.equal(registration.action,action);
+    assert.ok(registration.capability);
+    assert.ok(registration.domain);
+    assert.equal(typeof registration.schema.safeParse({action}).success,"boolean");
+  }
+});
+
+test("Zod rejects malformed commands before a domain handler runs",()=>{
+  const registration=registrationFor("create_reservation");
+  assert.ok(registration);
+  const invalid=registration.schema.safeParse({action:"create_reservation",arrivalDate:"17/07/2026"});
+  assert.equal(invalid.success,false);
+  const valid=registration.schema.safeParse({
+    action:"create_reservation",firstName:"Aurora",lastName:"Guest",
+    arrivalDate:"2026-08-01",departureDate:"2026-08-02",roomTypeId:"rt-dlx",
+  });
+  assert.equal(valid.success,true);
+  assert.equal(registrationFor("raw_sql"),undefined);
+});
+
+test("database errors map through a stable table instead of includes branches",()=>{
+  assert.deepEqual(mapPmsError("duplicate key violates room_night_uq"),{
+    status:409,error:"선택한 객실은 해당 일정에 이미 예약되어 있습니다. 다른 객실을 선택하세요.",
+  });
+  assert.equal(mapPmsError("unexpected driver fault"),null);
+});

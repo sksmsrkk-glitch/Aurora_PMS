@@ -2,13 +2,15 @@
 import type { NextRequest } from "next/server";
 import { allowBookingRequest, isSameOrigin, publicBookingError } from "../guard";
 import { BookingError, cancelWebReservation, createWebReservation, findWebReservationByIdempotency, type ReservationInput } from "../service";
+import { rateLimitHeaders } from "../../rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function rejectedRequest(request: NextRequest) {
+async function rejectedRequest(request: NextRequest) {
   if (!isSameOrigin(request)) return Response.json({ error: "허용되지 않은 요청입니다.", code: "ORIGIN_REJECTED" }, { status: 403 });
-  if (!allowBookingRequest(request, "write")) return Response.json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", code: "RATE_LIMITED" }, { status: 429, headers: { "Retry-After": "60" } });
+  const rateLimit=await allowBookingRequest(request,"write");
+  if (!rateLimit.allowed) return Response.json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", code: "RATE_LIMITED" }, { status: 429, headers: rateLimitHeaders(rateLimit) });
   return null;
 }
 
@@ -19,7 +21,8 @@ async function jsonBody(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const rejected = rejectedRequest(request);
+  let rejected:Response|null;
+  try { rejected=await rejectedRequest(request); } catch(error) { return publicBookingError(error); }
   if (rejected) return rejected;
   const idempotencyKey = request.headers.get("idempotency-key") || "";
   if (!/^[A-Za-z0-9._:-]{8,200}$/u.test(idempotencyKey)) return Response.json({ error: "안전한 예약 처리를 위해 예약 요청 키가 필요합니다.", code: "IDEMPOTENCY_REQUIRED" }, { status: 400 });
@@ -39,7 +42,8 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const rejected = rejectedRequest(request);
+  let rejected:Response|null;
+  try { rejected=await rejectedRequest(request); } catch(error) { return publicBookingError(error); }
   if (rejected) return rejected;
   try {
     const result = await cancelWebReservation(await jsonBody(request));

@@ -20,17 +20,29 @@ function parseEnv(contents) {
   return values;
 }
 
-const env = parseEnv(await readFile(path.join(root,".env.local"),"utf8"));
-const directUrl = env.DIRECT_URL;
-if (!directUrl || !/^postgres(?:ql)?:\/\//u.test(directUrl)) throw new Error("DIRECT_URL is missing or invalid in .env.local");
+let env = {};
+try {
+  env = parseEnv(await readFile(path.join(root,".env.local"),"utf8"));
+} catch (error) {
+  // CI supplies DIRECT_URL directly and intentionally has no developer env file.
+  if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+}
+const directUrl = process.env.DIRECT_URL || env.DIRECT_URL;
+if (!directUrl || !/^postgres(?:ql)?:\/\//u.test(directUrl)) throw new Error("DIRECT_URL is missing or invalid");
 
-const sql = postgres(directUrl, { max:1, prepare:false, ssl:"require", connect_timeout:15, idle_timeout:5 });
+const directHost=new URL(directUrl).hostname;
+const sql = postgres(directUrl, { max:1, prepare:false, ssl:/^(?:localhost|127\.0\.0\.1)$/u.test(directHost)?false:"require", connect_timeout:15, idle_timeout:5 });
 try {
   await sql`CREATE TABLE IF NOT EXISTS pms_schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
   const migrationsDirectory=path.join(root,"supabase","migrations");
   const migrations=(await readdir(migrationsDirectory)).filter((name)=>/^\d+_.+\.sql$/u.test(name)).sort();
+  const migrationMax=process.env.PMS_MIGRATION_MAX || "";
   for(const migrationFile of migrations){
     const migrationId=migrationFile.replace(/\.sql$/u,"");
+    if(migrationMax&&migrationId.localeCompare(migrationMax,"en")>0){
+      console.log(`Deferred migration ${migrationId} after ${migrationMax}.`);
+      continue;
+    }
     const applied = await sql`SELECT id FROM pms_schema_migrations WHERE id=${migrationId}`;
     if (!applied.length) {
       const migration = await readFile(path.join(migrationsDirectory,migrationFile),"utf8");
@@ -47,7 +59,9 @@ try {
   const [summary] = await sql`
     SELECT
       (SELECT COUNT(*)::int FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE') table_count,
-      (SELECT COUNT(*)::int FROM pg_trigger WHERE NOT tgisinternal) trigger_count,
+      -- Supabase-managed schemas can add or remove platform triggers independently
+      -- of Aurora releases, so readiness reports only application-owned triggers.
+      (SELECT COUNT(*)::int FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname='public') trigger_count,
       (SELECT COUNT(*)::int FROM properties) property_count,
       (SELECT COUNT(*)::int FROM room_types) room_type_count,
       (SELECT COUNT(*)::int FROM rooms) room_count,

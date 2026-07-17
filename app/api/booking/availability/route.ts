@@ -1,15 +1,17 @@
 /** Public read-only availability HTTP contract. */
 import type { NextRequest } from "next/server";
 import { allowBookingRequest, publicBookingError } from "../guard";
+import { rateLimitHeaders } from "../../rate-limit";
 import { BookingError, getAvailability } from "../service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  if (!allowBookingRequest(request, "read")) return Response.json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", code: "RATE_LIMITED" }, { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "60" } });
-  const query = request.nextUrl.searchParams;
   try {
+    const rateLimit=await allowBookingRequest(request,"read");
+    if (!rateLimit.allowed) return Response.json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", code: "RATE_LIMITED" }, { status: 429, headers: { "Cache-Control": "no-store", ...rateLimitHeaders(rateLimit) } });
+    const query = request.nextUrl.searchParams;
     const availability = await getAvailability({
       arrival: query.get("arrival") || "",
       departure: query.get("departure") || "",

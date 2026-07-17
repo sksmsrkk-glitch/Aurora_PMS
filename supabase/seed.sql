@@ -3,10 +3,6 @@ INSERT INTO properties(id,name,code,timezone,currency,business_date)
 VALUES ('prop-seoul','오로라 서울 호텔','SEL01','Asia/Seoul','KRW','2026-07-16')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO role_assignments(id,property_id,email,role,active,created_at) VALUES
-  ('role-local-pms-admin','prop-seoul','pms@allmytour.com','PROPERTY_ADMIN',1,clock_timestamp()::text)
-ON CONFLICT (property_id,email) DO NOTHING;
-
 INSERT INTO room_types(id,property_id,code,name,base_rate,capacity,description,active,version) VALUES
   ('rt-dlx','prop-seoul','DLX','디럭스 킹',198000,2,'킹베드 기반의 대표 객실',1,1),
   ('rt-twn','prop-seoul','TWN','프리미어 트윈',228000,3,'가족 및 비즈니스 고객용 트윈',1,1),
@@ -90,4 +86,70 @@ INSERT INTO idempotency_keys(key,property_id,action,actor,created_at) VALUES
   ('system:inventory-triggers-v2','prop-seoul','SYSTEM_DDL','system',clock_timestamp()::text),
   ('system:group-triggers-v2','prop-seoul','SYSTEM_DDL','system',clock_timestamp()::text),
   ('system:financial-triggers-v2','prop-seoul','SYSTEM_DDL','system',clock_timestamp()::text)
-ON CONFLICT (key) DO NOTHING;
+-- Target-less conflict handling remains valid both before and after migration 010
+-- changes the key from global to property-scoped uniqueness.
+ON CONFLICT DO NOTHING;
+
+-- Website projection seed belongs here rather than in a schema migration. The
+-- migration runner applies every schema migration before this file, so a pristine
+-- database has its property and room types available when CMS rows are projected.
+INSERT INTO website_settings(
+  property_id,hotel_name,brand_eyebrow,hero_title,hero_subtitle,
+  overview_title,overview_body,experience_title,experience_body,
+  location_title,location_body,address,phone,email,checkin_time,
+  checkout_time,published,version,updated_at,updated_by
+)
+SELECT
+  p.id,'Aurora Hotel Seoul','URBAN NIGHTS, QUIETLY BRIGHT',
+  'A quiet glow in the heart of Seoul',
+  'Thoughtful rooms and warm service for a clearer stay.',
+  'Rooms designed around your time',
+  'Calm circulation, soft light, and practical details support both rest and focus.',
+  'From breakfast to the late lounge',
+  'Dining, lounge, and fitness experiences follow the natural pace of your stay.',
+  'A bright starting point in Seoul',
+  'Business, culture, and dining districts are within easy reach.',
+  '1 Aurora-ro, Jung-gu, Seoul','02-0000-2026','stay@aurora.hotel',
+  '15:00','11:00',1,1,clock_timestamp()::text,'system:seed'
+FROM properties p
+WHERE p.id='prop-seoul'
+ON CONFLICT (property_id) DO NOTHING;
+
+INSERT INTO room_type_website(
+  property_id,room_type_id,published,display_order,marketing_name,
+  short_description,long_description,amenities_json,version,updated_at,updated_by
+)
+SELECT
+  rt.property_id,rt.id,CASE WHEN rt.code IN ('DLX','TWN','STE') THEN 1 ELSE 0 END,
+  row_number() OVER (PARTITION BY rt.property_id ORDER BY rt.base_rate,rt.code)-1,
+  rt.name,rt.description,rt.description,
+  '["Complimentary Wi-Fi","Smart TV","Premium bedding"]',
+  1,clock_timestamp()::text,'system:seed'
+FROM room_types rt
+WHERE rt.property_id='prop-seoul' AND rt.active=1
+ON CONFLICT (property_id,room_type_id) DO NOTHING;
+
+-- Extended accounting was introduced after the base property schema. Re-project
+-- the chart of accounts here so a pristine database receives the same starter
+-- ledger configuration as an already-seeded database upgraded by the migration.
+INSERT INTO accounting_accounts(
+  id,property_id,code,name,account_type,category,department,created_at,updated_at
+)
+SELECT
+  'acct-'||p.id||'-'||v.code,p.id,v.code,v.name,v.account_type,v.category,
+  v.department,clock_timestamp()::text,clock_timestamp()::text
+FROM properties p
+CROSS JOIN (VALUES
+  ('1100','Cash and deposits','ASSET','CASH','FINANCE'),
+  ('1200','Channel receivables','ASSET','CHANNEL_RECEIVABLE','FINANCE'),
+  ('1300','Accounts receivable','ASSET','ACCOUNTS_RECEIVABLE','FINANCE'),
+  ('2100','Accounts payable','LIABILITY','ACCOUNTS_PAYABLE','FINANCE'),
+  ('2200','Channel commission payable','LIABILITY','CHANNEL_COMMISSION_PAYABLE','FINANCE'),
+  ('2300','Tax payable','LIABILITY','TAX_PAYABLE','FINANCE'),
+  ('4100','Room revenue','REVENUE','ROOM_REVENUE','ROOMS'),
+  ('4200','Other operating revenue','REVENUE','OTHER_REVENUE','OPERATIONS'),
+  ('5100','Channel distribution expense','EXPENSE','CHANNEL_DISTRIBUTION','SALES'),
+  ('5200','Hotel operating expense','EXPENSE','OPERATING_EXPENSE','OPERATIONS'),
+  ('5990','Adjustment gain or loss','EXPENSE','ADJUSTMENT','FINANCE')
+) AS v(code,name,account_type,category,department)
+ON CONFLICT (property_id,code) DO NOTHING;

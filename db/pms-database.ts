@@ -1,7 +1,7 @@
-/** Unified prepared-statement adapter for Supabase RPC, PostgreSQL and D1. */
+/** Server-only PostgreSQL adapter with transaction-scoped tenant isolation. */
 import postgres from "postgres";
-
-export type PmsDialect = "d1" | "postgres";
+import { compilePostgresParameters } from "./postgres-parameters.mjs";
+export { compilePostgresParameters } from "./postgres-parameters.mjs";
 
 export type PmsResult<T = Record<string, unknown>> = {
   results: T[];
@@ -17,119 +17,55 @@ export interface PmsPreparedStatement {
 }
 
 export interface PmsDatabase {
-  readonly dialect: PmsDialect;
   prepare(query: string): PmsPreparedStatement;
   batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]): Promise<PmsResult<T>[]>;
+  forProperty(propertyId: string): PmsDatabase;
 }
 
 /**
- * Applies the authenticated property's scope to legacy SQL that still names the
- * seed property. The identifier is deliberately restricted before interpolation;
- * parameter binding cannot be used for a SQL literal that is embedded in existing
- * statements. This is defense in depth—the API must still authorize the principal
- * for the same property before obtaining this adapter.
+ * Creates a database view that applies SET LOCAL app.property_id and the
+ * NOBYPASSRLS aurora_app role inside every statement transaction.
  */
 export function scopePmsDatabase(database: PmsDatabase, propertyId: string): PmsDatabase {
   if (!/^[A-Za-z0-9_-]{1,64}$/u.test(propertyId)) throw new Error("Invalid property scope");
-  const quotedPropertyId = `'${propertyId}'`;
-  return {
-    dialect: database.dialect,
-    prepare(query: string) {
-      return database.prepare(query.replaceAll("'prop-seoul'", quotedPropertyId));
-    },
-    batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]) {
-      return database.batch<T>(statements);
-    },
-  };
+  return database.forProperty(propertyId);
 }
 
 export type PmsRuntimeBindings = {
-  DB?: D1Database;
   DATABASE_URL?: string;
-  SUPABASE_URL?: string;
-  SUPABASE_SECRET_KEY?: string;
 };
 
 type PostgresExecutor = postgres.Sql | postgres.TransactionSql;
 
-/**
- * Converts D1-style positional placeholders without touching question marks in
- * SQL string or identifier literals. A regular-expression replacement would
- * corrupt notes, JSON paths, and other legitimate literal values.
- */
-function replaceQuestionPlaceholders(query: string) {
-  let index = 0;
-  let singleQuoted = false;
-  let doubleQuoted = false;
-  let output = "";
+const tenantTables = [
+  "properties", "room_types", "rooms", "guests", "reservations",
+  "reservation_nights", "reservation_type_nights", "reservation_rate_nights",
+  "booking_requests", "folio_entries", "folio_entry_details", "folio_windows",
+  "folio_routing_rules", "transaction_codes", "housekeeping_tasks", "audit_logs",
+  "outbox_events", "idempotency_keys", "cashier_sessions", "night_audits",
+  "reservation_transitions", "reservation_mutations", "inventory_controls",
+  "room_moves", "account_profiles", "business_blocks", "block_inventory",
+  "block_pickup_nights", "rooming_list_entries", "ar_accounts", "ar_invoices",
+  "ar_ledger_entries", "channel_connections", "channel_mappings", "ari_updates",
+  "channel_reservation_links", "inbound_channel_messages",
+  "integration_delivery_attempts", "report_exports", "channel_contracts",
+  "channel_rate_overrides", "channel_settlements", "accounting_accounts",
+  "accounting_journal_entries", "accounting_journal_lines", "website_settings",
+  "room_type_website", "website_media", "role_assignments",
+] as const;
+const tenantTablePattern = new RegExp(`\\b(?:${tenantTables.join("|")})\\b`, "iu");
 
-  for (let position = 0; position < query.length; position += 1) {
-    const character = query[position];
-    const next = query[position + 1];
-
-    if (character === "'" && !doubleQuoted) {
-      output += character;
-      if (singleQuoted && next === "'") {
-        output += next;
-        position += 1;
-      } else {
-        singleQuoted = !singleQuoted;
-      }
-      continue;
-    }
-
-    if (character === '"' && !singleQuoted) {
-      doubleQuoted = !doubleQuoted;
-      output += character;
-      continue;
-    }
-
-    if (character === "?" && !singleQuoted && !doubleQuoted) {
-      index += 1;
-      output += `$${index}`;
-      continue;
-    }
-
-    output += character;
+function assertSafeRootQuery(query: string) {
+  if (!tenantTablePattern.test(query)) return;
+  const roleLookup =
+    /^\s*SELECT\b/iu.test(query) &&
+    /\bFROM\s+role_assignments\b/iu.test(query) &&
+    /\bemail\s*=\s*\?/iu.test(query) &&
+    /\bactive\s*=\s*1\b/iu.test(query) &&
+    !tenantTables.some((table) => table !== "role_assignments" && new RegExp(`\\b${table}\\b`, "iu").test(query));
+  if (!roleLookup) {
+    throw new Error("Tenant-scoped table access requires scopePmsDatabase()");
   }
-
-  return output;
-}
-
-/**
- * Translates the intentionally small SQLite/D1 compatibility surface used by the
- * PMS into PostgreSQL. Keep new rewrites explicit here: this is not a general SQL
- * parser, and silently accepting unsupported dialect syntax is more dangerous than
- * failing a deployment or test.
- */
-export function toPostgresSql(query: string) {
-  let sql = query.trim().replace(/;\s*$/u, "");
-  const ignoresConflict = /\bINSERT\s+OR\s+IGNORE\s+INTO\b/iu.test(sql);
-
-  sql = sql.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\b/giu, "INSERT INTO");
-  sql = sql.replace(
-    /date\(\(SELECT business_date FROM properties WHERE id='prop-seoul'\),\s*'\+13 day'\)/giu,
-    "to_char(((SELECT business_date FROM properties WHERE id='prop-seoul')::date + INTERVAL '13 day'), 'YYYY-MM-DD')",
-  );
-  sql = sql.replace(
-    /date\(stay_date,\s*'\+1 day'\)/giu,
-    "to_char(stay_date::date + INTERVAL '1 day', 'YYYY-MM-DD')",
-  );
-  sql = sql.replace(
-    /julianday\(r\.departure_date\)\s*-\s*julianday\(r\.arrival_date\)/giu,
-    "(r.departure_date::date - r.arrival_date::date)",
-  );
-  sql = replaceQuestionPlaceholders(sql);
-  sql = sql.replace(
-    /WITH RECURSIVE dates\(stay_date\) AS \(SELECT \$1 UNION ALL/iu,
-    "WITH RECURSIVE dates(stay_date) AS (SELECT $1::text UNION ALL",
-  );
-
-  if (ignoresConflict && !/\bON\s+CONFLICT\b/iu.test(sql)) {
-    sql += " ON CONFLICT DO NOTHING";
-  }
-
-  return sql;
 }
 
 class PostgresPreparedStatement implements PmsPreparedStatement {
@@ -159,180 +95,86 @@ class PostgresPreparedStatement implements PmsPreparedStatement {
   executeWith<T>(executor: PostgresExecutor) {
     return this.database.execute<T>(this.query, this.values, executor);
   }
+
+  belongsTo(database: PostgresDatabase) {
+    return this.database === database;
+  }
 }
 
 class PostgresDatabase implements PmsDatabase {
-  readonly dialect = "postgres" as const;
+  constructor(
+    private readonly client: postgres.Sql,
+    private readonly propertyId: string | null = null,
+  ) {}
 
-  constructor(private readonly client: postgres.Sql) {}
+  forProperty(propertyId: string) {
+    if (this.propertyId && this.propertyId !== propertyId) {
+      throw new Error("Cannot change an established property scope");
+    }
+    return new PostgresDatabase(this.client, propertyId);
+  }
 
   prepare(query: string) {
+    if (query.includes("'prop-seoul'")) {
+      throw new Error("Legacy property literal is forbidden; use pms_current_property_id()");
+    }
     return new PostgresPreparedStatement(this, query);
   }
 
-  async execute<T>(query: string, values: unknown[], executor: PostgresExecutor = this.client): Promise<PmsResult<T>> {
-    const rows = await executor.unsafe(toPostgresSql(query), values as never[]);
+  private async configureTenant(transaction: postgres.TransactionSql) {
+    if (!this.propertyId) return;
+    await transaction.unsafe("SET LOCAL ROLE aurora_app");
+    await transaction.unsafe(
+      "SELECT set_config('app.property_id', $1, true)",
+      [this.propertyId] as never[],
+    );
+  }
+
+  private async executeRaw<T>(
+    query: string,
+    values: unknown[],
+    executor: PostgresExecutor,
+  ): Promise<PmsResult<T>> {
+    const sql = compilePostgresParameters(query, values.length);
+    const rows = await executor.unsafe(sql, values as never[]);
     const resultRows = Array.from(rows) as T[];
     const changes = typeof rows.count === "number" ? rows.count : resultRows.length;
     return { results: resultRows, success: true, meta: { changes } };
   }
 
+  async execute<T>(
+    query: string,
+    values: unknown[],
+    executor?: PostgresExecutor,
+  ): Promise<PmsResult<T>> {
+    if (!this.propertyId) assertSafeRootQuery(query);
+    if (executor) return this.executeRaw<T>(query, values, executor);
+    if (!this.propertyId) return this.executeRaw<T>(query, values, this.client);
+
+    // SET LOCAL is transaction-bound, so a pooled connection can never retain a
+    // previous request's property id or application role.
+    return this.client.begin(async (transaction) => {
+      await this.configureTenant(transaction);
+      return this.executeRaw<T>(query, values, transaction);
+    });
+  }
+
   async batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]) {
     if (!statements.length) return [];
 
-    // One database transaction preserves the all-or-nothing semantics expected
-    // by reservation, inventory, audit, outbox, and accounting command batches.
+    // One PostgreSQL transaction preserves both tenant context and all-or-nothing
+    // reservation, inventory, audit, outbox, and accounting semantics.
     return this.client.begin(async (transaction) => {
+      await this.configureTenant(transaction);
       const results: PmsResult<T>[] = [];
       for (const statement of statements) {
-        if (!(statement instanceof PostgresPreparedStatement)) {
-          throw new Error("Cannot mix D1 and PostgreSQL statements in one batch");
+        if (!(statement instanceof PostgresPreparedStatement) || !statement.belongsTo(this)) {
+          throw new Error("Cannot batch a statement created by another database scope");
         }
         results.push(await statement.executeWith<T>(transaction));
       }
       return results;
     });
-  }
-}
-
-type SupabaseRpcResult<T> = { results?: T[]; changes?: number };
-
-class SupabasePreparedStatement implements PmsPreparedStatement {
-  constructor(
-    private readonly database: SupabaseHttpDatabase,
-    readonly query: string,
-    readonly values: unknown[] = [],
-  ) {}
-
-  bind(...values: unknown[]) {
-    return new SupabasePreparedStatement(this.database,this.query,values);
-  }
-
-  async first<T = Record<string, unknown>>() {
-    const result=await this.database.execute<T>(this.query,this.values);
-    return result.results[0] ?? null;
-  }
-
-  all<T = Record<string, unknown>>() {
-    return this.database.execute<T>(this.query,this.values);
-  }
-
-  run<T = Record<string, unknown>>() {
-    return this.database.execute<T>(this.query,this.values);
-  }
-}
-
-class SupabaseHttpDatabase implements PmsDatabase {
-  readonly dialect = "postgres" as const;
-
-  constructor(private readonly url:string,private readonly secretKey:string) {}
-
-  prepare(query:string) {
-    return new SupabasePreparedStatement(this,query);
-  }
-
-  private async rpc<T>(name:"pms_execute"|"pms_batch",body:Record<string,unknown>):Promise<T> {
-    // The service credential stays on the server. Browser code never calls these
-    // privileged RPCs directly, and error bodies are reduced to diagnostic fields.
-    const response=await fetch(`${this.url.replace(/\/$/u,"")}/rest/v1/rpc/${name}`,{
-      method:"POST",
-      headers:{
-        apikey:this.secretKey,
-        "content-type":"application/json",
-        accept:"application/json",
-        "x-client-info":"aurora-pms-worker/1.0",
-      },
-      body:JSON.stringify(body,(_key,value)=>value===undefined?null:value),
-    });
-    if(!response.ok){
-      let message=`Supabase Data API request failed (${response.status})`;
-      try {
-        const error=await response.json() as {message?:string;details?:string;hint?:string};
-        message=[error.message,error.details,error.hint].filter(Boolean).join(" · ")||message;
-      } catch { /* Keep the sanitized HTTP status message. */ }
-      throw new Error(message);
-    }
-    return await response.json() as T;
-  }
-
-  async execute<T>(query:string,values:unknown[]):Promise<PmsResult<T>> {
-    const payload=await this.rpc<SupabaseRpcResult<T>>("pms_execute",{p_sql:toPostgresSql(query),p_values:values});
-    const results=Array.isArray(payload.results)?payload.results:[];
-    return {results,success:true,meta:{changes:Number(payload.changes??results.length)}};
-  }
-
-  async batch<T = Record<string, unknown>>(statements:PmsPreparedStatement[]) {
-    if(!statements.length)return [];
-    const payload=statements.map((statement)=>{
-      if(!(statement instanceof SupabasePreparedStatement))throw new Error("Cannot mix database statement implementations in one batch");
-      return {sql:toPostgresSql(statement.query),values:statement.values};
-    });
-    // pms_batch owns the PostgreSQL transaction on the Supabase side; separating
-    // these into pms_execute calls would permit partially posted business commands.
-    const response=await this.rpc<SupabaseRpcResult<T>[]>("pms_batch",{p_statements:payload});
-    return response.map((item)=>{
-      const results=Array.isArray(item.results)?item.results:[];
-      return {results,success:true as const,meta:{changes:Number(item.changes??results.length)}};
-    });
-  }
-}
-
-class D1PreparedStatementAdapter implements PmsPreparedStatement {
-  constructor(private readonly statement: D1PreparedStatement) {}
-
-  bind(...values: unknown[]) {
-    return new D1PreparedStatementAdapter(this.statement.bind(...values));
-  }
-
-  first<T = Record<string, unknown>>() {
-    return this.statement.first<T>();
-  }
-
-  async all<T = Record<string, unknown>>() {
-    const result = await this.statement.all<T>();
-    return {
-      results: result.results ?? [],
-      success: true as const,
-      meta: { changes: Number(result.meta?.changes ?? 0) },
-    };
-  }
-
-  async run<T = Record<string, unknown>>() {
-    const result = await this.statement.run<T>();
-    return {
-      results: result.results ?? [],
-      success: true as const,
-      meta: { changes: Number(result.meta?.changes ?? 0) },
-    };
-  }
-
-  get native() {
-    return this.statement;
-  }
-}
-
-class D1DatabaseAdapter implements PmsDatabase {
-  readonly dialect = "d1" as const;
-
-  constructor(private readonly database: D1Database) {}
-
-  prepare(query: string) {
-    return new D1PreparedStatementAdapter(this.database.prepare(query));
-  }
-
-  async batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]) {
-    const native = statements.map((statement) => {
-      if (!(statement instanceof D1PreparedStatementAdapter)) {
-        throw new Error("Cannot mix PostgreSQL and D1 statements in one batch");
-      }
-      return statement.native;
-    });
-    const results = await this.database.batch<T>(native);
-    return results.map((result) => ({
-      results: result.results ?? [],
-      success: true as const,
-      meta: { changes: Number(result.meta?.changes ?? 0) },
-    }));
   }
 }
 
@@ -344,36 +186,29 @@ function processDatabaseUrl() {
   return process.env.DATABASE_URL;
 }
 
-function processSetting(name:"SUPABASE_URL"|"SUPABASE_SECRET_KEY") {
-  if (typeof process === "undefined") return undefined;
-  return process.env[name];
+export function getPmsDatabase(bindings: PmsRuntimeBindings): PmsDatabase {
+  const databaseUrl = bindings.DATABASE_URL || processDatabaseUrl();
+  if (!databaseUrl) throw new Error("PMS database is unavailable. Configure DATABASE_URL.");
+
+  if (!postgresClient || postgresUrl !== databaseUrl) {
+    const localDatabase = /^postgres(?:ql)?:\/\/[^/]+@(?:localhost|127\.0\.0\.1)(?::\d+)?\//iu.test(databaseUrl);
+    postgresClient = postgres(databaseUrl, {
+      max: 6,
+      prepare: false,
+      connect_timeout: 12,
+      idle_timeout: 20,
+      max_lifetime: 60 * 15,
+      ssl: localDatabase ? false : "require",
+      transform: { undefined: null },
+    });
+    postgresUrl = databaseUrl;
+  }
+  return new PostgresDatabase(postgresClient);
 }
 
-export function getPmsDatabase(bindings: PmsRuntimeBindings): PmsDatabase {
-  // Prefer the server-only Supabase RPC path, then a direct pooled PostgreSQL URL,
-  // and finally the local/edge D1 binding. Every branch exposes identical batch
-  // semantics so domain services do not depend on their deployment environment.
-  const supabaseUrl=bindings.SUPABASE_URL||processSetting("SUPABASE_URL");
-  const supabaseSecretKey=bindings.SUPABASE_SECRET_KEY||processSetting("SUPABASE_SECRET_KEY");
-  if(supabaseUrl&&supabaseSecretKey)return new SupabaseHttpDatabase(supabaseUrl,supabaseSecretKey);
-
-  const databaseUrl = bindings.DATABASE_URL || processDatabaseUrl();
-  if (databaseUrl) {
-    if (!postgresClient || postgresUrl !== databaseUrl) {
-      postgresClient = postgres(databaseUrl, {
-        max: 6,
-        prepare: false,
-        connect_timeout: 12,
-        idle_timeout: 20,
-        max_lifetime: 60 * 15,
-        ssl: "require",
-        transform: { undefined: null },
-      });
-      postgresUrl = databaseUrl;
-    }
-    return new PostgresDatabase(postgresClient);
-  }
-
-  if (bindings.DB) return new D1DatabaseAdapter(bindings.DB);
-  throw new Error("PMS database is unavailable. Configure DATABASE_URL or the DB binding.");
+/** Releases the shared pool during one-shot workers and integration test teardown. */
+export async function closePmsDatabase() {
+  if (postgresClient) await postgresClient.end({ timeout: 5 });
+  postgresClient = null;
+  postgresUrl = null;
 }

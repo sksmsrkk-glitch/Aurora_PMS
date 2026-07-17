@@ -376,7 +376,7 @@ function remember(
   return key
     ? db
         .prepare(
-          "INSERT OR IGNORE INTO idempotency_keys VALUES (?, ?, ?, ?, ?)",
+          "INSERT INTO idempotency_keys VALUES (?, ?, ?, ?, ?)",
         )
         .bind(key, propertyId, action, actor, now)
     : null;
