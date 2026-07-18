@@ -124,9 +124,10 @@ PMS 공통 shell은 workspace URL 사이에서 유지됩니다. 첫 화면은 `v
 | `npm run benchmark` | 기본 Snapshot 30 warm-up + 300 요청 성능 gate | 읽기 요청 |
 | `npm run qa:workflow` | 24 checkpoint end-to-end 업무 QA | staging proof 통과 후 QA 레코드 생성 |
 | `npm run qa:booking` | 공개 조회·예약·동일 key replay·취소·재고 원복·same-origin 방어 E2E | staging proof 통과 후 취소 상태 QA 예약 생성 |
+| `npm run qa:staff` | 관리자 직원 생성·최초 비밀번호 변경·페이지 조회/쓰기 차단·비활성화 전파 E2E | staging에서만 임시 계정 생성 후 비활성화 |
 | `npm run db:supabase:migrate` | 미적용 SQL migration 실행 | DB schema 변경 |
 | `npm run db:supabase:smoke` | Supabase 구조·RLS·pooler·RPC 부재·원장 검증 | rollback-only 검증 트랜잭션 |
-| `npm run db:provision-role` | 명시 confirmation·property·email·role로 운영자 assignment provisioning | 지정 사용자 권한 변경 |
+| `npm run db:provision-role` | 명시 confirmation·property·email·role·display name으로 운영자 assignment와 역할 템플릿 provisioning | 지정 사용자 권한 변경 |
 | `npm run db:test:bootstrap` | plain PostgreSQL에 CI용 Supabase role/storage 최소 표면 생성 | 전용 test DB만 변경 |
 
 ### 새 Command 추가 절차
@@ -393,3 +394,8 @@ Aurora_PMS/
 ├─ vercel.json                  # Vercel Function region icn1 + Fluid Compute
 └─ .vercelignore                # secret/local artifact upload exclusion
 ```
+### 직원 권한 개발 규칙
+
+새 workspace를 추가할 때는 `PMS_WORKSPACES`, `WORKSPACE_LABELS`, 9개 `ROLE_ACCESS_TEMPLATES`, DB JSONB CHECK, 읽기 route guard, write capability map을 한 변경에서 모두 갱신합니다. UI 버튼 숨김은 권한 경계가 아니므로 action registry capability와 GET projection guard가 반드시 동반되어야 합니다. 기존 root role lookup의 선택 컬럼·조건을 임의로 확장하지 말고, tenant 내부 직원 목록과 변경은 항상 `scopePmsDatabase()`를 사용합니다.
+
+직원 비밀번호를 fixture, README, 로그, mutation receipt에 기록하지 않습니다. QA 계정은 스테이징 Supabase에서만 생성하고 검증 직후 비활성화 또는 삭제합니다. 운영 계정 생성 E2E는 실제 사람의 명시적 요청 없이 수행하지 않습니다.

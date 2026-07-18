@@ -12,6 +12,7 @@ export const PMS_WORKSPACES = [
   "reports",
   "master",
   "revenue",
+  "users",
   "audit",
 ] as const;
 

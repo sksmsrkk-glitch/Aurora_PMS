@@ -22,6 +22,7 @@ const domainReadModels: Record<string, readonly string[]> = {
   accounting: ["accounting"],
   website: ["website", "hotel"],
   operations: ["operations", "reservations", "rooms", "finance"],
+  users: ["users"],
 };
 
 const entityIdFields = [
@@ -40,6 +41,7 @@ const entityIdFields = [
   "settlementId",
   "mediaId",
   "ratePlanId",
+  "assignmentId",
 ] as const;
 
 /**

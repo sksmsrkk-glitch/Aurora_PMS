@@ -18,6 +18,7 @@ import {
   pmsWorkspacePath,
   type PmsWorkspace,
 } from "../../pms-workspaces";
+import { canViewWorkspace, firstAccessibleWorkspace, ROLE_LABELS, type WorkspaceAccess } from "../../access-control";
 
 /** Heavy, workspace-specific clients are split out of the initial PMS bundle. */
 const workspaceLoading = () => <section className="panel module-loading" aria-live="polite"><b>화면을 준비하고 있습니다</b><p>선택한 업무 모듈만 빠르게 불러오고 있어요.</p></section>;
@@ -27,6 +28,7 @@ const RevenueInventoryCalendar = dynamic(() => import("../../inventory-calendar"
 const AccountingCenter = dynamic(() => import("../../accounting-center"), { loading: workspaceLoading });
 const ChannelContracts = dynamic(() => import("../../channel-contracts"), { loading: workspaceLoading });
 const HomepageManager = dynamic(() => import("../../homepage-manager"), { loading: workspaceLoading });
+const StaffAccessManager = dynamic(() => import("../../staff-access-manager"), { loading: workspaceLoading });
 
 /** Warms only the code chunk associated with a user's navigation intent. */
 function prefetchWorkspaceModule(workspace: PmsWorkspace) {
@@ -36,12 +38,13 @@ function prefetchWorkspaceModule(workspace: PmsWorkspace) {
   if (workspace === "channels") void import("../../channel-contracts");
   if (workspace === "reports") void import("../../reports-center");
   if (workspace === "master") void import("../../room-master");
+  if (workspace === "users") void import("../../staff-access-manager");
 }
 
 type Reservation = { id:string; confirmation_no:string; first_name:string; last_name:string; vip_level:string; room_number:string|null; room_type_id:string; room_type_code:string; room_type_name:string; arrival_date:string; departure_date:string; status:string; adults:number; children:number; source:string; rate_plan:string; nightly_rate:number; eta:string|null; notes:string; balance:number; version:number };
 type Room = { id:string; number:string; floor:number; room_type_id:string; room_type_code:string; room_type_name:string; front_desk_status:string; housekeeping_status:string; task_status:string|null; assignee:string|null; features:unknown; active:boolean; version:number };
 type Blocker = { code:string; label:string; count:number; blocking:boolean };
-type Principal = { email:string; displayName:string; role:string; capabilities:string[] };
+type Principal = { email:string; displayName:string; role:string; capabilities:string[]; workspaceAccess:WorkspaceAccess;canExport:boolean;mustChangePassword:boolean };
 type InventoryCell = { stayDate:string;sellLimit:number;reserved:number;available:number;closed:boolean;minStay:number;cta:boolean;ctd:boolean;price:number };
 type InventoryType = { id:string;code:string;name:string;base_rate:number;capacity:number;description:string;active:boolean;version:number;physical:number;cells:InventoryCell[] };
 type AccountProfile = { id:string;type:string;name:string;external_id:string|null;email:string|null;phone:string|null;negotiated_rate_code:string|null;credit_status:string;notes:string;version:number };
@@ -74,11 +77,12 @@ const money = formatMoney;
 const trendLabel=(value:number|null,suffix="%")=>value===null?"전일 기준 없음":Math.abs(value)<.05?"전일과 동일":`${value>0?"+":""}${value.toFixed(1)}${suffix}`;
 const trendClass=(value:number|null)=>`trend ${value===null||Math.abs(value)<.05?"":value>0?"up":"down"}`;
 const labels:Record<string,string> = { DUE_IN:"도착 예정", IN_HOUSE:"투숙 중", CHECKED_OUT:"체크아웃", NO_SHOW:"노쇼", CANCELLED:"취소", CLEAN:"청소 완료", INSPECTED:"점검 완료", DIRTY:"청소 필요", OUT_OF_SERVICE:"판매 중지", VACANT:"공실", OCCUPIED:"재실" };
-const roleLabels:Record<string,string>={PROPERTY_ADMIN:"프로퍼티 관리자",NIGHT_AUDITOR:"야간 감사",FRONT_DESK:"프런트 데스크",CASHIER:"캐셔",HOUSEKEEPING:"하우스키핑",REVENUE_MANAGER:"레비뉴 매니저",SALES_MANAGER:"세일즈 매니저",ACCOUNTANT:"호텔 회계",VIEWER:"조회 전용"};
+const roleLabels:Record<string,string>=ROLE_LABELS;
 
 async function fetchPmsData<T=Data>(url:string):Promise<T> {
   const response=await fetch(url,{cache:"no-store"});
   if(response.status===401){window.location.replace("/login");throw new Error("AUTH_REDIRECT");}
+  if(response.status===428){window.location.replace("/change-password");throw new Error("AUTH_REDIRECT");}
   const payload=await response.json() as T&{error?:string};
   if(!response.ok)throw new Error(payload.error||"PMS 데이터를 불러오지 못했습니다.");
   return payload;
@@ -91,7 +95,8 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
   const [data,setData] = useState<Data|null>(null); const [error,setError] = useState(""); const [busy,setBusy] = useState("");
   const [domainStatus,setDomainStatus]=useState<DomainStatus>(idleDomains);
   const section = parsePmsWorkspace(pathname.split("/")[1]) ?? initialSection;
-  const activeDomain=domainForWorkspace(section);
+  const sectionAllowed=Boolean(data&&canViewWorkspace(data.principal.workspaceAccess,section));
+  const activeDomain=sectionAllowed?domainForWorkspace(section):null;
   const [selected,setSelected] = useState<Reservation|null>(null); const [query,setQuery] = useState(""); const [roomFilter,setRoomFilter] = useState("ALL");
   const [frontdeskFilter,setFrontdeskFilter] = useState<"ALL"|"DUE_IN"|"IN_HOUSE">("ALL");
   const [quickPanel,setQuickPanel] = useState<"notifications"|"profile"|null>(null); const searchRef=useRef<HTMLInputElement>(null);
@@ -99,12 +104,12 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
   const [cashierModal,setCashierModal] = useState<"open"|"close"|null>(null);
   const navigateSection = useCallback((workspace: string) => {
     const target = parsePmsWorkspace(workspace);
-    if (!target) return;
+    if (!target||(data&&!canViewWorkspace(data.principal.workspaceAccess,target))) return;
     router.push(pmsWorkspacePath(target));
-  }, [router]);
+  }, [data,router]);
   const warmWorkspace = useCallback((workspace: string) => {
     const target = parsePmsWorkspace(workspace);
-    if (!target) return;
+    if (!target||(data&&!canViewWorkspace(data.principal.workspaceAccess,target))) return;
     router.prefetch(pmsWorkspacePath(target));
     prefetchWorkspaceModule(target);
     const domain=domainForWorkspace(target);
@@ -116,7 +121,8 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
       });
     }
     if(target==="website")void queryClient.prefetchQuery({queryKey:["pms","website"],queryFn:()=>fetchPmsData<unknown>("/api/pms?view=website"),staleTime:60_000});
-  }, [queryClient, router]);
+    if(target==="users")void queryClient.prefetchQuery({queryKey:["pms","users"],queryFn:()=>fetchPmsData<unknown>("/api/pms?view=users"),staleTime:30_000});
+  }, [data,queryClient, router]);
   useDialogController();
   const load = useCallback(async():Promise<Data|null>=>{ try { const payload=await queryClient.fetchQuery({queryKey:["pms","core"],queryFn:()=>fetchPmsData("/api/pms?view=core")});setData(payload);setDomainStatus(idleDomains());return payload; } catch(e){if(e instanceof Error&&e.message==="AUTH_REDIRECT")return null;setError(e instanceof Error?e.message:"데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
   const loadDomain=useCallback(async(domain:WorkspaceDomain):Promise<DomainPayload|null>=>{setDomainStatus(current=>({...current,[domain]:"loading"}));try{const payload=await queryClient.fetchQuery({queryKey:["pms","workspace",domain],queryFn:()=>fetchPmsData<DomainPayload>(`/api/pms?view=${domain}`),staleTime:60_000});setData(current=>current?mergeDomain(current,payload):current);setDomainStatus(current=>({...current,[domain]:"ready"}));return payload;}catch(reason){setDomainStatus(current=>({...current,[domain]:"error"}));if(reason instanceof Error&&reason.message==="AUTH_REDIRECT")return null;setError(reason instanceof Error?reason.message:"업무 데이터를 불러오지 못했습니다.");return null;}},[queryClient]);
@@ -126,6 +132,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
   // Each heavy workspace hydrates only its bounded server projection.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{if(activeDomain&&domainStatus[activeDomain]==="idle")void loadDomain(activeDomain);},[activeDomain,domainStatus,loadDomain]);
+  useEffect(()=>{if(data&&!sectionAllowed){const fallback=firstAccessibleWorkspace(data.principal.workspaceAccess);if(fallback)router.replace(pmsWorkspacePath(fallback));}},[data,router,sectionAllowed]);
   useEffect(()=>{const onKey=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="k"){event.preventDefault();navigateSection("frontdesk");setQuickPanel(null);requestAnimationFrame(()=>searchRef.current?.focus());}if(event.key==="Escape")setQuickPanel(null);};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);},[navigateSection]);
   async function act(action:string, payload:Record<string,string>={}) { setBusy(action); setError(""); try { const r=await fetch("/api/pms",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action,...payload})}); if(r.status===401){window.location.replace('/login');return false;} const receipt=await r.json() as PmsMutationReceipt&{error?:string}; if(!r.ok) throw new Error(receipt.error); await Promise.all([...(receipt.invalidates||["core","full"]).map(key=>queryClient.invalidateQueries({queryKey:["pms",key],refetchType:"none"})),queryClient.invalidateQueries({queryKey:["pms","workspace"],refetchType:"none"})]); const refreshed=await load();if(activeDomain)await loadDomain(activeDomain);if(selected&&refreshed)setSelected(refreshed.reservations.find((x:Reservation)=>x.id===selected.id)||null); return true; } catch(e){setError(e instanceof Error?e.message:"작업을 완료하지 못했습니다."); return false;} finally{setBusy("");} }
   const normalizedQuery=query.trim().toLocaleLowerCase("ko-KR");
@@ -144,18 +151,19 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
   const notifications=[{id:"arrivals",title:"도착 처리 대기",detail:`${arrivalCount}건의 도착 예약을 확인해 주세요.`,section:"frontdesk",active:arrivalCount>0},{id:"rooms",title:"객실 준비 필요",detail:`청소 필요 ${dirtyCount}실 · 판매 중지 ${oosCount}실`,section:"rooms",active:dirtyCount+oosCount>0},{id:"interfaces",title:"인터페이스 상태",detail:`실패 메시지 ${failedInbound}건 · Outbox 실패 ${failedOutbox}건`,section:"channels",active:failedInbound+failedOutbox>0}];
   const notificationCount=notifications.filter(item=>item.active).length;
   if(!data) return <main className="loading"><div className="brand-mark"><Image src="/brand/aurora-mark-192.png" alt="Aurora PMS" width={56} height={56} priority/></div><p>AURORA PMS를 준비하고 있습니다</p>{error&&<button onClick={load}>다시 시도</button>}</main>;
+  if(!sectionAllowed)return <main className="loading"><div className="brand-mark"><Image src="/brand/aurora-mark-192.png" alt="Aurora PMS" width={56} height={56}/></div><p>접근 가능한 첫 페이지로 이동하고 있습니다</p></main>;
   return <PmsActionProvider value={{act,busy}}><div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark" aria-hidden="true"><Image src="/brand/aurora-mark-192.png" alt="" width={38} height={38} priority/></span><span><b>AURORA PMS</b><small>HOTEL OPERATIONS</small></span></div>
       <nav aria-label="주 메뉴">
-        {[['overview','⌂','오퍼레이션'],['frontdesk','⇄','프런트 데스크'],['inventory','▤','재고 & 요금'],['website','◇','홈페이지 관리'],['groups','◎','그룹 & 세일즈'],['finance','₩','폴리오 & AR'],['accounting','≋','회계 & 손익'],['channels','⌁','채널 허브'],['rooms','▦','룸 & 하우스키핑'],['reports','◫','리포트 센터'],['master','⚙','객실 마스터'],['revenue','↗','매출 & 인사이트'],['audit','✓','야간 감사']].map(([id,icon,label])=><button type="button" key={id} className={section===id?'active':''} aria-current={section===id?'page':undefined} onPointerEnter={()=>warmWorkspace(id)} onPointerDown={()=>warmWorkspace(id)} onFocus={()=>warmWorkspace(id)} onClick={()=>{navigateSection(id);setQuickPanel(null);setQuery("")}}><i aria-hidden="true">{icon}</i>{label}{id==='frontdesk'&&<em>{arrivalCount}</em>}</button>)}
+        {[['overview','⌂','오퍼레이션'],['frontdesk','⇄','프런트 데스크'],['inventory','▤','재고 & 요금'],['website','◇','홈페이지 관리'],['groups','◎','그룹 & 세일즈'],['finance','₩','폴리오 & AR'],['accounting','≋','회계 & 손익'],['channels','⌁','채널 허브'],['rooms','▦','룸 & 하우스키핑'],['reports','◫','리포트 센터'],['master','⚙','객실 마스터'],['revenue','↗','매출 & 인사이트'],['users','♙','직원 & 권한'],['audit','✓','야간 감사']].filter(([id])=>canViewWorkspace(data.principal.workspaceAccess,id as PmsWorkspace)).map(([id,icon,label])=><button type="button" key={id} className={section===id?'active':''} aria-current={section===id?'page':undefined} onPointerEnter={()=>warmWorkspace(id)} onPointerDown={()=>warmWorkspace(id)} onFocus={()=>warmWorkspace(id)} onClick={()=>{navigateSection(id);setQuickPanel(null);setQuery("")}}><i aria-hidden="true">{icon}</i>{label}{id==='frontdesk'&&<em>{arrivalCount}</em>}</button>)}
       </nav>
       <div className="sidebar-bottom"><div className={`system-ok ${systemHealthy?'':'warn'}`}><span/> {systemHealthy?'인터페이스 오류 없음':`인터페이스 실패 ${failedInterfaceCount}건`}</div><button type="button" className="profile" aria-expanded={quickPanel==='profile'} onClick={()=>setQuickPanel(current=>current==='profile'?null:'profile')}><span>{data.principal.displayName.slice(0,2).toUpperCase()}</span><div><b>{data.principal.displayName}</b><small>{roleLabels[data.principal.role]||data.principal.role}</small></div><i>•••</i></button></div>
     </aside>
-    <main className="workspace">
-      <header><div><div className="mobile-brand" aria-label="Aurora PMS"><Image src="/brand/aurora-mark-64.png" alt="" width={24} height={24}/><b>AURORA PMS</b></div><p className="eyebrow">{data.property.name} · 영업일 {data.property.business_date}</p><h1>{section==='overview'?'오늘의 오퍼레이션':section==='frontdesk'?'프런트 데스크':section==='inventory'?'재고 & 요금 캘린더':section==='website'?'호텔 홈페이지 관리':section==='groups'?'그룹 & 세일즈':section==='finance'?'폴리오 & 매출채권':section==='accounting'?'회계 & 손익':section==='channels'?'채널 & 인터페이스 허브':section==='rooms'?'룸 & 하우스키핑':section==='reports'?'통합 리포트 센터':section==='master'?'객실 마스터':section==='revenue'?'매출 & 인사이트':'야간 감사'}</h1></div><div className="header-actions">{headerSearchEnabled&&<div className="search" role="search"><span aria-hidden="true">⌕</span><input ref={searchRef} value={query} onChange={e=>setQuery(e.target.value)} placeholder={section==='rooms'?"객실번호, 타입, 층, 담당자 검색":"고객, 예약번호, 객실 검색"} aria-label={section==='rooms'?"객실 검색":"예약 검색"}/>{query&&<><span className="search-count" aria-live="polite">{searchResultCount}건</span><button type="button" className="search-clear" aria-label="검색어 지우기" onClick={()=>{setQuery("");searchRef.current?.focus()}}>×</button></>}<kbd>⌘ K</kbd></div>}{data.principal.capabilities.includes('CASHIER_WRITE')&&<button className={`cashier-btn ${data.controls.openCashier?'open':''}`} onClick={()=>setCashierModal(data.controls.openCashier?'close':'open')}><i/> {data.controls.openCashier?'캐셔 마감':'캐셔 개시'}</button>}<button type="button" className="icon-btn" aria-label="운영 알림" aria-expanded={quickPanel==='notifications'} onClick={()=>setQuickPanel(current=>current==='notifications'?null:'notifications')}>●{notificationCount>0&&<b>{notificationCount}</b>}</button>{data.principal.capabilities.includes('RESERVATION_WRITE')&&<button className="primary" onClick={()=>setNewBooking(true)}>＋ 새 예약</button>}</div></header>
+    <main className={`workspace workspace-${section}`}>
+      <header><div><div className="mobile-brand" aria-label="Aurora PMS"><Image src="/brand/aurora-mark-64.png" alt="" width={24} height={24}/><b>AURORA PMS</b></div><p className="eyebrow">{data.property.name} · 영업일 {data.property.business_date}</p><h1>{section==='overview'?'오늘의 오퍼레이션':section==='frontdesk'?'프런트 데스크':section==='inventory'?'재고 & 요금 캘린더':section==='website'?'호텔 홈페이지 관리':section==='groups'?'그룹 & 세일즈':section==='finance'?'폴리오 & 매출채권':section==='accounting'?'회계 & 손익':section==='channels'?'채널 & 인터페이스 허브':section==='rooms'?'룸 & 하우스키핑':section==='reports'?'통합 리포트 센터':section==='master'?'객실 마스터':section==='revenue'?'매출 & 인사이트':section==='users'?'직원 & 권한 관리':'야간 감사'}</h1></div><div className="header-actions">{headerSearchEnabled&&<div className="search" role="search"><span aria-hidden="true">⌕</span><input ref={searchRef} value={query} onChange={e=>setQuery(e.target.value)} placeholder={section==='rooms'?"객실번호, 타입, 층, 담당자 검색":"고객, 예약번호, 객실 검색"} aria-label={section==='rooms'?"객실 검색":"예약 검색"}/>{query&&<><span className="search-count" aria-live="polite">{searchResultCount}건</span><button type="button" className="search-clear" aria-label="검색어 지우기" onClick={()=>{setQuery("");searchRef.current?.focus()}}>×</button></>}<kbd>⌘ K</kbd></div>}{data.principal.capabilities.includes('CASHIER_WRITE')&&<button className={`cashier-btn ${data.controls.openCashier?'open':''}`} onClick={()=>setCashierModal(data.controls.openCashier?'close':'open')}><i/> {data.controls.openCashier?'캐셔 마감':'캐셔 개시'}</button>}<button type="button" className="icon-btn" aria-label="운영 알림" aria-expanded={quickPanel==='notifications'} onClick={()=>setQuickPanel(current=>current==='notifications'?null:'notifications')}>●{notificationCount>0&&<b>{notificationCount}</b>}</button>{data.principal.capabilities.includes('RESERVATION_WRITE')&&<button className="primary" onClick={()=>setNewBooking(true)}>＋ 새 예약</button>}</div></header>
       {quickPanel==='notifications'&&<aside className="quick-panel notification-panel" aria-label="운영 알림"><div className="quick-panel-head"><div><span>NOW</span><h2>지금 확인할 일</h2></div><button type="button" aria-label="알림 닫기" onClick={()=>setQuickPanel(null)}>×</button></div>{notifications.map(item=><button type="button" key={item.id} onClick={()=>{navigateSection(item.section);setQuickPanel(null)}}><span><b>{item.title}</b><small>{item.detail}</small></span><i>›</i></button>)}</aside>}
-      {quickPanel==='profile'&&<aside className="quick-panel profile-panel" aria-label="사용자 메뉴"><div className="quick-profile"><span>{data.principal.displayName.slice(0,2).toUpperCase()}</span><div><b>{data.principal.displayName}</b><small>{data.principal.email}</small></div></div><dl><div><dt>현재 역할</dt><dd>{roleLabels[data.principal.role]||data.principal.role}</dd></div><div><dt>권한 수</dt><dd>{data.principal.capabilities.length}개</dd></div></dl><button type="button" onClick={()=>{navigateSection('audit');setQuickPanel(null)}}>내 작업 감사 로그 보기 <i>›</i></button><button type="button" onClick={async()=>{await fetch('/api/auth/logout',{method:'POST'});window.location.replace('/login')}}>로그아웃</button></aside>}
+      {quickPanel==='profile'&&<aside className="quick-panel profile-panel" aria-label="사용자 메뉴"><div className="quick-profile"><span>{data.principal.displayName.slice(0,2).toUpperCase()}</span><div><b>{data.principal.displayName}</b><small>{data.principal.email}</small></div></div><dl><div><dt>현재 역할</dt><dd>{roleLabels[data.principal.role]||data.principal.role}</dd></div><div><dt>권한 수</dt><dd>{data.principal.capabilities.length}개</dd></div></dl>{canViewWorkspace(data.principal.workspaceAccess,'audit')&&<button type="button" onClick={()=>{navigateSection('audit');setQuickPanel(null)}}>내 작업 감사 로그 보기 <i>›</i></button>}<button type="button" onClick={async()=>{await fetch('/api/auth/logout',{method:'POST'});window.location.replace('/login')}}>로그아웃</button></aside>}
       {error&&<div className="toast" role="alert"><span>!</span>{error}<button onClick={()=>setError('')}>×</button></div>}
       {section==='overview'&&<>
         <section className="pulse-grid">
@@ -180,15 +188,16 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
         <div className="reservation-table"><div className="table-head"><span>고객 / 예약</span><span>숙박</span><span>객실</span><span>채널</span><span>잔액</span><span>상태</span></div>{frontdeskReservations.map(r=><button key={r.id} className="table-row" onClick={()=>setSelected(r)}><span className="guest"><i>{r.first_name[0]}{r.last_name[0]}</i><span><b>{r.first_name} {r.last_name}</b><small>{r.confirmation_no}</small></span></span><span><b>{r.arrival_date.slice(5)} → {r.departure_date.slice(5)}</b><small>{r.eta&&`ETA ${r.eta}`}</small></span><span><b>{r.room_number||'미배정'}</b><small>{r.room_type_name}</small></span><span>{r.source}</span><span className={Number(r.balance)>0?'due':''}>{money(Number(r.balance))}</span><span><i className={`status ${r.status==='IN_HOUSE'?'stay':r.status==='DUE_IN'?'ready':''}`}>{labels[r.status]}</i></span></button>)}{frontdeskReservations.length===0&&<div className="empty-state large"><b>조건에 맞는 예약이 없어요</b><p>다른 상태나 검색어를 선택해 보세요.</p></div>}</div>
       </section>}
       {section==='inventory'&&<RevenueInventoryCalendar businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INVENTORY_WRITE')}/>}
-      {section==='website'&&<HomepageManager canAdmin={data.principal.capabilities.includes('ADMIN')}/>}
+      {section==='website'&&<HomepageManager canAdmin={data.principal.capabilities.includes('WEBSITE_WRITE')}/>}
       {section==='accounting'&&<AccountingCenter businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('ACCOUNTING_WRITE')}/>}
+      {section==='users'&&<StaffAccessManager canAdmin={data.principal.capabilities.includes('USER_ADMIN')}/>}
       {activeDomain&&domainStatus[activeDomain]==='loading'&&<section className="panel module-loading" aria-live="polite"><b>업무 데이터를 불러오고 있습니다</b><p>선택한 업무에 필요한 데이터만 준비하고 있어요.</p></section>}
       {activeDomain&&domainStatus[activeDomain]==='error'&&<section className="panel module-loading" role="alert"><b>업무 데이터를 불러오지 못했습니다</b><p>연결을 확인한 뒤 이 모듈만 다시 시도해 주세요.</p><button type="button" className="secondary" onClick={()=>void loadDomain(activeDomain)}>다시 시도</button></section>}
       {section==='groups'&&domainStatus.groups==='ready'&&<GroupSales data={data}/>}
       {section==='finance'&&domainStatus.finance==='ready'&&<Finance data={data}/>}
       {section==='channels'&&domainStatus.channels==='ready'&&<><ChannelContracts connections={data.integrations.connections} contracts={data.integrations.contracts} businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INTEGRATION_WRITE')}/><ChannelHub data={data}/></>}
       {section==='rooms'&&<section className="panel full"><div className="panel-title"><div><h2>라이브 룸 랙</h2><p>객실 상태 변경은 프런트와 하우스키핑에 즉시 반영됩니다</p></div><div className="segmented" role="group" aria-label="객실 청소 상태 필터">{['ALL','DIRTY','CLEAN','INSPECTED'].map(f=><button type="button" className={roomFilter===f?'on':''} aria-pressed={roomFilter===f} onClick={()=>setRoomFilter(f)} key={f}>{f==='ALL'?'전체':labels[f]}</button>)}</div></div><div className="room-grid">{filteredRooms.map(r=><article className={`room-card ${r.housekeeping_status.toLowerCase()}`} key={r.id}><div><span>{r.room_type_code}</span><i className={`dot ${r.housekeeping_status.toLowerCase()}`}/></div><strong>{r.number}</strong><p>{r.room_type_name}</p><div className="room-status"><b>{labels[r.housekeeping_status]}</b><small>{labels[r.front_desk_status]}{r.assignee&&` · ${r.assignee}`}</small></div>{data.principal.capabilities.includes('HOUSEKEEPING_WRITE')&&r.housekeeping_status==='DIRTY'&&<button disabled={!!busy} onClick={()=>act('housekeeping',{roomId:r.id,status:'CLEAN'})}>청소 완료 처리</button>}{data.principal.capabilities.includes('HOUSEKEEPING_WRITE')&&r.housekeeping_status==='CLEAN'&&<button disabled={!!busy} onClick={()=>act('housekeeping',{roomId:r.id,status:'INSPECTED'})}>점검 완료 처리</button>}</article>)}{filteredRooms.length===0&&<div className="empty-state large room-empty"><b>조건에 맞는 객실이 없어요</b><p>검색어나 청소 상태 필터를 바꿔 보세요.</p></div>}</div></section>}
-      {section==='reports'&&<ReportsCenter businessDate={data.property.business_date} roomTypes={data.inventory.types}/>} {section==='master'&&<RoomMaster types={data.inventory.types} rooms={data.rooms} canAdmin={data.principal.capabilities.includes('ADMIN')}/>} {section==='revenue'&&domainStatus.finance==='ready'&&<Revenue data={data}/>} {section==='audit'&&<Audit data={data} onReview={code=>{if(code==='UNRESOLVED_ARRIVALS')navigateSection('frontdesk');else if(code==='OPEN_CASHIERS'&&data.controls.openCashier)setCashierModal('close');else if(code==='FAILED_INTERFACES')navigateSection('channels');else navigateSection('rooms')}}/>}
+      {section==='reports'&&<ReportsCenter businessDate={data.property.business_date} roomTypes={data.inventory.types}/>} {section==='master'&&<RoomMaster types={data.inventory.types} rooms={data.rooms} canAdmin={data.principal.capabilities.includes('MASTER_WRITE')}/>} {section==='revenue'&&domainStatus.finance==='ready'&&<Revenue data={data}/>} {section==='audit'&&<Audit data={data} onReview={code=>{if(code==='UNRESOLVED_ARRIVALS')navigateSection('frontdesk');else if(code==='OPEN_CASHIERS'&&data.controls.openCashier)setCashierModal('close');else if(code==='FAILED_INTERFACES')navigateSection('channels');else navigateSection('rooms')}}/>}
     </main>
     {selected&&<ReservationDrawer r={selected} rooms={data.rooms} close={()=>setSelected(null)} capabilities={data.principal.capabilities} cashierOpen={!!data.controls.openCashier}/>}
     {newBooking&&<NewReservation rooms={data.rooms} businessDate={data.property.business_date} close={()=>setNewBooking(false)}/>}

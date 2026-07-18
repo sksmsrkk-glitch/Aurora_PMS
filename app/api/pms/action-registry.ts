@@ -3,7 +3,7 @@ import { z } from "zod";
 
 export type ActionDomain =
   | "reservation" | "rooms" | "inventory" | "groups" | "finance"
-  | "integrations" | "accounting" | "website" | "operations" | "reports";
+  | "integrations" | "accounting" | "website" | "operations" | "reports" | "users";
 
 const actionCapability = {
   create_reservation:"RESERVATION_WRITE",edit_reservation:"RESERVATION_WRITE",cancel_reservation:"RESERVATION_WRITE",assign_room:"RESERVATION_WRITE",
@@ -15,8 +15,9 @@ const actionCapability = {
   create_channel_connection:"INTEGRATION_WRITE",create_channel_mapping:"INTEGRATION_WRITE",upsert_channel_contract:"INTEGRATION_WRITE",queue_ari_delta:"INTEGRATION_WRITE",dispatch_ari_update:"INTEGRATION_WRITE",ingest_channel_message:"INTEGRATION_WRITE",replay_channel_message:"INTEGRATION_WRITE",dispatch_outbox_event:"INTEGRATION_WRITE",
   post_accounting_entry:"ACCOUNTING_WRITE",reverse_accounting_entry:"ACCOUNTING_WRITE",accrue_channel_settlement:"ACCOUNTING_WRITE",mark_channel_settlement_paid:"ACCOUNTING_WRITE",
   open_cashier:"CASHIER_WRITE",close_cashier:"CASHIER_WRITE",run_night_audit:"EOD_RUN",
-  create_room_type:"ADMIN",update_room_type:"ADMIN",create_room:"ADMIN",update_room:"ADMIN",bulk_create_rooms:"ADMIN",
-  update_website_settings:"ADMIN",update_room_type_website:"ADMIN",upload_website_media:"ADMIN",delete_website_media:"ADMIN",
+  create_room_type:"MASTER_WRITE",update_room_type:"MASTER_WRITE",create_room:"MASTER_WRITE",update_room:"MASTER_WRITE",bulk_create_rooms:"MASTER_WRITE",
+  update_website_settings:"WEBSITE_WRITE",update_room_type_website:"WEBSITE_WRITE",upload_website_media:"WEBSITE_WRITE",delete_website_media:"WEBSITE_WRITE",
+  create_staff_user:"USER_ADMIN",update_staff_access:"USER_ADMIN",set_staff_active:"USER_ADMIN",reset_staff_password:"USER_ADMIN",
   export_report:"REPORT_EXPORT",
 } as const;
 
@@ -33,6 +34,7 @@ const domainActions: Record<ActionDomain, readonly PmsAction[]> = {
   website:["update_website_settings","update_room_type_website","upload_website_media","delete_website_media"],
   operations:["open_cashier","close_cashier","run_night_audit"],
   reports:["export_report"],
+  users:["create_staff_user","update_staff_access","set_staff_active","reset_staff_password"],
 };
 
 const domainByAction = new Map<PmsAction, ActionDomain>();
@@ -62,6 +64,10 @@ const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
   upsert_channel_contract:["connectionId","contractType","validFrom"],post_accounting_entry:["businessDate","description","debitAccountId","creditAccountId","amount"],
   reverse_accounting_entry:["entryId","reason"],accrue_channel_settlement:["connectionId","reservationId"],mark_channel_settlement_paid:["settlementId"],
   export_report:["report"],
+  create_staff_user:["email","displayName","password","role","workspacePermissions","canExport"],
+  update_staff_access:["assignmentId","displayName","role","workspacePermissions","canExport","expectedVersion"],
+  set_staff_active:["assignmentId","active","expectedVersion"],
+  reset_staff_password:["assignmentId","password","expectedVersion"],
 };
 
 const dateField=/^(?:arrivalDate|departureDate|stayDate|startDate|endDate|businessDate|dueDate|validFrom|validTo|from|to)$/u;

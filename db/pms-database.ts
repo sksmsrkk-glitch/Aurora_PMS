@@ -20,7 +20,14 @@ export interface PmsDatabase {
   prepare(query: string): PmsPreparedStatement;
   batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]): Promise<PmsResult<T>[]>;
   forProperty(propertyId: string): PmsDatabase;
-  findActiveRoleAssignments(email: string): Promise<{ property_id: string; role: string }[]>;
+  findActiveRoleAssignments(email: string): Promise<{
+    property_id: string;
+    role: string;
+    display_name: string;
+    workspace_permissions: unknown;
+    can_export: boolean;
+    must_change_password: boolean;
+  }[]>;
 }
 
 /**
@@ -125,8 +132,15 @@ class PostgresDatabase implements PmsDatabase {
     if (this.propertyId) throw new Error("Role assignment lookup requires the root database capability");
     const normalized = email.trim().toLowerCase();
     if (!normalized || normalized.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) return [];
-    const result = await this.executeRaw<{ property_id: string; role: string }>(
-      "SELECT property_id,role FROM role_assignments WHERE email=? AND active ORDER BY created_at",
+    const result = await this.executeRaw<{
+      property_id: string;
+      role: string;
+      display_name: string;
+      workspace_permissions: unknown;
+      can_export: boolean;
+      must_change_password: boolean;
+    }>(
+      "SELECT property_id,role,display_name,workspace_permissions,can_export,must_change_password FROM role_assignments WHERE email=? AND active ORDER BY created_at",
       [normalized],
       this.client,
     );
