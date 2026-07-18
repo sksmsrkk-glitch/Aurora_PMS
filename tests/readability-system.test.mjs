@@ -34,3 +34,12 @@ test("mobile queues expose hidden reservation columns as labelled cards", () => 
   assert.match(css, /env\(safe-area-inset-bottom\)/u);
   assert.match(css, /prefers-reduced-motion:\s*reduce/u);
 });
+
+test("late-loaded inventory and website editor content inherit the same minimums", () => {
+  assert.match(css, /\.advanced-calendar \.inventory-grid b/u);
+  assert.match(css, /\.rate-plan-cards small/u);
+  assert.match(css, /\.website-editor-group > summary small/u);
+  assert.match(css, /\.website-preview-section p/u);
+  assert.match(css, /\.website-order-buttons button/u);
+  assert.match(css, /\.website-toggle input/u);
+});
