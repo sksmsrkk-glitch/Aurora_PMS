@@ -609,6 +609,36 @@ body {
   line-height: var(--aurora-leading-body);
 }
 
+/* The calendar and nightly rate projection render after the shell. Their
+ * historical child combinators were more specific than the shared rules. */
+.advanced-calendar .inventory-grid span,
+.advanced-calendar .inventory-grid b,
+.advanced-calendar .inventory-grid small,
+.advanced-calendar .inventory-grid em,
+.advanced-calendar .inventory-grid i,
+.advanced-calendar .inventory-grid mark {
+  font-size: var(--aurora-type-caption) !important;
+  line-height: var(--aurora-leading-body) !important;
+}
+
+.advanced-calendar .inventory-cell.rich {
+  min-width: 10.5rem;
+  min-height: 11.25rem;
+}
+
+.rate-plan-board-head span,
+.rate-plan-cards b,
+.rate-plan-cards i,
+.rate-plan-cards small {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.rate-plan-cards > button {
+  min-height: 7.5rem;
+  padding: 1rem;
+}
+
 .bulk-selector span,
 .weekday-selector span {
   min-height: var(--aurora-target-compact);
@@ -1147,6 +1177,100 @@ body {
 .website-loading button {
   min-height: var(--aurora-target);
   font-size: var(--aurora-type-label);
+}
+
+/* CMS controls and its embedded live preview are operational UI too. The
+ * preview remains proportional without using unreadable 5–9px typography. */
+.website-editor-group > summary b {
+  font-size: var(--aurora-type-body);
+}
+
+.website-editor-group > summary small,
+.website-editor-body label > span,
+.website-control-label > span,
+.website-control-label small,
+.website-hero-picker > button > span,
+.website-hero-upload span,
+.website-drag,
+.website-editor-save span,
+.website-preview-toolbar > span,
+.website-preview-page > header b,
+.website-preview-page > header nav span,
+.website-preview-page > header > i,
+.website-preview-hero small,
+.website-preview-hero p,
+.website-preview-cta,
+.website-preview-section small,
+.website-preview-section p,
+.website-live-preview > p {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.website-hero-picker > button,
+.website-hero-upload {
+  min-height: 6.5rem;
+}
+
+.website-segmented button,
+.website-order-buttons button,
+.website-preview-devices button {
+  min-width: var(--aurora-target);
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-caption);
+}
+
+.website-order-buttons {
+  gap: 0.25rem;
+}
+
+.website-toggle {
+  width: var(--aurora-target);
+  height: var(--aurora-target);
+}
+
+.website-toggle input {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: var(--aurora-target);
+  min-height: var(--aurora-target);
+  cursor: pointer;
+}
+
+.website-toggle span {
+  inset: 0.625rem 0;
+}
+
+.website-toggle input:checked + span::after {
+  transform: translateX(1.25rem);
+}
+
+.website-publish input {
+  width: var(--aurora-target);
+  height: var(--aurora-target);
+  min-width: var(--aurora-target);
+  min-height: var(--aurora-target);
+}
+
+.website-preview-toolbar {
+  min-height: 4rem;
+  height: auto;
+}
+
+.website-preview-page > header {
+  min-height: 4rem;
+  height: auto;
+  gap: 0.75rem;
+}
+
+.website-preview-page > header nav {
+  gap: 1rem;
+}
+
+.website-preview-hero p,
+.website-preview-section p {
+  max-width: var(--aurora-readable-measure);
 }
 
 /* Staff access and audit controls */
