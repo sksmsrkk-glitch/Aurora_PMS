@@ -1,0 +1,1819 @@
+/*
+ * Aurora PMS readability system
+ *
+ * This stylesheet is intentionally loaded last. It is the single visual
+ * contract for operational density, type hierarchy, contrast, touch targets,
+ * and responsive information layout across every authenticated PMS workspace.
+ */
+
+:root {
+  --aurora-type-caption: 0.75rem;
+  --aurora-type-label: 0.8125rem;
+  --aurora-type-body: 0.875rem;
+  --aurora-type-body-strong: 0.9375rem;
+  --aurora-type-section: 1.25rem;
+  --aurora-type-page: clamp(1.75rem, 2vw, 2rem);
+  --aurora-leading-tight: 1.3;
+  --aurora-leading-body: 1.5;
+  --aurora-leading-copy: 1.65;
+  --aurora-target-compact: 2.25rem;
+  --aurora-target: 2.75rem;
+  --aurora-readable-measure: 66ch;
+  --aurora-text: #191f28;
+  --aurora-text-secondary: #4e5968;
+  --aurora-text-muted: #657181;
+  --aurora-line: #dfe4ea;
+  --aurora-panel-radius: 1.25rem;
+  --aurora-panel-padding: clamp(1.125rem, 1.7vw, 1.5rem);
+}
+
+html {
+  font-size: 16px;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  color: var(--aurora-text);
+  font-size: var(--aurora-type-body);
+  line-height: var(--aurora-leading-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Preserve keyboard location even in long, dense operational screens. */
+.app-shell :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid rgba(49, 130, 246, 0.38);
+  outline-offset: 3px;
+}
+
+.app-shell :where(input, select, textarea) {
+  color: var(--aurora-text);
+  font-size: var(--aurora-type-body) !important;
+  line-height: var(--aurora-leading-body);
+}
+
+.app-shell :where(input, select) {
+  min-height: var(--aurora-target);
+}
+
+.app-shell button {
+  min-width: var(--aurora-target);
+}
+
+.app-shell textarea {
+  min-height: 6.5rem;
+}
+
+.app-shell ::placeholder {
+  color: #7a8594;
+  opacity: 1;
+}
+
+.app-shell :where(p, small) {
+  line-height: var(--aurora-leading-body);
+}
+
+/* Shell and navigation */
+.app-shell {
+  grid-template-columns: 16.5rem minmax(0, 1fr);
+}
+
+.workspace {
+  max-width: calc(100vw - 16.5rem);
+  overflow-x: clip;
+}
+
+.sidebar {
+  padding: 1.75rem 1rem 1.125rem;
+}
+
+.brand {
+  gap: 0.75rem;
+  padding: 0 0.75rem 1.75rem;
+}
+
+.brand b {
+  font-size: 1rem;
+  line-height: var(--aurora-leading-tight);
+}
+
+.brand small {
+  margin-top: 0.25rem;
+  color: #b5c8c4;
+  font-size: var(--aurora-type-caption);
+  letter-spacing: 0.1em;
+}
+
+.sidebar nav {
+  gap: 0.375rem;
+}
+
+.sidebar nav button {
+  min-height: 3rem;
+  border-radius: 0.75rem;
+  padding: 0.75rem 0.875rem;
+  color: #4e5968;
+  font-size: var(--aurora-type-body);
+  line-height: var(--aurora-leading-tight);
+}
+
+.sidebar nav i {
+  width: 1.375rem;
+  font-size: 1.25rem;
+}
+
+.sidebar nav em,
+.system-ok,
+.profile small {
+  font-size: var(--aurora-type-caption);
+}
+
+.system-ok {
+  color: #657181;
+  line-height: var(--aurora-leading-body);
+}
+
+.profile {
+  min-height: 3.75rem;
+  border-radius: 0.875rem;
+  padding: 0.75rem;
+}
+
+.profile > span {
+  width: 2.375rem;
+  height: 2.375rem;
+  font-size: var(--aurora-type-label);
+}
+
+.profile b {
+  font-size: var(--aurora-type-body);
+}
+
+.profile small {
+  color: #657181;
+}
+
+/* Page header and universal controls */
+.workspace {
+  padding: 2rem clamp(1.5rem, 3vw, 3rem) 4rem;
+}
+
+.workspace > header {
+  margin-bottom: 1.75rem;
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+.eyebrow {
+  margin-bottom: 0.375rem;
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  line-height: var(--aurora-leading-tight);
+}
+
+.workspace h1 {
+  color: var(--aurora-text);
+  font-size: var(--aurora-type-page);
+  font-weight: 780;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+}
+
+.header-actions {
+  gap: 0.625rem;
+}
+
+.search,
+.list-search {
+  min-height: var(--aurora-target);
+  border-color: var(--aurora-line);
+  border-radius: 0.875rem;
+  padding-inline: 0.875rem;
+}
+
+.search input,
+.list-search input {
+  font-size: var(--aurora-type-body) !important;
+}
+
+.search-count,
+.list-search em,
+.search kbd {
+  font-size: var(--aurora-type-caption);
+}
+
+.search-clear,
+.list-search button {
+  width: var(--aurora-target-compact);
+  height: var(--aurora-target-compact);
+  min-width: var(--aurora-target-compact);
+}
+
+.cashier-btn,
+.icon-btn,
+.primary,
+.secondary,
+.soft-button,
+.text-action {
+  min-height: var(--aurora-target);
+  border-radius: 0.75rem;
+  font-size: var(--aurora-type-label);
+  font-weight: 750;
+  line-height: var(--aurora-leading-tight);
+}
+
+.primary,
+.secondary {
+  padding: 0.75rem 1.125rem;
+}
+
+.cashier-btn {
+  height: var(--aurora-target);
+  padding-inline: 0.875rem;
+}
+
+.icon-btn {
+  width: var(--aurora-target);
+  height: var(--aurora-target);
+  font-size: 1rem;
+}
+
+.icon-btn b {
+  width: 1.25rem;
+  height: 1.25rem;
+  font-size: var(--aurora-type-caption);
+}
+
+.toast {
+  padding: 0.875rem 1rem;
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-body);
+}
+
+/* Panels, headings, metrics, and system messages */
+.pulse-grid,
+.finance-kpis,
+.channel-kpis,
+.accounting-kpis {
+  gap: 1rem;
+}
+
+.pulse-grid article,
+.panel,
+.finance-kpis article,
+.channel-kpis article,
+.accounting-kpis article {
+  border-color: var(--aurora-line);
+  border-radius: var(--aurora-panel-radius);
+}
+
+.panel {
+  padding: var(--aurora-panel-padding);
+}
+
+.pulse-grid article,
+.finance-kpis article,
+.channel-kpis article,
+.accounting-kpis article {
+  min-height: 8.75rem;
+  padding: 1.25rem;
+}
+
+.panel-title {
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.panel-title h2,
+.panel-title h3,
+.report-hero h2,
+.master-head h2,
+.inventory-toolbar h2,
+.accounting-hero h2 {
+  color: var(--aurora-text);
+  font-size: var(--aurora-type-section);
+  font-weight: 760;
+  letter-spacing: -0.025em;
+  line-height: var(--aurora-leading-tight);
+}
+
+.panel-title p,
+.report-hero > div > p:last-child,
+.master-head > div > p:last-child,
+.inventory-toolbar > div > p:last-child,
+.accounting-hero > div > p:last-child {
+  max-width: var(--aurora-readable-measure);
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-body);
+}
+
+.panel-title > button,
+.text-action {
+  min-height: var(--aurora-target) !important;
+  padding: 0.5rem 0.75rem;
+  color: #1b64da;
+  font-size: var(--aurora-type-label) !important;
+}
+
+.metric-head small,
+.pulse-grid p,
+.finance-kpis span,
+.finance-kpis p,
+.channel-kpis span,
+.channel-kpis p,
+.accounting-kpis span,
+.accounting-kpis small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-body);
+}
+
+.trend,
+.live,
+.status,
+.contract-pill,
+.type-code > span {
+  font-size: var(--aurora-type-caption);
+  font-weight: 750;
+  line-height: var(--aurora-leading-tight);
+}
+
+.pulse-grid strong {
+  margin: 1rem 0 0.5rem;
+  font-size: 2rem;
+  line-height: 1.15;
+}
+
+.pulse-grid strong small {
+  font-size: var(--aurora-type-body);
+}
+
+.finance-kpis strong,
+.channel-kpis strong,
+.accounting-kpis strong {
+  margin: 0.75rem 0 0.375rem;
+  font-size: 1.625rem;
+  line-height: 1.2;
+}
+
+.insight-strip {
+  min-height: 4.75rem;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-radius: 1rem;
+}
+
+.insight-strip > span {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.insight-strip b {
+  font-size: var(--aurora-type-body);
+}
+
+.insight-strip p {
+  color: var(--aurora-text-secondary);
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-body);
+}
+
+.insight-strip button {
+  min-height: var(--aurora-target);
+  padding: 0.5rem 0.75rem;
+  font-size: var(--aurora-type-label);
+}
+
+.permission-note,
+.cashier-warning,
+.form-intro,
+.bulk-note span,
+.empty-row,
+.empty-state p,
+.inventory-filter-empty {
+  color: var(--aurora-text-secondary);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-copy);
+}
+
+/* Operational queues and reservation tables */
+.flow-head,
+.flow-row {
+  grid-template-columns: minmax(15rem, 1.7fr) minmax(5.5rem, 0.55fr) minmax(4.5rem, 0.48fr) minmax(7.5rem, 0.7fr) 1.5rem;
+  gap: 0.875rem;
+}
+
+.flow-head,
+.table-head {
+  min-height: 2.75rem;
+  padding: 0.75rem;
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  font-weight: 750;
+  line-height: var(--aurora-leading-tight);
+}
+
+.flow-row,
+.table-row {
+  min-height: 4.5rem;
+  padding: 0.875rem 0.75rem;
+  line-height: var(--aurora-leading-body);
+}
+
+.flow-row > span:not(.guest),
+.table-row > span,
+.flow-row > span > b,
+.table-row > span > b,
+.guest > span b {
+  font-size: var(--aurora-type-body);
+}
+
+.flow-row > span > small,
+.table-row > span > small,
+.guest > span small {
+  margin-top: 0.2rem;
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.guest {
+  gap: 0.75rem;
+}
+
+.guest > i {
+  flex-basis: 2.5rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.75rem;
+  font-size: var(--aurora-type-caption);
+}
+
+.guest em {
+  font-size: var(--aurora-type-caption);
+}
+
+.segmented button {
+  min-height: var(--aurora-target);
+  padding: 0.5rem 0.875rem;
+  font-size: var(--aurora-type-caption);
+}
+
+.donut small,
+.legend p {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+}
+
+/* Room status and housekeeping */
+.room-grid {
+  grid-template-columns: repeat(auto-fit, minmax(13.5rem, 1fr));
+  gap: 1rem;
+}
+
+.room-card {
+  min-height: 13.5rem;
+  padding: 1.125rem;
+  border-radius: 1rem;
+}
+
+.room-card strong {
+  font-size: 1.75rem;
+  line-height: 1.15;
+}
+
+.room-card b,
+.room-card p,
+.room-card span,
+.room-card > div:first-child {
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-body);
+}
+
+.room-card small,
+.room-card em,
+.room-card i,
+.room-card > p {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.room-card > button,
+.manage-strip button,
+.drawer-actions button,
+.payment button {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-label);
+}
+
+/* Inventory and rate calendar */
+.inventory-toolbar,
+.accounting-hero {
+  padding: 1.25rem 1.375rem;
+  gap: 1.25rem;
+}
+
+.inventory-toolbar h2,
+.accounting-hero h2 {
+  font-size: 1.625rem;
+}
+
+.inventory-presets button {
+  min-height: var(--aurora-target);
+  padding: 0.625rem 0.875rem;
+  font-size: var(--aurora-type-label);
+}
+
+.inventory-range {
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.inventory-range label span,
+.accounting-hero form label span,
+.bulk-date-grid span,
+.channel-rate-fields label > span,
+.bulk-selector legend,
+.weekday-selector legend {
+  color: var(--aurora-text-secondary);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-tight);
+}
+
+.inventory-range input,
+.accounting-hero input,
+.bulk-date-grid input,
+.channel-rate-fields input,
+.channel-rate-fields select {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-body) !important;
+}
+
+.inventory-range em,
+.inventory-loading,
+.inventory-footnote {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.advanced-calendar {
+  max-height: calc(100dvh - 22rem);
+}
+
+.advanced-calendar .inventory-grid {
+  min-width: max-content;
+}
+
+.inventory-corner,
+.inventory-type {
+  min-width: 10.5rem;
+}
+
+.advanced-calendar .inventory-corner span,
+.inventory-date,
+.inventory-date span,
+.inventory-type span,
+.inventory-type small {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.inventory-date b,
+.inventory-type b {
+  font-size: var(--aurora-type-label);
+}
+
+.inventory-cell.rich {
+  min-width: 9.75rem;
+  min-height: 9.5rem;
+  padding: 0.875rem;
+}
+
+.inventory-cell.rich > strong {
+  font-size: var(--aurora-type-body);
+}
+
+.inventory-cell.rich span,
+.inventory-cell.rich em,
+.inventory-cell.rich b,
+.inventory-cell.rich small,
+.inventory-cell.rich i,
+.inventory-cell.rich mark {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.bulk-selector span,
+.weekday-selector span {
+  min-height: var(--aurora-target-compact);
+  font-size: var(--aurora-type-caption);
+}
+
+.channel-rate-toggle b,
+.contract-inline b,
+.contract-explainer b {
+  font-size: var(--aurora-type-label);
+}
+
+.channel-rate-toggle small,
+.contract-inline span,
+.contract-explainer span,
+.contract-warning {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-copy);
+}
+
+/* Folio, AR, accounting, and settlement precision layouts */
+.finance-layout {
+  grid-template-columns: 18rem minmax(47rem, 1fr);
+  gap: 1rem;
+}
+
+.folio-windows,
+.folio-ledger,
+.ar-panel {
+  padding: 1.25rem;
+}
+
+.folio-windows > button {
+  min-height: 5rem;
+  padding: 0.875rem;
+}
+
+.folio-windows :where(b, strong) {
+  font-size: var(--aurora-type-body);
+}
+
+.folio-windows small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.ledger-head,
+.ledger-row {
+  grid-template-columns: minmax(8rem, 0.85fr) minmax(14rem, 1.45fr) minmax(8rem, 0.8fr) minmax(7rem, 0.72fr) minmax(10rem, 1fr);
+  min-width: 52rem;
+  gap: 0.75rem;
+}
+
+.ledger-head,
+.accounting-row.head,
+.settlement-summary-head {
+  min-height: 2.75rem;
+  padding: 0.75rem;
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+}
+
+.ledger-row,
+.accounting-row,
+.settlement-row {
+  min-height: 4.25rem;
+  padding: 0.875rem 0.75rem;
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-body);
+}
+
+.ledger-row b,
+.ledger-row strong,
+.accounting-row b,
+.accounting-row strong,
+.settlement-row b,
+.settlement-row strong,
+.ar-panel article b {
+  font-size: var(--aurora-type-label);
+}
+
+.ledger-row small,
+.accounting-row small,
+.settlement-row small,
+.ar-panel article small,
+.journal-lines small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.ledger-actions button,
+.row-actions button,
+.ar-panel article > button,
+.group-actions button,
+.mapping-row > button,
+.ari-actions button,
+.inbound-panel article > button,
+.outbox-panel article button,
+.audit-row button,
+.table-edit {
+  min-height: var(--aurora-target);
+  padding: 0.5rem 0.75rem;
+  font-size: var(--aurora-type-caption);
+  font-weight: 750;
+}
+
+.ar-panel article {
+  min-height: 5rem;
+}
+
+.ar-panel article strong {
+  font-size: 1.125rem;
+}
+
+.accounting-tabs button {
+  min-height: 3rem;
+  padding: 0.75rem 1rem;
+  font-size: var(--aurora-type-label);
+}
+
+.accounting-row {
+  grid-template-columns: 10rem 8.5rem minmax(15rem, 1fr) 8rem 8rem 6rem 7rem;
+  min-width: 69rem;
+}
+
+.journal-lines {
+  margin-left: 10.5rem;
+  padding: 0.875rem 1rem;
+}
+
+.journal-lines > div {
+  min-height: 3.25rem;
+}
+
+.journal-lines :where(b, strong) {
+  font-size: var(--aurora-type-caption);
+}
+
+.settlement-summary-head,
+.settlement-row {
+  grid-template-columns: minmax(15rem, 1.5fr) repeat(4, 8rem) 9rem 7rem;
+  min-width: 70rem;
+}
+
+.account-grid {
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+}
+
+.account-grid article {
+  min-height: 9rem;
+  padding: 1.125rem;
+}
+
+.account-grid b,
+.account-grid h3 {
+  font-size: var(--aurora-type-body);
+}
+
+.account-grid i,
+.account-grid p,
+.reversal-card small,
+.reversal-card p {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-copy);
+}
+
+.stack-label span,
+.reversal-card b,
+.reversal-card strong {
+  font-size: var(--aurora-type-label);
+}
+
+/* Channels and group business */
+.connection-panel article {
+  min-height: 7.5rem;
+  padding: 1rem;
+}
+
+.connection-panel article b,
+.connection-panel article h3,
+.mapping-row b,
+.ari-list b,
+.inbound-panel article b,
+.outbox-panel article b {
+  font-size: var(--aurora-type-label);
+}
+
+.connection-panel article p,
+.connection-panel article small,
+.mapping-row small,
+.ari-list small,
+.inbound-panel article small,
+.outbox-panel article small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.contract-card-grid article {
+  min-height: 13rem;
+  padding: 1.125rem;
+}
+
+.contract-card-grid article > span b,
+.contract-card-grid strong,
+.contract-card-grid p,
+.contract-card-grid small,
+.contract-choice b,
+.contract-choice small,
+.suffix-input i {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.contract-card-grid h3 {
+  font-size: 1rem;
+  line-height: var(--aurora-leading-tight);
+}
+
+.contract-card-grid button {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-label);
+}
+
+.contract-choice label {
+  min-height: 5.5rem;
+}
+
+.mapping-head,
+.mapping-row,
+.ari-list > div,
+.inbound-panel article,
+.outbox-panel article {
+  min-height: 4.25rem;
+  padding: 0.75rem;
+  gap: 0.75rem;
+}
+
+.mapping-head {
+  font-size: var(--aurora-type-caption);
+}
+
+.mapping-row > button,
+.ari-actions button,
+.inbound-panel article > button,
+.outbox-panel article button {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-caption);
+}
+
+.block-card,
+.account-list article {
+  padding: 1rem;
+}
+
+.group-kpis span,
+.group-kpis small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-body);
+}
+
+.block-status,
+.account-list article > span {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-tight);
+}
+
+.block-code,
+.pickup-id {
+  font-size: var(--aurora-type-caption) !important;
+  line-height: var(--aurora-leading-body);
+}
+
+.block-card > div > b,
+.block-card h3,
+.account-list article b,
+.subhead {
+  font-size: var(--aurora-type-body);
+}
+
+.block-card p,
+.block-card > span,
+.block-card > small,
+.account-list article span,
+.account-list article p,
+.account-list article small,
+.block-grid-head,
+.block-grid-row,
+.rooming-head,
+.rooming-row {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.block-grid-row,
+.rooming-row {
+  min-height: 3.75rem;
+}
+
+.rooming-head span,
+.rooming-row > span:nth-child(2) b,
+.rooming-row > span:nth-child(2) small {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.rooming-row button {
+  min-height: var(--aurora-target);
+  padding: 0.625rem 0.75rem;
+  font-size: var(--aurora-type-caption);
+}
+
+/* Reports and master data */
+.report-workspace {
+  grid-template-columns: 18rem minmax(0, 1fr);
+  gap: 1.25rem;
+}
+
+.report-catalog,
+.report-main,
+.master-panel {
+  border-color: var(--aurora-line);
+  border-radius: var(--aurora-panel-radius);
+}
+
+.report-catalog {
+  padding: 0.75rem;
+}
+
+.report-catalog-head {
+  padding: 0.875rem;
+}
+
+.report-catalog-head span,
+.report-catalog > button span {
+  font-size: var(--aurora-type-caption);
+}
+
+.report-catalog-head b,
+.report-catalog > button b {
+  font-size: var(--aurora-type-body);
+}
+
+.report-catalog > button {
+  min-height: 5rem;
+  padding: 0.75rem 0.875rem;
+}
+
+.report-catalog > button small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.report-main,
+.master-panel {
+  padding: 1.5rem;
+}
+
+.report-filters {
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.report-filters label > span,
+.master-form-grid label > span {
+  color: var(--aurora-text-secondary);
+  font-size: var(--aurora-type-caption);
+}
+
+.report-filters input,
+.report-filters select,
+.master-form-grid input,
+.master-form-grid select,
+.master-form-grid textarea,
+.master-search input {
+  min-height: var(--aurora-target);
+  padding: 0.75rem;
+  font-size: var(--aurora-type-body) !important;
+}
+
+.report-summary article {
+  min-height: 6.5rem;
+  padding: 1rem;
+}
+
+.report-summary span,
+.report-table-meta {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+}
+
+.report-summary strong {
+  font-size: 1.25rem;
+}
+
+.report-scroll table {
+  font-size: var(--aurora-type-label);
+}
+
+.report-scroll th {
+  min-height: 2.75rem;
+  padding: 0.75rem;
+  font-size: var(--aurora-type-caption);
+}
+
+.report-scroll td {
+  height: 3.25rem;
+  padding: 0.75rem;
+  line-height: var(--aurora-leading-body);
+}
+
+.report-pagination button {
+  min-height: var(--aurora-target);
+  padding: 0.625rem 0.875rem;
+  font-size: var(--aurora-type-label);
+}
+
+.report-pagination span,
+.master-tabs b,
+.type-code i,
+.type-master-grid dt,
+.room-master-row span > small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+}
+
+.master-tabs button {
+  min-height: 3rem;
+  padding: 0.75rem 1rem;
+  font-size: var(--aurora-type-label);
+}
+
+.type-master-grid {
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+
+.type-master-grid article {
+  min-height: 15rem;
+  padding: 1.25rem;
+}
+
+.type-master-grid h3 {
+  font-size: 1.125rem;
+}
+
+.type-master-grid > article > p,
+.type-master-grid dd {
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-body);
+}
+
+.room-master-row {
+  min-height: 3.75rem;
+  padding: 0.75rem 0.875rem;
+  font-size: var(--aurora-type-label);
+}
+
+.room-master-row.head {
+  font-size: var(--aurora-type-caption);
+}
+
+/* Website editor and content management */
+.website-hero-panel {
+  padding: 1.75rem;
+}
+
+.website-hero-panel h2 {
+  font-size: 1.75rem;
+  line-height: 1.25;
+}
+
+.website-hero-panel span,
+.website-tabs button,
+.website-publish,
+.website-field-grid label > span,
+.website-upload label > span,
+.website-save span,
+.website-room-list > button small,
+.website-sync-note span,
+.website-media-grid article > small {
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.website-tabs button {
+  min-height: var(--aurora-target);
+  padding: 0.75rem 1.125rem;
+}
+
+.website-form h3,
+.website-room-form h3,
+.website-upload h3,
+.website-media-library h3,
+.website-room-list h3 {
+  font-size: var(--aurora-type-section);
+}
+
+.website-field-grid input,
+.website-field-grid textarea,
+.website-upload input,
+.website-upload select,
+.website-create-form input,
+.website-create-form textarea {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-body) !important;
+}
+
+.website-room-list > button {
+  min-height: 4.5rem;
+  padding: 0.875rem;
+}
+
+.website-room-list > button b,
+.website-sync-note b,
+.website-media-grid article > p {
+  font-size: var(--aurora-type-label);
+}
+
+.website-create-form button,
+.website-media-grid article > button {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-label);
+}
+
+.website-media-grid article > small {
+  min-height: 3rem;
+}
+
+.website-loading button {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-label);
+}
+
+/* Staff access and audit controls */
+.staff-kpis small,
+.staff-list article > span small,
+.staff-identity small,
+.permission-matrix > div span,
+.permission-matrix label span small,
+.staff-fields small,
+.password-reset-modal > small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.staff-list-head {
+  min-height: 2.75rem;
+  font-size: var(--aurora-type-caption);
+}
+
+.staff-list article {
+  min-height: 5rem;
+}
+
+.staff-list article > span,
+.staff-identity b,
+.permission-matrix label span b {
+  font-size: var(--aurora-type-body);
+}
+
+.staff-list article button,
+.permission-matrix select,
+.password-field button {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-caption);
+}
+
+.staff-identity,
+.staff-list article > button,
+.module-loading button {
+  min-height: var(--aurora-target);
+}
+
+.staff-identity em {
+  font-size: var(--aurora-type-caption);
+}
+
+.permission-matrix > label {
+  min-height: 4.25rem;
+  padding: 0.75rem 0.875rem;
+}
+
+.audit-score,
+.posting-preview span,
+.posting-preview small {
+  font-size: var(--aurora-type-caption);
+}
+
+.audit-row {
+  min-height: 4.75rem;
+  padding: 0.875rem;
+}
+
+.audit-row b,
+.audit-row strong,
+.audit-row div b {
+  font-size: var(--aurora-type-body);
+}
+
+.audit-row small,
+.audit-row div small {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.audit-row button {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-caption);
+}
+
+.audit-row > span {
+  width: 2rem;
+  height: 2rem;
+  font-size: var(--aurora-type-caption);
+}
+
+.chart span,
+.channel-list p,
+.channel-list p b {
+  color: var(--aurora-text-secondary);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.channel-list > div {
+  margin-block: 1.25rem;
+}
+
+.chart {
+  min-height: 22rem;
+  padding-top: 2.5rem;
+}
+
+/* Drawers, modals, and temporary overlays */
+.quick-panel {
+  width: min(25rem, calc(100vw - 2rem));
+}
+
+.quick-panel-head h2,
+.drawer-head h2,
+.modal-head h2 {
+  font-size: 1.5rem;
+  line-height: var(--aurora-leading-tight);
+}
+
+.quick-panel :where(b, dd),
+.guest-hero b,
+.drawer dd,
+.folio h3 {
+  font-size: var(--aurora-type-body);
+}
+
+.quick-panel :where(small, dt),
+.drawer-head p,
+.guest-hero p,
+.drawer dt,
+.note b,
+.note p {
+  color: var(--aurora-text-muted);
+  font-size: var(--aurora-type-caption);
+  line-height: var(--aurora-leading-body);
+}
+
+.quick-panel > button,
+.notification-panel > button {
+  min-height: 4.25rem;
+}
+
+.drawer {
+  width: min(32rem, 96vw);
+  padding: 1.5rem;
+}
+
+.drawer-head button,
+.modal-head > button {
+  width: var(--aurora-target);
+  height: var(--aurora-target);
+  min-width: var(--aurora-target);
+  min-height: var(--aurora-target);
+}
+
+.drawer dl > div {
+  min-height: 3.5rem;
+  padding: 0.875rem 0.125rem;
+  font-size: var(--aurora-type-body);
+}
+
+.guest-hero {
+  min-height: 5rem;
+  padding: 1rem;
+}
+
+.guest-hero > span {
+  width: 3rem;
+  height: 3rem;
+  font-size: var(--aurora-type-label);
+}
+
+.booking-modal,
+.cashier-modal,
+.modal.master-modal {
+  padding: 1.5rem;
+}
+
+.form-intro {
+  padding: 0.875rem;
+}
+
+.form-grid label span,
+.stack-form label > span,
+.master-form-grid label > span,
+.report-filters label > span,
+.cashier-amount span,
+.stack-label span {
+  color: var(--aurora-text-secondary);
+  font-size: var(--aurora-type-label);
+  line-height: var(--aurora-leading-tight);
+}
+
+.form-grid input,
+.form-grid select,
+.stack-form select,
+.stack-form input,
+.master-form-grid input,
+.master-form-grid select,
+.master-form-grid textarea,
+.report-filters input,
+.report-filters select {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-body) !important;
+}
+
+.payment select {
+  min-height: var(--aurora-target-compact);
+  font-size: var(--aurora-type-caption);
+}
+
+.posting-preview {
+  padding: 1rem;
+}
+
+.modal-actions button {
+  min-height: var(--aurora-target);
+  font-size: var(--aurora-type-label);
+}
+
+/* Tablet: keep precision layouts scrollable without shrinking their content. */
+@media (max-width: 1100px) {
+  .app-shell {
+    grid-template-columns: 15.25rem minmax(0, 1fr);
+  }
+
+  .workspace {
+    max-width: calc(100vw - 15.25rem);
+  }
+
+  .finance-layout,
+  .channel-layout,
+  .group-layout,
+  .website-editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .report-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .report-catalog {
+    position: static;
+  }
+}
+
+/* Mobile: one-handed navigation, card-based queues, and full-width overlays. */
+@media (max-width: 760px) {
+  :root {
+    --aurora-panel-padding: 1.125rem;
+  }
+
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace {
+    max-width: 100vw;
+  }
+
+  .sidebar {
+    height: calc(5.25rem + env(safe-area-inset-bottom));
+    padding: 0.5rem 0.5rem calc(0.5rem + env(safe-area-inset-bottom));
+    border-top: 1px solid rgba(255, 255, 255, 0.13);
+  }
+
+  .sidebar nav {
+    justify-content: flex-start;
+    gap: 0.25rem;
+  }
+
+  .sidebar nav button {
+    flex: 0 0 auto;
+    min-width: 5.75rem;
+    min-height: 4.25rem;
+    padding: 0.5rem 0.375rem;
+    font-size: var(--aurora-type-caption);
+    line-height: 1.25;
+  }
+
+  .sidebar nav i {
+    font-size: 1.25rem;
+  }
+
+  .workspace {
+    padding: 1rem 0.875rem calc(7rem + env(safe-area-inset-bottom));
+  }
+
+  .workspace > header {
+    gap: 0.875rem;
+    margin: -0.5rem -0.125rem 1.125rem;
+    padding: 0.75rem 0.125rem 0.875rem;
+  }
+
+  .workspace h1 {
+    font-size: 1.625rem;
+  }
+
+  .eyebrow,
+  .mobile-brand b {
+    font-size: var(--aurora-type-caption);
+  }
+
+  .header-actions {
+    grid-template-columns: minmax(0, 1fr) var(--aurora-target) minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .cashier-btn,
+  .header-actions .primary {
+    height: var(--aurora-target);
+    font-size: var(--aurora-type-caption);
+  }
+
+  .search {
+    height: 3rem;
+  }
+
+  .search input,
+  .list-search input,
+  .app-shell :where(input, select, textarea) {
+    font-size: 1rem !important;
+  }
+
+  .pulse-grid,
+  .finance-kpis,
+  .channel-kpis,
+  .accounting-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .pulse-grid article,
+  .finance-kpis article,
+  .channel-kpis article,
+  .accounting-kpis article {
+    min-height: 9.25rem;
+    padding: 1rem;
+  }
+
+  .pulse-grid strong,
+  .finance-kpis strong,
+  .channel-kpis strong,
+  .accounting-kpis strong {
+    overflow-wrap: anywhere;
+    font-size: 1.5rem;
+  }
+
+  .panel-title h2,
+  .panel-title h3,
+  .report-hero h2,
+  .master-head h2,
+  .inventory-toolbar h2,
+  .accounting-hero h2 {
+    font-size: 1.25rem;
+  }
+
+  .panel-title p,
+  .report-hero > div > p:last-child,
+  .master-head > div > p:last-child,
+  .inventory-toolbar > div > p:last-child,
+  .accounting-hero > div > p:last-child {
+    font-size: var(--aurora-type-label);
+  }
+
+  .insight-strip {
+    align-items: flex-start;
+  }
+
+  .insight-strip p {
+    display: block;
+    margin: 0.375rem 0 0;
+  }
+
+  /* Reservation queues become self-labelled cards instead of compressed rows. */
+  .reservation-table .table-head {
+    display: none;
+  }
+
+  .reservation-table .table-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.75rem 1rem;
+    min-width: 0;
+    min-height: 0;
+    margin-bottom: 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--aurora-line);
+    border-radius: 1rem;
+    background: #fff;
+  }
+
+  .reservation-table .table-row > span {
+    display: block;
+    min-width: 0;
+  }
+
+  .reservation-table .table-row > span:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .reservation-table .table-row > span:nth-child(2),
+  .reservation-table .table-row > span:nth-child(4),
+  .reservation-table .table-row > span:nth-child(5) {
+    display: block;
+  }
+
+  .reservation-table .table-row > span:nth-child(2)::before,
+  .reservation-table .table-row > span:nth-child(3)::before,
+  .reservation-table .table-row > span:nth-child(4)::before,
+  .reservation-table .table-row > span:nth-child(5)::before {
+    display: block;
+    margin-bottom: 0.2rem;
+    color: var(--aurora-text-muted);
+    font-size: var(--aurora-type-caption);
+    font-weight: 700;
+    line-height: var(--aurora-leading-tight);
+  }
+
+  .reservation-table .table-row > span:nth-child(2)::before { content: "투숙 일정"; }
+  .reservation-table .table-row > span:nth-child(3)::before { content: "객실"; }
+  .reservation-table .table-row > span:nth-child(4)::before { content: "예약 경로"; }
+  .reservation-table .table-row > span:nth-child(5)::before { content: "미결제"; }
+
+  .reservation-table .table-row > span:last-child {
+    align-self: end;
+    text-align: right;
+  }
+
+  .flow-head {
+    display: none;
+  }
+
+  .flow-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    min-height: 5.25rem;
+    margin-bottom: 0.5rem;
+    padding: 0.875rem;
+    border: 1px solid var(--aurora-line);
+    border-radius: 0.875rem;
+  }
+
+  .flow-row > span:nth-child(2),
+  .flow-row > span:nth-child(3),
+  .flow-row > span:nth-child(4) {
+    display: none;
+  }
+
+  .room-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .room-card {
+    min-height: 14rem;
+    padding: 1rem;
+  }
+
+  .inventory-toolbar,
+  .accounting-hero {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 1rem;
+  }
+
+  .inventory-range,
+  .accounting-hero form,
+  .accounting-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .advanced-calendar {
+    max-height: calc(100dvh - 26rem);
+    min-height: 24rem;
+  }
+
+  .inventory-cell.rich {
+    min-width: 10.5rem;
+  }
+
+  .report-main,
+  .master-panel {
+    padding: 1.125rem;
+  }
+
+  .report-catalog {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+  }
+
+  .report-catalog-head,
+  .report-catalog > button {
+    min-width: 12rem;
+    scroll-snap-align: start;
+  }
+
+  .report-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-summary article {
+    min-width: 0;
+  }
+
+  .report-summary strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .room-master-row:not(.head) {
+    grid-template-columns: minmax(4rem, 0.6fr) minmax(7rem, 1fr) minmax(5rem, 0.65fr) var(--aurora-target);
+    min-width: 22rem;
+    min-height: 4.5rem;
+  }
+
+  .type-master-grid article {
+    min-height: 0;
+  }
+
+  .website-hero-panel {
+    padding: 1.25rem;
+  }
+
+  .website-hero-panel h2 {
+    font-size: 1.5rem;
+  }
+
+  .website-tabs button {
+    min-width: 8.25rem;
+  }
+
+  .website-save {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .website-save span {
+    margin-right: 0;
+  }
+
+  .website-save .primary {
+    width: 100%;
+  }
+
+  .staff-list-head {
+    display: none;
+  }
+
+  .staff-list article {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.875rem;
+    margin-bottom: 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--aurora-line);
+    border-radius: 1rem;
+  }
+
+  .staff-list article > * {
+    min-width: 0;
+  }
+
+  .staff-list article > .staff-identity,
+  .staff-list article > div:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .staff-list article > div:last-child {
+    justify-content: stretch;
+  }
+
+  .staff-list article > div:last-child button {
+    flex: 1;
+    min-height: var(--aurora-target);
+  }
+
+  .staff-editor-body {
+    grid-template-columns: 1fr;
+  }
+
+  .permission-matrix > label {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .permission-matrix select {
+    width: 100%;
+    min-height: var(--aurora-target);
+  }
+
+  .audit-row {
+    grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+    gap: 0.75rem;
+  }
+
+  .audit-row button {
+    grid-column: 2 / -1;
+    min-height: var(--aurora-target);
+  }
+
+  .quick-panel {
+    bottom: calc(6.25rem + env(safe-area-inset-bottom));
+  }
+
+  .booking-modal,
+  .cashier-modal,
+  .modal.master-modal,
+  .drawer {
+    padding: 1.125rem 1rem calc(1rem + env(safe-area-inset-bottom));
+  }
+
+  .drawer-head h2,
+  .modal-head h2 {
+    font-size: 1.375rem;
+  }
+
+  .modal-actions,
+  .modal-actions.sticky,
+  .master-modal > .modal-actions {
+    margin-right: -1rem;
+    margin-left: -1rem;
+    padding-right: 1rem;
+    padding-left: 1rem;
+  }
+
+  .modal-actions button,
+  .ledger-actions button,
+  .row-actions button,
+  .ar-panel article > button,
+  .group-actions button,
+  .mapping-row > button,
+  .ari-actions button,
+  .inbound-panel article > button,
+  .outbox-panel article button,
+  .audit-row button,
+  .table-edit {
+    min-height: var(--aurora-target);
+    font-size: var(--aurora-type-caption);
+  }
+}
+
+@media (max-width: 430px) {
+  .pulse-grid,
+  .finance-kpis,
+  .channel-kpis,
+  .accounting-kpis,
+  .room-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-range,
+  .accounting-hero form,
+  .accounting-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace h1 {
+    font-size: 1.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell *,
+  .app-shell *::before,
+  .app-shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
