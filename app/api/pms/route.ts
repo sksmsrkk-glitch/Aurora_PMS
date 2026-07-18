@@ -6,6 +6,9 @@ import { principalFor, ready, runtimeBindings } from "./auth";
 import { cachedCoreSnapshotResponse, cachedReport, cachedSnapshotResponse, workspaceProjection, type WorkspaceProjection } from "./read-model";
 import { handlePmsPost } from "./command-gateway";
 import { schemaNotReadyResponse } from "../../../db/schema-contract";
+import { canViewWorkspace } from "../../access-control";
+import { PMS_WORKSPACES, type PmsWorkspace } from "../../pms-workspaces";
+import { loadStaffUsers } from "./staff";
 
 export const dynamic="force-dynamic";
 export const runtime="nodejs";
@@ -17,33 +20,47 @@ export async function GET(request: Request) {
   try { await ready(rootDb); } catch (error) { const response=schemaNotReadyResponse(error); if(response)return response; throw error; }
   const principal = await principalFor(request, rootDb);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
+  if(principal.mustChangePassword)return Response.json({error:"임시 비밀번호를 먼저 변경해 주세요.",code:"PASSWORD_CHANGE_REQUIRED"},{status:428});
+  if(!principal.capabilities.includes("READ"))return Response.json({error:"이 호텔에 부여된 활성 페이지 권한이 없습니다."},{status:403});
   const db = scopePmsDatabase(rootDb, principal.propertyId);
   const url=new URL(request.url);
   const view=url.searchParams.get("view");
   if(view==="core") return cachedCoreSnapshotResponse(db,principal,request);
   if(view==="groups"||view==="finance"||view==="channels") {
+    const allowed=view==="finance"?(canViewWorkspace(principal.workspaceAccess,"finance")||canViewWorkspace(principal.workspaceAccess,"revenue")):canViewWorkspace(principal.workspaceAccess,view);
+    if(!allowed)return Response.json({error:"이 페이지를 조회할 권한이 없습니다."},{status:403});
     return Response.json(await workspaceProjection(db,view as WorkspaceProjection),{headers:{"Cache-Control":"private, no-store"}});
   }
   if(url.searchParams.get("view")==="inventory") {
+    if(!canViewWorkspace(principal.workspaceAccess,"inventory"))return Response.json({error:"재고 페이지를 조회할 권한이 없습니다."},{status:403});
     try {
       const property=await db.prepare("SELECT business_date FROM properties WHERE id=pms_current_property_id()").first<{business_date:string}>(),from=url.searchParams.get("from")||String(property?.business_date),to=url.searchParams.get("to")||String(property?.business_date);
        return Response.json(await loadInventoryCalendar(db,from,to,principal.propertyId),{headers:{"Cache-Control":"private, no-store"}});
     } catch(error){if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});throw error;}
   }
   if(url.searchParams.get("view")==="accounting") {
+    if(!canViewWorkspace(principal.workspaceAccess,"accounting"))return Response.json({error:"회계 페이지를 조회할 권한이 없습니다."},{status:403});
     try {
       const property=await db.prepare("SELECT business_date FROM properties WHERE id=pms_current_property_id()").first<{business_date:string}>(),from=url.searchParams.get("from")||String(property?.business_date),to=url.searchParams.get("to")||String(property?.business_date);
        return Response.json(await loadAccountingCenter(db,from,to,principal.propertyId),{headers:{"Cache-Control":"private, no-store"}});
     } catch(error){if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});throw error;}
   }
   if(url.searchParams.get("view")==="website") {
+    if(!canViewWorkspace(principal.workspaceAccess,"website"))return Response.json({error:"홈페이지 관리 권한이 없습니다."},{status:403});
     try { return Response.json(await loadWebsiteAdmin(db,principal.propertyId),{headers:{"Cache-Control":"private, no-store"}}); }
     catch(error){if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});throw error;}
   }
   if(url.searchParams.get("view")==="report") {
+    if(!canViewWorkspace(principal.workspaceAccess,"reports"))return Response.json({error:"리포트 조회 권한이 없습니다."},{status:403});
     try { return Response.json(await cachedReport(db,url.searchParams,principal),{headers:{"Cache-Control":"private, no-store"}}); }
     catch(error){if(error instanceof ReportRequestError)return Response.json({error:error.message},{status:error.status});throw error;}
   }
+  if(view==="users"){
+    if(!canViewWorkspace(principal.workspaceAccess,"users"))return Response.json({error:"직원 및 권한 관리 페이지를 조회할 권한이 없습니다."},{status:403});
+    return Response.json(await loadStaffUsers(db,principal),{headers:{"Cache-Control":"private, no-store"}});
+  }
+  const fullSnapshotAllowed=PMS_WORKSPACES.filter((workspace):workspace is PmsWorkspace=>workspace!=="users").every((workspace)=>canViewWorkspace(principal.workspaceAccess,workspace));
+  if(!fullSnapshotAllowed)return Response.json({error:"전체 데이터 스냅샷을 조회할 권한이 없습니다."},{status:403});
   return cachedSnapshotResponse(db,principal,request);
 }
 

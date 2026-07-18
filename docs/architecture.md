@@ -190,3 +190,29 @@ Aurora는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사용
 | ADR-014 | 실제 workspace URL + action Context | `useState` 화면 전환은 새로고침과 딥링크가 깨지고 공통 props가 전 컴포넌트로 전파됨 | 13개 App Router 경로와 공용 command context 사용 |
 | ADR-015 | command receipt + TanStack Query invalidation | 객실 1실 변경에도 30개 쿼리 snapshot을 재계산·재렌더하던 God payload 제거 | POST는 변경 참조만 반환하고 UI가 관련 projection cache를 무효화 |
 | ADR-016 | PostgreSQL service 기반 CI behavior gate | 소스 정규식과 테스트 내부 SQLite trigger는 운영 schema drift를 잡지 못함 | PR마다 빈 PostgreSQL 17에 전체 migration을 적용하고 실제 RLS·trigger·경합 실행 |
+## 직원 계정·권한 아키텍처
+
+Supabase Auth는 이메일/비밀번호 검증과 세션만 담당합니다. 권한은 변경 가능한 `user_metadata`가 아니라 tenant table인 `role_assignments`의 `property_id`, `active`, `workspace_permissions`, `can_export`, `must_change_password`에서 해석합니다. Root DB는 인증 직후 닫힌 `findActiveRoleAssignments(email)` capability 하나로 배정 후보를 읽고, 이후 직원 목록·변경·업무 데이터는 모두 property-scoped adapter와 RLS를 통과합니다.
+
+```mermaid
+sequenceDiagram
+  participant Admin as 권한 관리자
+  participant API as PMS Server
+  participant Auth as Supabase Auth Admin
+  participant DB as Property-scoped PostgreSQL
+  Admin->>API: 직원 생성 + 권한 matrix + 임시 PW
+  API->>API: USER_ADMIN, Zod, password policy
+  API->>Auth: server-only createUser
+  Auth-->>API: auth user id
+  API->>DB: assignment + audit + idempotency 원자 저장
+  alt DB 저장 실패
+    API->>Auth: 생성 사용자 rollback delete
+  end
+  API-->>Admin: 비밀번호 없는 mutation receipt
+```
+
+페이지 `WRITE`는 도메인 capability 묶음으로 변환되고, action registry가 매 요청에서 이를 다시 확인합니다. 페이지 `READ`는 해당 GET projection만 허용합니다. 최초 로그인/관리자 PW 재설정 후에는 `must_change_password`가 모든 PMS GET/command를 `428`로 막고 비밀번호 교체 endpoint만 허용합니다.
+
+### ADR-017 · 역할 템플릿 + 사용자별 권한 matrix
+
+고정 역할만 사용하면 같은 프런트 직무에서도 폴리오를 입력할 사람과 예약만 조회할 사람을 구분할 수 없습니다. 반대로 capability를 사용자 화면에 직접 노출하면 운영자가 이해하기 어렵습니다. 따라서 직무는 초기 템플릿, 14개 페이지의 없음/조회/입력은 영속 권한, capability는 서버가 계산하는 실행 권한으로 분리했습니다. 이 구조는 사용자 친화성과 서버 강제를 동시에 유지합니다.

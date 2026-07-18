@@ -17,6 +17,7 @@
     "qa:workflow": "node scripts/qa-full-workflow.mjs",
     "qa:booking": "node scripts/qa-booking-engine.mjs",
     "qa:website": "node scripts/qa-website-cms.mjs",
+    "qa:staff": "node scripts/qa-staff-access.mjs",
     "qa:public": "node scripts/qa-public-site.mjs",
     "benchmark": "node tests/api-benchmark.mjs",
     "docs:metrics": "node --import tsx scripts/generate-project-metrics.mjs",
@@ -24,7 +25,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work",
     "db:supabase:migrate": "node scripts/migrate-supabase.mjs",
     "db:supabase:smoke": "node scripts/smoke-supabase.mjs",
-    "db:provision-role": "node scripts/provision-role.mjs",
+    "db:provision-role": "node --import tsx scripts/provision-role.mjs",
     "db:test:bootstrap": "node scripts/bootstrap-test-postgres.mjs",
     "db:contract:verify": "node --import tsx scripts/verify-runtime-contract.mjs"
   },

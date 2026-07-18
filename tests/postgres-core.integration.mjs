@@ -113,6 +113,22 @@ test("flags and structured payloads use native types with reservation invariants
   }
 });
 
+test("staff assignments store complete page permissions and remain tenant isolated", { skip }, async () => {
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),propertyId=`it-staff-${suffix}`,assignmentId=`it-role-${suffix}`;
+  try{
+    await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date) VALUES (${propertyId},'Staff Hotel',${`S-${suffix}`},'Asia/Seoul','KRW','2031-01-01')`;
+    const permissions={overview:"READ",frontdesk:"WRITE",inventory:"NONE",website:"NONE",groups:"NONE",finance:"NONE",accounting:"NONE",channels:"NONE",rooms:"READ",reports:"READ",master:"NONE",revenue:"NONE",users:"NONE",audit:"NONE"};
+    await sql`INSERT INTO role_assignments(id,property_id,email,role,active,created_at,display_name,workspace_permissions,can_export,updated_at) VALUES (${assignmentId},${propertyId},${`staff-${suffix}@example.com`},'FRONT_DESK',true,now(),'Integration Staff',${sql.json(permissions)},true,now())`;
+    const [stored]=await sql`SELECT display_name,workspace_permissions,can_export,version FROM role_assignments WHERE id=${assignmentId}`;
+    assert.equal(stored.display_name,"Integration Staff");
+    assert.deepEqual(stored.workspace_permissions,permissions);
+    assert.equal(stored.can_export,true);
+    await assert.rejects(sql`UPDATE role_assignments SET workspace_permissions='{"overview":"OWNER"}'::jsonb WHERE id=${assignmentId}`,(error)=>error?.code==="23514");
+    const visible=await sql.begin(async(tx)=>{await tx.unsafe("SET LOCAL ROLE aurora_app");await tx`SELECT set_config('app.property_id',${propertyId},true)`;return tx`SELECT id FROM role_assignments ORDER BY id`;});
+    assert.deepEqual(visible.map((row)=>row.id),[assignmentId]);
+  }finally{await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;await sql`DELETE FROM properties WHERE id=${propertyId}`;await sql.end({timeout:2});}
+});
+
 test("dashboard comparisons match current and prior business-day facts", { skip }, async () => {
   const sql = client(1);
   const previousDatabaseUrl = process.env.DATABASE_URL;

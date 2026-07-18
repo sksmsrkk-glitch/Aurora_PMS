@@ -1,6 +1,7 @@
 /** Property-partitioned PMS read models and short-lived representation caches. */
 import type { PmsDatabase } from "../../../db/pms-database";
 import type { Principal } from "./auth";
+import { canViewWorkspace } from "../../access-control";
 import { runReport } from "./reporting";
 
 type D1=PmsDatabase;
@@ -196,7 +197,16 @@ async function coreSnapshot(db:D1,principal:Principal) {
   const controls={blockers,canClose:blockers.every(item=>!item.blocking||item.count===0)&&!priorAudit,openCashier:actorCashierResult.results[0]??null,priorAudit,pendingRoomPostings:Number((postingsResult.results[0] as {count?:number})?.count??0)};
   const dates=Array.from({length:14},(_,index)=>{const day=new Date(`${String(property.business_date)}T00:00:00Z`);day.setUTCDate(day.getUTCDate()+index);return day.toISOString().slice(0,10)}),typeNights=typeNightsResult.results as Array<Record<string,unknown>>,controlRows=inventoryControlsResult.results as Array<Record<string,unknown>>,roomTypes=roomTypesResult.results as Array<Record<string,unknown>>,booked=new Map(typeNights.map(row=>[`${row.room_type_id}:${row.stay_date}`,Number(row.booked)])),inventoryControls=new Map(controlRows.map(row=>[`${row.room_type_id}:${row.stay_date}`,row]));
   const inventory={dates,types:roomTypes.map(type=>{const physical=rooms.filter(room=>room.room_type_id===type.id&&room.active!==false&&room.housekeeping_status!=="OUT_OF_SERVICE").length;return {...type,physical,cells:dates.map(stayDate=>{const control=inventoryControls.get(`${type.id}:${stayDate}`),sellLimit=control?.sell_limit==null?physical:Number(control.sell_limit),reserved=booked.get(`${type.id}:${stayDate}`)??0,closed=Boolean(control?.closed);return {stayDate,sellLimit,reserved,available:closed?0:Math.max(0,sellLimit-reserved),closed,minStay:Number(control?.min_stay??1),cta:Boolean(control?.close_to_arrival),ctd:Boolean(control?.close_to_departure),price:Number(control?.price_override??type.base_rate)};})}})};
-  return {property,reservations,rooms,metrics,principal,controls,inventory,groups:{accounts:[],blocks:[],inventory:[],rooming:[]},finance:{windows:[],entries:[],routing:[],transactionCodes:[],arAccounts:[],arInvoices:[],trialBalance:{guest_ledger:0,ar_ledger:0,gross_revenue:0,net_payments:0}},integrations:{connections:[],contracts:[],mappings:[],ari:[],inbound:[],links:[],attempts:[],outbox:[]},completeness:"core"};
+  // The shell is shared by every role, so its core payload must be permission-aware.
+  // Empty collections prevent a user with a single narrow workspace from receiving
+  // reservation, room, inventory, or operational-control data in the background.
+  const mayReadReservations=["overview","frontdesk","groups","finance","reports","revenue","audit"].some((workspace)=>canViewWorkspace(principal.workspaceAccess,workspace as keyof typeof principal.workspaceAccess));
+  const mayReadRooms=["overview","frontdesk","inventory","rooms","master","audit"].some((workspace)=>canViewWorkspace(principal.workspaceAccess,workspace as keyof typeof principal.workspaceAccess));
+  const mayReadInventory=["overview","frontdesk","inventory","groups","reports","master","revenue"].some((workspace)=>canViewWorkspace(principal.workspaceAccess,workspace as keyof typeof principal.workspaceAccess));
+  const mayReadMetrics=canViewWorkspace(principal.workspaceAccess,"overview")||canViewWorkspace(principal.workspaceAccess,"revenue");
+  const mayReadControls=canViewWorkspace(principal.workspaceAccess,"overview")||canViewWorkspace(principal.workspaceAccess,"frontdesk")||canViewWorkspace(principal.workspaceAccess,"finance")||canViewWorkspace(principal.workspaceAccess,"audit");
+  const emptyControls={blockers:[],canClose:false,openCashier:null,priorAudit:null,pendingRoomPostings:0};
+  return {property,reservations:mayReadReservations?reservations:[],rooms:mayReadRooms?rooms:[],metrics:mayReadMetrics?metrics:{arrivals:0,inHouse:0,occupancy:0,ready:0,dirty:0,rooms:0,comparison:null},principal,controls:mayReadControls?controls:emptyControls,inventory:mayReadInventory?inventory:{dates:[],types:[]},groups:{accounts:[],blocks:[],inventory:[],rooming:[]},finance:{windows:[],entries:[],routing:[],transactionCodes:[],arAccounts:[],arInvoices:[],trialBalance:{guest_ledger:0,ar_ledger:0,gross_revenue:0,net_payments:0}},integrations:{connections:[],contracts:[],mappings:[],ari:[],inbound:[],links:[],attempts:[],outbox:[]},completeness:"core"};
 }
 
 type Snapshot = Awaited<ReturnType<typeof snapshot>>;

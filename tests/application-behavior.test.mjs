@@ -16,7 +16,7 @@ import { assertSafeQaTarget } from "../scripts/qa-target.mjs";
 const root = new URL("../", import.meta.url);
 
 test("all PMS workspaces round-trip through bookmarkable routes", async () => {
-  assert.equal(PMS_WORKSPACES.length, 13);
+  assert.equal(PMS_WORKSPACES.length, 14);
   for (const workspace of PMS_WORKSPACES) {
     const path = pmsWorkspacePath(workspace);
     assert.equal(parsePmsWorkspace(path.slice(1)), workspace);

@@ -11,6 +11,8 @@ import { mapPmsError } from "./error-map";
 import { pmsMutationReceipt } from "../../pms-mutation";
 import { buildAriDeltaInserts } from "./ari-delta";
 import { addIsoDays } from "../../../lib/format";
+import { handleStaffAction, StaffAccessError } from "./staff";
+import { StaffAuthError } from "./staff-auth";
 
 type D1=PmsDatabase;
 type D1PreparedStatement=PmsPreparedStatement;
@@ -101,6 +103,7 @@ export async function handlePmsPost(request: Request) {
   const rootDb = getPmsDatabase(runtimeBindings);
   try { await ready(rootDb); } catch (error) { const response=schemaNotReadyResponse(error); if(response)return response; throw error; }
   const principal = await principalFor(request, rootDb);
+  if(principal?.mustChangePassword)return Response.json({error:"임시 비밀번호를 먼저 변경해 주세요.",code:"PASSWORD_CHANGE_REQUIRED"},{status:428});
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
   const origin=request.headers.get("origin");
   if(origin&&origin!==new URL(request.url).origin)return Response.json({error:"허용되지 않은 요청 출처입니다."},{status:403});
@@ -148,7 +151,10 @@ export async function handlePmsPost(request: Request) {
   const reservation = body.reservationId ? await db.prepare("SELECT * FROM reservations WHERE id=? AND property_id=pms_current_property_id()").bind(body.reservationId).first<Record<string, unknown>>() : null;
   const propertyState = await db.prepare("SELECT business_date FROM properties WHERE id=pms_current_property_id()").first<{business_date:string}>(); const businessDate=String(propertyState?.business_date);
   try {
-    if(registration.domain==="accounting"||registration.domain==="website"||(registration.domain==="inventory"&&["bulk_update_inventory_controls","upsert_rate_plan"].includes(body.action))||(registration.domain==="integrations"&&body.action==="upsert_channel_contract")) {
+    if(registration.domain==="users"){
+      const handled=await handleStaffAction(db,body,principal,now,idempotencyKey);
+      if(!handled)return Response.json({error:"지원하지 않는 직원 권한 작업입니다."},{status:400});
+    } else if(registration.domain==="accounting"||registration.domain==="website"||(registration.domain==="inventory"&&["bulk_update_inventory_controls","upsert_rate_plan"].includes(body.action))||(registration.domain==="integrations"&&body.action==="upsert_channel_contract")) {
       const handled=await handleExtendedAction(db,body,principal,businessDate,now,idempotencyKey);
       if(!handled)return Response.json({error:"등록된 도메인 핸들러가 작업을 처리하지 못했습니다."},{status:500});
     } else if(body.action==="create_room_type") {
@@ -549,6 +555,7 @@ export async function handlePmsPost(request: Request) {
     return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body}));
   } catch (error) {
     const message=error instanceof Error ? error.message : "처리 중 오류가 발생했습니다.";
+    if(error instanceof StaffAccessError||error instanceof StaffAuthError)return Response.json({error:error.message},{status:error.status});
     if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});
     if (/idempotency_keys_pkey|idempotency_keys\.key/iu.test(message)) return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}), {headers:{"X-Idempotent-Replay":"true"}});
     const mapped=mapPmsError(message);

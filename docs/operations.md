@@ -152,8 +152,9 @@ WHERE departure_date <= arrival_date;
 - [x] Supabase Auth login, token 검증, refreshable HttpOnly session 연결
 - [x] email/role/property assignment와 capability 기반 서버 권한 적용
 - [x] 할당되지 않은 property 접근 차단과 scoped query adapter 적용
-- [ ] 사용자 초대·비활성화·비밀번호/세션 정책 구축
-- [ ] 역할 변경 audit와 최소 권한 정기 검토
+- [x] 다중 직원 계정 생성·비활성화·임시 비밀번호·최초 변경 정책 구축
+- [x] 페이지별 없음/조회/입력 권한, 별도 export 권한, 역할 변경 audit 구축
+- [ ] 호텔별 최소 권한 정기 검토와 퇴사자 계정 회수 SLA 운영
 
 ### 개인정보·결제·보안
 
