@@ -154,6 +154,7 @@ WHERE departure_date <= arrival_date;
 - [x] 할당되지 않은 property 접근 차단과 scoped query adapter 적용
 - [x] 다중 직원 계정 생성·비활성화·임시 비밀번호·최초 변경 정책 구축
 - [x] 페이지별 없음/조회/입력 권한, 별도 export 권한, 역할 변경 audit 구축
+- [x] 운영 assignment를 Supabase Auth user ID + email 이중 일치로 고정하고 미연결 레거시 권한 행 차단
 - [ ] 호텔별 최소 권한 정기 검토와 퇴사자 계정 회수 SLA 운영
 
 ### 개인정보·결제·보안

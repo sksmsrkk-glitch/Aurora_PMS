@@ -20,7 +20,15 @@ export interface PmsDatabase {
   prepare(query: string): PmsPreparedStatement;
   batch<T = Record<string, unknown>>(statements: PmsPreparedStatement[]): Promise<PmsResult<T>[]>;
   forProperty(propertyId: string): PmsDatabase;
-  findActiveRoleAssignments(email: string): Promise<{
+  findActiveRoleAssignments(authUserId: string, email: string): Promise<{
+    property_id: string;
+    role: string;
+    display_name: string;
+    workspace_permissions: unknown;
+    can_export: boolean;
+    must_change_password: boolean;
+  }[]>;
+  findActiveDemoRoleAssignments(email: string): Promise<{
     property_id: string;
     role: string;
     display_name: string;
@@ -125,11 +133,34 @@ class PostgresDatabase implements PmsDatabase {
 
   /**
    * The sole root-level tenant lookup is a closed capability, not arbitrary SQL.
-   * Authentication supplies only a normalized email bind; callers cannot alter
-   * selected columns, predicates, joins, ordering, or tenant-table scope.
+   * Authentication supplies an immutable Auth user ID plus the normalized email;
+   * requiring both prevents an unlinked legacy email assignment from being
+   * claimed by a newly registered Auth account.
    */
-  async findActiveRoleAssignments(email: string) {
+  async findActiveRoleAssignments(authUserId: string, email: string) {
     if (this.propertyId) throw new Error("Role assignment lookup requires the root database capability");
+    const normalized = email.trim().toLowerCase();
+    const normalizedUserId = authUserId.trim().toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(normalizedUserId)) return [];
+    if (!normalized || normalized.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) return [];
+    const result = await this.executeRaw<{
+      property_id: string;
+      role: string;
+      display_name: string;
+      workspace_permissions: unknown;
+      can_export: boolean;
+      must_change_password: boolean;
+    }>(
+      "SELECT property_id,role,display_name,workspace_permissions,can_export,must_change_password FROM role_assignments WHERE auth_user_id=?::uuid AND lower(email)=? AND active ORDER BY created_at",
+      [normalizedUserId, normalized],
+      this.client,
+    );
+    return result.results;
+  }
+
+  /** Explicitly isolated compatibility lookup for the opt-in, non-production demo. */
+  async findActiveDemoRoleAssignments(email: string) {
+    if (this.propertyId) throw new Error("Demo role assignment lookup requires the root database capability");
     const normalized = email.trim().toLowerCase();
     if (!normalized || normalized.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) return [];
     const result = await this.executeRaw<{
@@ -140,7 +171,7 @@ class PostgresDatabase implements PmsDatabase {
       can_export: boolean;
       must_change_password: boolean;
     }>(
-      "SELECT property_id,role,display_name,workspace_permissions,can_export,must_change_password FROM role_assignments WHERE email=? AND active ORDER BY created_at",
+      "SELECT property_id,role,display_name,workspace_permissions,can_export,must_change_password FROM role_assignments WHERE lower(email)=? AND active ORDER BY created_at",
       [normalized],
       this.client,
     );

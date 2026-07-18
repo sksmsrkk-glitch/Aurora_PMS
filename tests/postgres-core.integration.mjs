@@ -129,6 +129,25 @@ test("staff assignments store complete page permissions and remain tenant isolat
   }finally{await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;await sql`DELETE FROM properties WHERE id=${propertyId}`;await sql.end({timeout:2});}
 });
 
+test("production authorization binds a staff assignment to the immutable Auth user ID", { skip }, async () => {
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),linkedProperty=`it-linked-${suffix}`,legacyProperty=`it-legacy-${suffix}`;
+  const email=`identity-${suffix}@example.com`,authUserId=crypto.randomUUID();
+  const permissions={overview:"READ",frontdesk:"NONE",inventory:"NONE",website:"NONE",groups:"NONE",finance:"NONE",accounting:"NONE",channels:"NONE",rooms:"READ",reports:"NONE",master:"NONE",revenue:"NONE",users:"NONE",audit:"NONE"};
+  const database=getPmsDatabase({DATABASE_URL:databaseUrl});
+  try{
+    await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date) VALUES (${linkedProperty},'Linked Hotel',${`L-${suffix}`},'Asia/Seoul','KRW','2031-01-01'),(${legacyProperty},'Legacy Hotel',${`U-${suffix}`},'Asia/Seoul','KRW','2031-01-01')`;
+    await sql`INSERT INTO role_assignments(id,property_id,email,role,active,created_at,auth_user_id,display_name,workspace_permissions,can_export,updated_at) VALUES (${`it-linked-role-${suffix}`},${linkedProperty},${email},'VIEWER',true,now(),${authUserId},'Linked Staff',${sql.json(permissions)},false,now()),(${`it-legacy-role-${suffix}`},${legacyProperty},${email},'PROPERTY_ADMIN',true,now(),NULL,'Legacy Staff',${sql.json(permissions)},false,now())`;
+    const linked=await database.findActiveRoleAssignments(authUserId,email);
+    assert.deepEqual(linked.map((item)=>item.property_id),[linkedProperty]);
+    assert.deepEqual(await database.findActiveRoleAssignments(crypto.randomUUID(),email),[]);
+  }finally{
+    await closePmsDatabase();
+    await sql`DELETE FROM role_assignments WHERE property_id IN (${linkedProperty},${legacyProperty})`;
+    await sql`DELETE FROM properties WHERE id IN (${linkedProperty},${legacyProperty})`;
+    await sql.end({timeout:2});
+  }
+});
+
 test("dashboard comparisons match current and prior business-day facts", { skip }, async () => {
   const sql = client(1);
   const previousDatabaseUrl = process.env.DATABASE_URL;

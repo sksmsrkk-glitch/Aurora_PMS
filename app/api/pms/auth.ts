@@ -91,12 +91,15 @@ export async function principalFor(request: Request, db: D1): Promise<Principal 
   }
   if (!email) return null;
   const requestedProperty = request.headers.get("x-aurora-property-id")?.trim() || null;
-  const cacheKey = `${email}:${requestedProperty || "default"}`, cached=principalCache.get(cacheKey),now=Date.now();
+  const cacheKey = `${email}:${requestedProperty || "default"}:${identity?.id || "demo"}`, cached=principalCache.get(cacheKey),now=Date.now();
   if(cached&&cached.expires>now)return buildPrincipal(email,displayName,cached.assignment);
   if(principalCache.size>500){for(const [key,item] of principalCache)if(item.expires<=now)principalCache.delete(key);if(principalCache.size>500)principalCache.clear();}
   let assignmentPromise=principalInflight.get(cacheKey);
   if(!assignmentPromise){
-    assignmentPromise=db.findActiveRoleAssignments(email).then((assignments)=>{
+    const lookup=identity
+      ?db.findActiveRoleAssignments(identity.id,email)
+      :db.findActiveDemoRoleAssignments(email);
+    assignmentPromise=lookup.then((assignments)=>{
       const typedAssignments=assignments as Array<{property_id:string;role:string;display_name:string;workspace_permissions:unknown;can_export:boolean;must_change_password:boolean}>;
       const assignment=requestedProperty?typedAssignments.find((item)=>item.property_id===requestedProperty):typedAssignments[0];
       if(!assignment||!isRole(assignment.role))return null;
