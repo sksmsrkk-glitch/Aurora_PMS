@@ -1,0 +1,37 @@
+name: Aurora durable worker scheduler
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aurora-production-worker-scheduler
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch signed production worker sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Invoke durable worker
+        env:
+          WORKER_URL: ${{ vars.AURORA_WORKER_URL }}
+          CRON_SECRET: ${{ secrets.AURORA_CRON_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$WORKER_URL"
+          test -n "$CRON_SECRET"
+          case "$WORKER_URL" in
+            https://*/api/internal/worker) ;;
+            *) echo "Unsafe worker URL" >&2; exit 1 ;;
+          esac
+          curl --fail-with-body --silent --show-error \
+            --max-time 55 --retry 2 --retry-all-errors \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "$WORKER_URL" >/dev/null

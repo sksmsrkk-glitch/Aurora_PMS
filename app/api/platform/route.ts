@@ -7,6 +7,7 @@ import { ROLE_ACCESS_TEMPLATES } from "../../access-control";
 import { PMS_WORKSPACES } from "../../pms-workspaces";
 import { rememberSelectedProperty } from "../../property-selection";
 import { authenticateSupabaseRequest } from "../../supabase-session";
+import { scheduleDurableWorkerKick } from "../../worker-kick";
 import { consumeRateLimit, rateLimitHeaders } from "../rate-limit";
 import { principalFor, ready, runtimeBindings } from "../pms/auth";
 
@@ -331,6 +332,7 @@ export async function POST(request: Request) {
             now.toISOString(),
           ),
       ]);
+      scheduleDurableWorkerKick();
       return Response.json(
         { ok: true, id },
         { status: 201, headers: jsonHeaders() },
@@ -368,6 +370,7 @@ export async function POST(request: Request) {
           )
           .bind(`job-domain-${id}`, id, hostname, now.toISOString()),
       ]);
+      scheduleDurableWorkerKick();
       return Response.json(
         {
           ok: true,

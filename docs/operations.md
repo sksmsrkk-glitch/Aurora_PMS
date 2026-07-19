@@ -18,7 +18,7 @@
 
 - [ ] `202607190016_multihotel_saas_control_plane` 적용 및 66개 tenant policy 계약 확인
 - [ ] `AURORA_TENANT_BASE_DOMAIN`, `AURORA_PLATFORM_HOSTS`, `PMS_REQUIRE_PLATFORM_MFA=true` 확인
-- [ ] `CRON_SECRET` 설정 후 `/api/internal/worker` 1분 cron의 성공·재시도·DEAD incident 확인
+- [ ] Vercel·GitHub에 동일한 `CRON_SECRET`을 설정하고 즉시 kick, GitHub 5분 sweep, Vercel 일일 fail-safe의 성공·재시도·DEAD incident 확인
 - [ ] outbound host allowlist와 provider별 ARI secret reference 확인
 - [ ] backup orchestrator가 storage reference·SHA-256 checksum receipt를 반환하는지 확인
 - [ ] custom domain TXT 검증 후에만 ACTIVE가 되는지 확인
