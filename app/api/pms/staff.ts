@@ -17,7 +17,10 @@ export async function loadStaffUsers(db:PmsDatabase,principal:Principal){
     (lower(email)=lower(?)) is_self
     FROM role_assignments WHERE property_id=pms_current_property_id()
     ORDER BY active DESC,display_name,email`).bind(principal.email).all<StaffRow>();
-  return {users:rows.results,roles:["PROPERTY_ADMIN","NIGHT_AUDITOR","FRONT_DESK","CASHIER","HOUSEKEEPING","REVENUE_MANAGER","SALES_MANAGER","ACCOUNTANT","VIEWER"]};
+  const users=principal.principalType==="SUPPORT"&&principal.piiMode==="MASKED"
+    ?rows.results.map(row=>({...row,email:"masked@support.invalid",display_name:`${row.display_name.slice(0,1)}**`,updated_by:row.updated_by?"마스킹됨":null}))
+    :rows.results;
+  return {users,roles:["PROPERTY_ADMIN","NIGHT_AUDITOR","FRONT_DESK","CASHIER","HOUSEKEEPING","REVENUE_MANAGER","SALES_MANAGER","ACCOUNTANT","VIEWER"]};
 }
 
 function normalizedEmail(value:unknown){
@@ -54,6 +57,8 @@ export async function handleStaffAction(db:PmsDatabase,body:Record<string,string
     const email=normalizedEmail(body.email),name=displayName(body.displayName),selectedRole=role(body.role),access=permissions(body.workspacePermissions),canExport=bool(body.canExport),password=validateStaffPassword(body.password);
     const exists=await db.prepare("SELECT id FROM role_assignments WHERE lower(email)=lower(?) AND property_id=pms_current_property_id()").bind(email).first();
     if(exists)throw new StaffAccessError(409,"이 호텔에 이미 등록된 이메일입니다.");
+    const usage=await db.prepare("SELECT s.user_limit,(SELECT COUNT(*) FROM role_assignments ra WHERE ra.property_id=pms_current_property_id() AND ra.active) active_users FROM property_subscriptions s WHERE s.property_id=pms_current_property_id() LIMIT 1").first<{user_limit:number|null;active_users:number}>();
+    if(usage?.user_limit!=null&&Number(usage.active_users)>=Number(usage.user_limit))throw new StaffAccessError(409,"현재 요금제의 활성 사용자 수 한도를 초과합니다.");
     const authUserId=await createStaffAuthUser(email,password,name);
     const assignmentId=crypto.randomUUID();
     try{

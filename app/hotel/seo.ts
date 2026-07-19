@@ -1,6 +1,7 @@
 /** Trusted public-site URL and reusable metadata builders for the hotel site. */
 import type { Metadata } from "next";
 import type { WebsiteContent } from "../api/booking/website-service";
+import type { PublicPropertyContext } from "../api/booking/property-resolver";
 
 const PRODUCTION_SITE_URL = "https://aurora-pms-gilt.vercel.app";
 
@@ -22,7 +23,11 @@ function trustedHttpsUrl(value: string | undefined) {
  * Never derives canonical or social URLs from the request Host header. The
  * explicit site URL wins; Vercel's deployment-owned hostname is a safe fallback.
  */
-export function publicSiteUrl() {
+export function publicSiteUrl(hostname?: string) {
+  if(hostname){
+    const protocol=hostname==="localhost"||hostname==="127.0.0.1"||hostname==="::1"?"http:":"https:";
+    return new URL(`${protocol}//${hostname}`);
+  }
   return trustedHttpsUrl(process.env.AURORA_PUBLIC_SITE_URL)
     ?? trustedHttpsUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL)
     ?? new URL(PRODUCTION_SITE_URL);
@@ -33,7 +38,7 @@ function descriptionFor(content: WebsiteContent) {
   return description.slice(0, 160);
 }
 
-export function hotelMetadata(content: WebsiteContent): Metadata {
+export function hotelMetadata(content: WebsiteContent, property?: PublicPropertyContext): Metadata {
   const { settings } = content;
   const title = `${settings.hotelName} | 공식 홈페이지`;
   const description = descriptionFor(content);
@@ -41,15 +46,15 @@ export function hotelMetadata(content: WebsiteContent): Metadata {
     ?? content.hotelMedia[0]?.url
     ?? "/og.png";
   return {
-    metadataBase: publicSiteUrl(),
+    metadataBase: publicSiteUrl(property?.hostname),
     title,
     description,
-    alternates: { canonical: "/hotel" },
+    alternates: { canonical: property?.pathPrefix || "/hotel" },
     robots: { index: content.published, follow: content.published },
     openGraph: {
       type: "website",
       locale: "ko_KR",
-      url: "/hotel",
+      url: property?.pathPrefix || "/hotel",
       siteName: settings.hotelName,
       title,
       description,
@@ -59,18 +64,18 @@ export function hotelMetadata(content: WebsiteContent): Metadata {
   };
 }
 
-export function bookingMetadata(content: WebsiteContent): Metadata {
+export function bookingMetadata(content: WebsiteContent, property?: PublicPropertyContext): Metadata {
   const title = `객실 예약 | ${content.settings.hotelName}`;
   const description = `${content.settings.hotelName}의 실시간 객실 재고와 공식 홈페이지 요금을 확인하고 안전하게 예약하세요.`;
   return {
-    metadataBase: publicSiteUrl(),
+    metadataBase: publicSiteUrl(property?.hostname),
     title,
     description,
-    alternates: { canonical: "/hotel/book" },
+    alternates: { canonical: `${property?.pathPrefix || "/hotel"}/book` },
     // Query-string search combinations are transactional pages, not unique
     // landing pages. Following links is useful; indexing duplicates is not.
     robots: { index: false, follow: true },
-    openGraph: { type: "website", locale: "ko_KR", url: "/hotel/book", siteName: content.settings.hotelName, title, description },
+    openGraph: { type: "website", locale: "ko_KR", url: `${property?.pathPrefix || "/hotel"}/book`, siteName: content.settings.hotelName, title, description },
   };
 }
 
@@ -79,10 +84,11 @@ export function serializeJsonLd(value: unknown) {
   return JSON.stringify(value).replace(/</gu, "\\u003c");
 }
 
-export function hotelStructuredData(content: WebsiteContent) {
-  const base = publicSiteUrl();
-  const hotelUrl = new URL("/hotel", base).toString();
-  const bookingUrl = new URL("/hotel/book", base).toString();
+export function hotelStructuredData(content: WebsiteContent, property?: PublicPropertyContext) {
+  const base = publicSiteUrl(property?.hostname);
+  const prefix=property?.pathPrefix||"/hotel";
+  const hotelUrl = new URL(prefix||"/", base).toString();
+  const bookingUrl = new URL(`${prefix}/book`, base).toString();
   const images = [...content.hotelMedia, ...content.rooms.flatMap((room) => room.media)].map((item) => item.url);
   return {
     "@context": "https://schema.org",

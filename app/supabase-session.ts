@@ -1,6 +1,6 @@
 /** Verified Supabase identity, refresh rotation and hardened cookie sessions. */
 import { createHash } from "node:crypto";
-import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
+import { createRemoteJWKSet, decodeJwt, decodeProtectedHeader, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 
 const ACCESS_COOKIE = "aurora-pms-access";
@@ -11,6 +11,7 @@ export type SupabaseIdentity = {
   id: string;
   email: string;
   displayName: string;
+  assuranceLevel: "aal1" | "aal2";
 };
 
 type AuthSession = {
@@ -31,13 +32,13 @@ function authConfiguration() {
   return { url, secret };
 }
 
-function identityFromUser(user: Record<string, unknown>): SupabaseIdentity | null {
+function identityFromUser(user: Record<string, unknown>, assuranceLevel: "aal1" | "aal2" = "aal1"): SupabaseIdentity | null {
   const id = typeof user.id === "string" ? user.id : "";
   const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
   if (!id || !email) return null;
   const metadata = user.user_metadata && typeof user.user_metadata === "object" ? user.user_metadata as Record<string, unknown> : {};
   const displayName = [metadata.full_name, metadata.name, metadata.display_name].find((value) => typeof value === "string" && value.trim());
-  return { id, email, displayName: typeof displayName === "string" ? displayName.trim() : email };
+  return { id, email, displayName: typeof displayName === "string" ? displayName.trim() : email, assuranceLevel };
 }
 
 function projectJwks() {
@@ -66,7 +67,10 @@ async function locallyVerifiedIdentity(accessToken: string) {
       clockTolerance: 5,
     });
     if (payload.role !== "authenticated" || typeof payload.sub !== "string" || typeof payload.email !== "string") return null;
-    return identityFromUser({ id: payload.sub, email: payload.email, user_metadata: payload.user_metadata });
+    return identityFromUser(
+      { id: payload.sub, email: payload.email, user_metadata: payload.user_metadata },
+      payload.aal === "aal2" ? "aal2" : "aal1",
+    );
   } catch {
     // A network or key-rotation failure can fall back to Auth's authoritative user endpoint.
     return remoteVerifiedIdentity(accessToken, url, secret);
@@ -80,7 +84,9 @@ async function remoteVerifiedIdentity(accessToken: string, configuredUrl?: strin
     cache: "no-store",
   });
   if (!response.ok) return null;
-  return identityFromUser(await response.json() as Record<string, unknown>);
+  let assuranceLevel: "aal1" | "aal2" = "aal1";
+  try { assuranceLevel = decodeJwt(accessToken).aal === "aal2" ? "aal2" : "aal1"; } catch { /* Auth already rejected malformed tokens. */ }
+  return identityFromUser(await response.json() as Record<string, unknown>, assuranceLevel);
 }
 
 async function resolvedIdentity(accessToken: string) {
@@ -169,7 +175,9 @@ export async function signInWithPassword(email: string, password: string) {
   });
   if (!response.ok) return null;
   const session = await response.json() as AuthSession;
-  const identity = identityFromUser(session.user);
+  let assuranceLevel: "aal1" | "aal2" = "aal1";
+  try { assuranceLevel = decodeJwt(session.access_token).aal === "aal2" ? "aal2" : "aal1"; } catch { /* The user object remains authoritative. */ }
+  const identity = identityFromUser(session.user, assuranceLevel);
   if (!identity) return null;
   setSessionCookies(await cookies(), session);
   return identity;

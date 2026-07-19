@@ -114,9 +114,10 @@ test("flags and structured payloads use native types with reservation invariants
 });
 
 test("staff assignments store complete page permissions and remain tenant isolated", { skip }, async () => {
-  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),propertyId=`it-staff-${suffix}`,assignmentId=`it-role-${suffix}`;
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),propertyId=`it-staff-${suffix}`,organizationId=`org-${propertyId}`,assignmentId=`it-role-${suffix}`;
   try{
-    await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date) VALUES (${propertyId},'Staff Hotel',${`S-${suffix}`},'Asia/Seoul','KRW','2031-01-01')`;
+    await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'Staff Organization',${`staff-${suffix}`},'ACTIVE')`;
+    await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date,organization_id,slug) VALUES (${propertyId},'Staff Hotel',${`S-${suffix}`},'Asia/Seoul','KRW','2031-01-01',${organizationId},${`staff-hotel-${suffix}`})`;
     const permissions={overview:"READ",frontdesk:"WRITE",inventory:"NONE",website:"NONE",groups:"NONE",finance:"NONE",accounting:"NONE",channels:"NONE",rooms:"READ",reports:"READ",master:"NONE",revenue:"NONE",users:"NONE",audit:"NONE"};
     await sql`INSERT INTO role_assignments(id,property_id,email,role,active,created_at,display_name,workspace_permissions,can_export,updated_at) VALUES (${assignmentId},${propertyId},${`staff-${suffix}@example.com`},'FRONT_DESK',true,now(),'Integration Staff',${sql.json(permissions)},true,now())`;
     const [stored]=await sql`SELECT display_name,workspace_permissions,can_export,version FROM role_assignments WHERE id=${assignmentId}`;
@@ -126,16 +127,17 @@ test("staff assignments store complete page permissions and remain tenant isolat
     await assert.rejects(sql`UPDATE role_assignments SET workspace_permissions='{"overview":"OWNER"}'::jsonb WHERE id=${assignmentId}`,(error)=>error?.code==="23514");
     const visible=await sql.begin(async(tx)=>{await tx.unsafe("SET LOCAL ROLE aurora_app");await tx`SELECT set_config('app.property_id',${propertyId},true)`;return tx`SELECT id FROM role_assignments ORDER BY id`;});
     assert.deepEqual(visible.map((row)=>row.id),[assignmentId]);
-  }finally{await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;await sql`DELETE FROM properties WHERE id=${propertyId}`;await sql.end({timeout:2});}
+  }finally{await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;await sql`DELETE FROM properties WHERE id=${propertyId}`;await sql`DELETE FROM organizations WHERE id=${organizationId}`;await sql.end({timeout:2});}
 });
 
 test("production authorization binds a staff assignment to the immutable Auth user ID", { skip }, async () => {
-  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),linkedProperty=`it-linked-${suffix}`,legacyProperty=`it-legacy-${suffix}`;
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),linkedProperty=`it-linked-${suffix}`,legacyProperty=`it-legacy-${suffix}`,organizationId=`org-identity-${suffix}`;
   const email=`identity-${suffix}@example.com`,authUserId=crypto.randomUUID();
   const permissions={overview:"READ",frontdesk:"NONE",inventory:"NONE",website:"NONE",groups:"NONE",finance:"NONE",accounting:"NONE",channels:"NONE",rooms:"READ",reports:"NONE",master:"NONE",revenue:"NONE",users:"NONE",audit:"NONE"};
   const database=getPmsDatabase({DATABASE_URL:databaseUrl});
   try{
-    await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date) VALUES (${linkedProperty},'Linked Hotel',${`L-${suffix}`},'Asia/Seoul','KRW','2031-01-01'),(${legacyProperty},'Legacy Hotel',${`U-${suffix}`},'Asia/Seoul','KRW','2031-01-01')`;
+    await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'Identity Organization',${`identity-${suffix}`},'ACTIVE')`;
+    await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date,organization_id,slug) VALUES (${linkedProperty},'Linked Hotel',${`L-${suffix}`},'Asia/Seoul','KRW','2031-01-01',${organizationId},${`linked-${suffix}`}),(${legacyProperty},'Legacy Hotel',${`U-${suffix}`},'Asia/Seoul','KRW','2031-01-01',${organizationId},${`legacy-${suffix}`})`;
     await sql`INSERT INTO role_assignments(id,property_id,email,role,active,created_at,auth_user_id,display_name,workspace_permissions,can_export,updated_at) VALUES (${`it-linked-role-${suffix}`},${linkedProperty},${email},'VIEWER',true,now(),${authUserId},'Linked Staff',${sql.json(permissions)},false,now()),(${`it-legacy-role-${suffix}`},${legacyProperty},${email},'PROPERTY_ADMIN',true,now(),NULL,'Legacy Staff',${sql.json(permissions)},false,now())`;
     const linked=await database.findActiveRoleAssignments(authUserId,email);
     assert.deepEqual(linked.map((item)=>item.property_id),[linkedProperty]);
@@ -144,6 +146,7 @@ test("production authorization binds a staff assignment to the immutable Auth us
     await closePmsDatabase();
     await sql`DELETE FROM role_assignments WHERE property_id IN (${linkedProperty},${legacyProperty})`;
     await sql`DELETE FROM properties WHERE id IN (${linkedProperty},${legacyProperty})`;
+    await sql`DELETE FROM organizations WHERE id=${organizationId}`;
     await sql.end({timeout:2});
   }
 });
@@ -231,12 +234,14 @@ test("RLS tenant context hides and rejects cross-property access", { skip }, asy
   const suffix = crypto.randomUUID().slice(0, 8);
   const first = `it-a-${suffix}`;
   const second = `it-b-${suffix}`;
+  const organizationId=`org-rls-${suffix}`;
   try {
+    await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'RLS Organization',${`rls-${suffix}`},'ACTIVE')`;
     await sql`
-      INSERT INTO properties(id,name,code,timezone,currency,business_date)
+      INSERT INTO properties(id,name,code,timezone,currency,business_date,organization_id,slug)
       VALUES
-        (${first},'Tenant A',${`A-${suffix}`},'Asia/Seoul','KRW','2026-08-01'),
-        (${second},'Tenant B',${`B-${suffix}`},'Asia/Seoul','KRW','2026-08-01')
+        (${first},'Tenant A',${`A-${suffix}`},'Asia/Seoul','KRW','2026-08-01',${organizationId},${`tenant-a-${suffix}`}),
+        (${second},'Tenant B',${`B-${suffix}`},'Asia/Seoul','KRW','2026-08-01',${organizationId},${`tenant-b-${suffix}`})
     `;
     const visible = await sql.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE aurora_app");
@@ -257,6 +262,7 @@ test("RLS tenant context hides and rejects cross-property access", { skip }, asy
     );
   } finally {
     await sql`DELETE FROM properties WHERE id IN (${first},${second})`;
+    await sql`DELETE FROM organizations WHERE id=${organizationId}`;
     await sql.end({ timeout: 2 });
   }
 });
@@ -302,6 +308,7 @@ test("twenty parallel bookings for the last room allow exactly one night", { ski
   const sql = client(24);
   const suffix = crypto.randomUUID().slice(0, 8);
   const propertyId = `it-cap-${suffix}`;
+  const organizationId=`org-cap-${suffix}`;
   const roomTypeId = `it-rt-${suffix}`;
   const stayDate = "2031-08-01";
   const reservations = Array.from({ length: 20 }, (_, index) => ({
@@ -310,9 +317,10 @@ test("twenty parallel bookings for the last room allow exactly one night", { ski
     confirmation: `IT-${suffix}-${index}`,
   }));
   try {
+    await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'Concurrency Organization',${`cap-${suffix}`},'ACTIVE')`;
     await sql`
-      INSERT INTO properties(id,name,code,timezone,currency,business_date)
-      VALUES (${propertyId},'Concurrency Hotel',${`C-${suffix}`},'Asia/Seoul','KRW','2031-07-31')
+      INSERT INTO properties(id,name,code,timezone,currency,business_date,organization_id,slug)
+      VALUES (${propertyId},'Concurrency Hotel',${`C-${suffix}`},'Asia/Seoul','KRW','2031-07-31',${organizationId},${`concurrency-${suffix}`})
     `;
     await sql`
       INSERT INTO room_types(id,property_id,code,name,base_rate,capacity)
@@ -373,6 +381,7 @@ test("twenty parallel bookings for the last room allow exactly one night", { ski
     await sql`DELETE FROM rooms WHERE property_id=${propertyId}`;
     await sql`DELETE FROM room_types WHERE property_id=${propertyId}`;
     await sql`DELETE FROM properties WHERE id=${propertyId}`;
+    await sql`DELETE FROM organizations WHERE id=${organizationId}`;
     await sql.end({ timeout: 2 });
   }
 });
