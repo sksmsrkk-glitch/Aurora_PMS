@@ -4,6 +4,6 @@ import { getWebsiteContent } from "../api/booking/website-service";
 
 export const getCachedWebsiteContent = unstable_cache(
   getWebsiteContent,
-  ["aurora-public-website-content"],
+  ["aurora-public-website-content-v2"],
   { revalidate: 60, tags: ["aurora-public-website-content"] },
 );

@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run release:build",
-  "regions": ["icn1"]
+  "regions": ["icn1"],
+  "crons": [{ "path": "/api/internal/worker", "schedule": "* * * * *" }]
 }

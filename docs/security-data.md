@@ -110,6 +110,8 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `202607170012_rate_plan_domain.sql` | 정규화 Rate Plan | 요금제·객실 매핑·일자별 요금 3개 테이블, 예약·채널 rate code FK, 3개 RLS policy와 직판 기본값 |
 | `202607170013_native_flags_json_constraints.sql` | native flag·payload·예약 제약 | 24개 flag boolean, 12개 JSONB payload, JSON shape와 양수 숙박일·인원·요금·상태 제약 |
 | `202607170014_website_visual_editor.sql` | 홈페이지 비주얼 편집 | hero media/layout/overlay/height/CTA, theme accent, 고정 3섹션 navigation JSONB와 DB CHECK |
+| `202607180015_staff_access_control.sql` | 호텔별 직원 계정·세부 권한 | Auth UUID 연계, 14개 workspace 권한, export·비밀번호·version·감사 |
+| `202607190016_multihotel_saas_control_plane.sql` | 멀티호텔 SaaS | 조직·도메인·구독·entitlement·JIT support·이관·worker·백업·incident·usage와 14개 추가 RLS policy |
 
 ### 핵심 PostgreSQL 함수와 트리거
 
@@ -123,6 +125,9 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `pms_inventory_control_guard` | sell limit을 기존 확정 예약 아래로 내리는 변경 차단 |
 | `pms_immutable_guard` | 폴리오·AR·전달 시도·회계 line의 update/delete 거부 |
 | `pms_accounting_line_guard` | debit/credit 한쪽만 양수인지, 활성 계정인지 검증 |
+| `aurora_enforce_room_limit` | subscription row lock으로 병렬 객실 생성의 plan 한도 초과 거부 |
+| `aurora_enforce_user_limit` | subscription row lock으로 병렬 활성 사용자 한도 초과 거부 |
+| `aurora_enqueue_outbox_job` / `aurora_enqueue_ari_job` | 코어 commit과 같은 transaction에서 durable worker job 생성 |
 | `pms_accounting_header_guard` | journal header는 `POSTED → REVERSED` 이외 변경을 거부 |
 | `pms_channel_settlement_contract_snapshot` | 정산 insert 시 계약 유형·수수료율을 복사 |
 | `pms_channel_contract_open_settlement_guard` | `ACCRUED` 정산이 있으면 계약 유형·수수료율 변경 차단 |

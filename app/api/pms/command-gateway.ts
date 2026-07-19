@@ -95,6 +95,13 @@ async function stayControlError(db:D1, roomTypeId:string, arrival:string, depart
   return null;
 }
 
+/** Fast UX precheck; the database trigger remains the concurrency-safe source
+ * of truth when two administrators create rooms at the same time. */
+async function roomLimitExceeded(db:D1,additionalRooms:number){
+  const usage=await db.prepare("SELECT s.room_limit,(SELECT COUNT(*) FROM rooms r WHERE r.property_id=pms_current_property_id() AND r.active) active_rooms FROM property_subscriptions s WHERE s.property_id=pms_current_property_id() LIMIT 1").first<{room_limit:number|null;active_rooms:number}>();
+  return usage?.room_limit!=null&&Number(usage.active_rooms)+additionalRooms>Number(usage.room_limit);
+}
+
 
 export async function handlePmsPost(request: Request) {
   // Mutation pipeline order is security-sensitive: authenticate, reject cross-origin
@@ -124,6 +131,11 @@ export async function handlePmsPost(request: Request) {
   // only where live inventory, status, version, or accounting state is required.
   const body=parsed.data as Record<string,string>;
   const now = new Date().toISOString(); const actor = principal.email;
+  if(principal.principalType==="SUPPORT"){
+    if(!principal.supportGrantId||!principal.authUserId)return Response.json({error:"지원 세션이 만료되었습니다."},{status:403});
+    const audited=await rootDb.recordSupportAccess({grantId:principal.supportGrantId,authUserId:principal.authUserId,actorEmail:principal.email,write:true,requestId:crypto.randomUUID(),action:body.action});
+    if(!audited)return Response.json({error:"지원 권한이 만료되었거나 회수되었습니다."},{status:403});
+  }
   const idempotencyKey = request.headers.get("idempotency-key");
   if (!idempotencyKey || idempotencyKey.length > 200 || !/^[A-Za-z0-9:._-]+$/u.test(idempotencyKey)) return Response.json({error:"변경 요청에는 유효한 Idempotency-Key가 필요합니다."},{status:400});
   // Every successful mutation appends this strict unique receipt inside the same
@@ -172,10 +184,12 @@ export async function handlePmsPost(request: Request) {
       if(!active){const future=await db.prepare("SELECT COUNT(*) count FROM reservation_type_nights WHERE room_type_id=? AND property_id=pms_current_property_id() AND stay_date>=?").bind(body.roomTypeId,businessDate).first<{count:number}>();if(Number(future?.count||0)>0)return Response.json({error:"미래 예약이 있는 객실 타입은 비활성화할 수 없습니다."},{status:409});}
       await db.batch([db.prepare("UPDATE room_types SET code=?,name=?,base_rate=?,capacity=?,description=?,active=?,version=version+1 WHERE id=? AND property_id=pms_current_property_id() AND version=?").bind(code,name,baseRate,capacity,description,active,body.roomTypeId,Number(current.version)),db.prepare("INSERT INTO audit_logs VALUES (?, pms_current_property_id(), ?, 'UPDATE_ROOM_TYPE', 'room_type', ?, ?, ?, ?)").bind(crypto.randomUUID(),actor,body.roomTypeId,jsonb(current),jsonb({code,name,baseRate,capacity,description,active,version:Number(current.version)+1}),now),...(idempotencyKey?[db.prepare("INSERT INTO idempotency_keys VALUES (?, pms_current_property_id(), ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[])]);
     } else if(body.action==="create_room") {
+      if(await roomLimitExceeded(db,1))return Response.json({error:"현재 요금제의 활성 객실 수 한도를 초과합니다."},{status:409});
       const number=(body.number||"").trim().toUpperCase(),floor=Number(body.floor),type=await db.prepare("SELECT id FROM room_types WHERE id=? AND property_id=pms_current_property_id() AND active").bind(body.roomTypeId).first(),features=(body.features||"").split(",").map(value=>value.trim()).filter(Boolean).slice(0,20);
       if(!type||!number||number.length>16||!Number.isInteger(floor)||floor< -10||floor>250)return Response.json({error:"활성 객실 타입, 16자 이하 객실번호, -10~250층을 입력하세요."},{status:400});const roomId=crypto.randomUUID();
       await db.batch([db.prepare("INSERT INTO rooms(id,property_id,room_type_id,number,floor,front_desk_status,housekeeping_status,features,active,version) VALUES (?, pms_current_property_id(), ?, ?, ?, 'VACANT', 'CLEAN', ?, true, 1)").bind(roomId,body.roomTypeId,number,floor,jsonb(features)),db.prepare("INSERT INTO audit_logs VALUES (?, pms_current_property_id(), ?, 'CREATE_ROOM', 'room', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,roomId,jsonb({number,floor,roomTypeId:body.roomTypeId,features}),now),...(idempotencyKey?[db.prepare("INSERT INTO idempotency_keys VALUES (?, pms_current_property_id(), ?, ?, ?)").bind(idempotencyKey,body.action,actor,now)]:[])]);
     } else if(body.action==="bulk_create_rooms") {
+      const requestedRooms=Number(body.count);if(Number.isInteger(requestedRooms)&&requestedRooms>0&&await roomLimitExceeded(db,requestedRooms))return Response.json({error:"현재 요금제의 활성 객실 수 한도를 초과합니다."},{status:409});
       const start=Number(body.startNumber),count=Number(body.count),floor=Number(body.floor),padding=Math.min(8,Math.max(1,Number(body.padding)||String(body.startNumber||"").length)),prefix=(body.prefix||"").trim().toUpperCase().slice(0,8),type=await db.prepare("SELECT id FROM room_types WHERE id=? AND property_id=pms_current_property_id() AND active").bind(body.roomTypeId).first(),features=(body.features||"").split(",").map(value=>value.trim()).filter(Boolean).slice(0,20);
       if(!type||!Number.isInteger(start)||start<0||!Number.isInteger(count)||count<1||count>500||!Number.isInteger(floor)||floor< -10||floor>250)return Response.json({error:"시작 번호와 생성 수량(1~500), 층, 활성 객실 타입을 확인하세요."},{status:400});
       const numbers=Array.from({length:count},(_,index)=>`${prefix}${String(start+index).padStart(padding,"0")}`);if(numbers.some(number=>number.length>16))return Response.json({error:"생성되는 객실번호는 16자를 초과할 수 없습니다."},{status:400});const existing=await db.prepare("SELECT number FROM rooms WHERE property_id=pms_current_property_id()").all<{number:string}>(),known=new Set(existing.results.map(row=>row.number));const duplicate=numbers.find(number=>known.has(number));if(duplicate)return Response.json({error:`객실 ${duplicate}번이 이미 존재합니다.`},{status:409});

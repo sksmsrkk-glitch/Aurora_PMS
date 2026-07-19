@@ -1,7 +1,49 @@
--- Idempotent starter property for Aurora PMS. Operational changes remain in the application audit log.
-INSERT INTO properties(id,name,code,timezone,currency,business_date)
-VALUES ('prop-seoul','오로라 서울 호텔','SEL01','Asia/Seoul','KRW','2026-07-16')
-ON CONFLICT (id) DO NOTHING;
+-- Idempotent starter property for both the historical migration checkpoint used
+-- by CI and the current multi-hotel schema. Dynamic SQL prevents either column
+-- shape from being parsed against the wrong schema version.
+DO $seed_property$
+BEGIN
+  IF to_regclass('public.organizations') IS NULL THEN
+    EXECUTE $sql$
+      INSERT INTO properties(id,name,code,timezone,currency,business_date)
+      VALUES ('prop-seoul','오로라 서울 호텔','SEL01','Asia/Seoul','KRW','2026-07-16')
+      ON CONFLICT (id) DO NOTHING
+    $sql$;
+  ELSE
+    EXECUTE $sql$
+      INSERT INTO organizations(id,name,slug,status)
+      VALUES ('org-prop-seoul','오로라 서울 호텔 운영사','aurora-seoul','ACTIVE')
+      ON CONFLICT(id) DO NOTHING;
+
+      INSERT INTO properties(
+        id,name,code,timezone,currency,business_date,organization_id,slug,
+        status,onboarding_status,plan_code,cell_key,settings
+      ) VALUES (
+        'prop-seoul','오로라 서울 호텔','SEL01','Asia/Seoul','KRW','2026-07-16',
+        'org-prop-seoul','aurora-seoul','ACTIVE','LIVE','STANDARD','primary','{}'::jsonb
+      ) ON CONFLICT(id) DO NOTHING;
+
+      INSERT INTO property_subscriptions(
+        id,property_id,plan_code,status,current_period_start,current_period_end
+      ) VALUES (
+        'subscription-prop-seoul','prop-seoul','STANDARD','ACTIVE',DATE '2026-07-16',DATE '2099-12-31'
+      ) ON CONFLICT(property_id) DO NOTHING;
+
+      INSERT INTO property_entitlements(property_id,feature_key,enabled,limits,updated_by)
+      SELECT 'prop-seoul',feature,true,'{}'::jsonb,'system:seed'
+      FROM unnest(ARRAY[
+        'CORE_PMS','DIRECT_BOOKING','WEBSITE_CMS','REPORT_EXPORT','ACCOUNTING',
+        'CHANNEL_HUB','GROUP_SALES','STAFF_ACCESS','DATA_IMPORT','SUPPORT_ACCESS'
+      ]) feature
+      ON CONFLICT(property_id,feature_key) DO NOTHING;
+
+      INSERT INTO property_domains(id,property_id,hostname,kind,status,is_primary,verified_at)
+      VALUES ('domain-prop-seoul-platform','prop-seoul','aurora-pms-gilt.vercel.app','PLATFORM','ACTIVE',true,clock_timestamp())
+      ON CONFLICT(hostname) DO NOTHING
+    $sql$;
+  END IF;
+END
+$seed_property$;
 
 INSERT INTO room_types(id,property_id,code,name,base_rate,capacity,description,active,version) VALUES
   ('rt-dlx','prop-seoul','DLX','디럭스 킹',198000,2,'킹베드 기반의 대표 객실','1',1),

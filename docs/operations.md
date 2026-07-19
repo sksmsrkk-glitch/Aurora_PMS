@@ -14,6 +14,20 @@
 - [ ] 같은 staging에서 `npm run qa:website`
 - [ ] RLS와 browser role grant 재검증
 
+### 멀티호텔 SaaS 배포 추가 점검
+
+- [ ] `202607190016_multihotel_saas_control_plane` 적용 및 66개 tenant policy 계약 확인
+- [ ] `AURORA_TENANT_BASE_DOMAIN`, `AURORA_PLATFORM_HOSTS`, `PMS_REQUIRE_PLATFORM_MFA=true` 확인
+- [ ] `CRON_SECRET` 설정 후 `/api/internal/worker` 1분 cron의 성공·재시도·DEAD incident 확인
+- [ ] outbound host allowlist와 provider별 ARI secret reference 확인
+- [ ] backup orchestrator가 storage reference·SHA-256 checksum receipt를 반환하는지 확인
+- [ ] custom domain TXT 검증 후에만 ACTIVE가 되는지 확인
+- [ ] 두 호텔을 오가며 URL·쿠키·React Query cache에 이전 호텔 데이터가 남지 않는지 확인
+- [ ] JIT support grant의 aal2, MASKED projection, revoke 즉시 차단 확인
+- [ ] 신규 고객 데이터 이관을 dry-run → 대사 → commit → 제한된 rollback 순서로 스테이징에서 검증
+
+상세 구조와 환경 변수, 신규 고객 온보딩, worker·DLQ·복구 절차는 [멀티호텔 SaaS 운영 설계](multihotel-saas.md)를 따릅니다.
+
 ### 테이블 재작성 마이그레이션 점검 창
 
 native date/time·boolean·JSONB처럼 `ALTER COLUMN ... TYPE`으로 테이블을 다시 쓰는 변경은 일반 배포와 분리합니다. 다음 순서를 스테이징과 운영에서 동일하게 지킵니다.

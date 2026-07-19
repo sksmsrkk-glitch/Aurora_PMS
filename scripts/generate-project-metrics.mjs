@@ -18,9 +18,11 @@ const tables = uniqueMatches(migrationSql, /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXIST
 const triggers = uniqueMatches(migrationSql, /CREATE\s+TRIGGER\s+["']?([a-z_][a-z0-9_]*)["']?/giu);
 const foreignKeys = uniqueMatches(migrationSql, /CONSTRAINT\s+["']?([a-z_][a-z0-9_]*)["']?\s+FOREIGN\s+KEY/giu);
 const rlsTables = uniqueMatches(migrationSql, /ALTER\s+TABLE\s+(?:public\.)?["']?([a-z_][a-z0-9_]*)["']?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/giu);
-const tenantMigration = await read("supabase/migrations/202607170010_tenant_context_rls.sql");
-const tenantArray = tenantMigration.match(/tables\s+text\[\]\s*:=\s*ARRAY\[(.*?)\];/su)?.[1] || "";
-for (const match of tenantArray.matchAll(/'([a-z_][a-z0-9_]*)'/gu)) rlsTables.add(match[1]);
+// Tenant tables are declared in versioned policy loops as the schema grows.
+// Aggregate every loop instead of pinning the metric generator to one migration.
+for(const tenantArray of migrationSql.matchAll(/tables\s+text\[\]\s*:=\s*ARRAY\[(.*?)\];/gsu)){
+  for(const match of tenantArray[1].matchAll(/'([a-z_][a-z0-9_]*)'/gu))rlsTables.add(match[1]);
+}
 
 const testFiles = (await readdir(path.join(root, "tests"))).filter((name) => /\.test\.mjs$|\.integration\.mjs$/u.test(name));
 let unitTests = 0;

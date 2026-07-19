@@ -220,23 +220,46 @@ const coreRepresentationCache = new Map<string,{expires:number,json:Promise<stri
 type ReportResult=Awaited<ReturnType<typeof runReport>>;
 const reportCache=new Map<string,{expires:number;value:Promise<ReportResult>}>();
 export function invalidateSnapshots() { snapshotCache.clear(); coreSnapshotCache.clear(); snapshotRepresentationCache.clear(); coreRepresentationCache.clear(); reportCache.clear(); }
+
+/** JIT support defaults to structural masking. It is applied server-side after
+ * the scoped projection and before representation caching, so raw PII never
+ * reaches a masked support browser or its query cache. */
+function maskSupportProjection<T>(value:T,principal:Principal):T{
+  if(principal.principalType!=="SUPPORT"||principal.piiMode!=="MASKED")return value;
+  const sensitive=new Set(["first_name","last_name","guest_name","email","phone","notes","special_requests","payload_json"]);
+  const visit=(item:unknown,key=""):unknown=>{
+    if(item==null)return item;
+    if(sensitive.has(key)){
+      if(key==="email")return "masked@support.invalid";
+      if(key==="phone")return "***-****-****";
+      if(key==="first_name"||key==="last_name")return String(item).slice(0,1)+"**";
+      return "지원 조회에서 마스킹됨";
+    }
+    if(Array.isArray(item))return item.map(entry=>visit(entry));
+    if(typeof item==="object")return Object.fromEntries(Object.entries(item as Record<string,unknown>).map(([childKey,child])=>[childKey,visit(child,childKey)]));
+    return item;
+  };
+  const masked=visit(value) as T&{principal?:Principal};
+  if(masked&&typeof masked==="object"&&"principal" in masked)masked.principal=principal;
+  return masked;
+}
 export async function cachedSnapshot(db:D1, principal:Principal) {
-  const key=`${principal.propertyId}:${principal.email}`; const cached=snapshotCache.get(key); const now=Date.now();
+  const key=`${principal.propertyId}:${principal.email}:${principal.principalType}:${principal.piiMode}`; const cached=snapshotCache.get(key); const now=Date.now();
   if (cached && cached.expires>now) return cached.value;
-  const value=snapshot(db,principal); snapshotCache.set(key,{expires:now+3000,value});
+  const value=snapshot(db,principal).then(result=>maskSupportProjection(result,principal)); snapshotCache.set(key,{expires:now+3000,value});
   try { return await value; } catch (error) { snapshotCache.delete(key); throw error; }
 }
-async function cachedCoreSnapshot(db:D1,principal:Principal){const key=`${principal.propertyId}:${principal.email}`,now=Date.now(),cached=coreSnapshotCache.get(key);if(cached&&cached.expires>now)return cached.value;const value=coreSnapshot(db,principal);coreSnapshotCache.set(key,{expires:now+3000,value});try{return await value}catch(error){coreSnapshotCache.delete(key);throw error}}
+async function cachedCoreSnapshot(db:D1,principal:Principal){const key=`${principal.propertyId}:${principal.email}:${principal.principalType}:${principal.piiMode}`,now=Date.now(),cached=coreSnapshotCache.get(key);if(cached&&cached.expires>now)return cached.value;const value=coreSnapshot(db,principal).then(result=>maskSupportProjection(result,principal));coreSnapshotCache.set(key,{expires:now+3000,value});try{return await value}catch(error){coreSnapshotCache.delete(key);throw error}}
 async function gzipSnapshot(json: Promise<string>) {
   const stream = new Blob([await json]).stream().pipeThrough(new CompressionStream("gzip"));
   return new Response(stream).arrayBuffer();
 }
 export async function cachedSnapshotResponse(db:D1,principal:Principal,request:Request) {
-  const key=`${principal.propertyId}:${principal.email}`,now=Date.now();let cached=snapshotRepresentationCache.get(key);
+  const key=`${principal.propertyId}:${principal.email}:${principal.principalType}:${principal.piiMode}`,now=Date.now();let cached=snapshotRepresentationCache.get(key);
   if(!cached||cached.expires<=now){const json=cachedSnapshot(db,principal).then(value=>JSON.stringify(value));cached={expires:now+3000,json,gzip:gzipSnapshot(json)};snapshotRepresentationCache.set(key,cached);}
   const common={"Cache-Control":"private, no-store","Content-Type":"application/json; charset=utf-8","Vary":"Accept-Encoding"};
   if(/(?:^|,)\s*gzip\s*(?:,|$)/i.test(request.headers.get("accept-encoding")||""))return new Response(await cached.gzip,{headers:{...common,"Content-Encoding":"gzip"}});
   return new Response(await cached.json,{headers:common});
 }
-export async function cachedCoreSnapshotResponse(db:D1,principal:Principal,request:Request){const key=`${principal.propertyId}:${principal.email}`,now=Date.now();let cached=coreRepresentationCache.get(key);if(!cached||cached.expires<=now){const json=cachedCoreSnapshot(db,principal).then(value=>JSON.stringify(value));cached={expires:now+3000,json,gzip:gzipSnapshot(json)};coreRepresentationCache.set(key,cached)}const common={"Cache-Control":"private, no-store","Content-Type":"application/json; charset=utf-8","Vary":"Accept-Encoding"};if(/(?:^|,)\s*gzip\s*(?:,|$)/i.test(request.headers.get("accept-encoding")||""))return new Response(await cached.gzip,{headers:{...common,"Content-Encoding":"gzip"}});return new Response(await cached.json,{headers:common})}
-export async function cachedReport(db:D1,params:URLSearchParams,principal:Principal){const key=`${principal.propertyId}:${principal.email}:${params.toString()}`,now=Date.now(),cached=reportCache.get(key);if(cached&&cached.expires>now)return cached.value;if(reportCache.size>200){for(const [cacheKey,item] of reportCache)if(item.expires<=now)reportCache.delete(cacheKey);if(reportCache.size>200)reportCache.clear();}const value=runReport(db,params,principal);reportCache.set(key,{expires:now+5000,value});try{return await value;}catch(error){reportCache.delete(key);throw error;}}
+export async function cachedCoreSnapshotResponse(db:D1,principal:Principal,request:Request){const key=`${principal.propertyId}:${principal.email}:${principal.principalType}:${principal.piiMode}`,now=Date.now();let cached=coreRepresentationCache.get(key);if(!cached||cached.expires<=now){const json=cachedCoreSnapshot(db,principal).then(value=>JSON.stringify(value));cached={expires:now+3000,json,gzip:gzipSnapshot(json)};coreRepresentationCache.set(key,cached)}const common={"Cache-Control":"private, no-store","Content-Type":"application/json; charset=utf-8","Vary":"Accept-Encoding"};if(/(?:^|,)\s*gzip\s*(?:,|$)/i.test(request.headers.get("accept-encoding")||""))return new Response(await cached.gzip,{headers:{...common,"Content-Encoding":"gzip"}});return new Response(await cached.json,{headers:common})}
+export async function cachedReport(db:D1,params:URLSearchParams,principal:Principal){const key=`${principal.propertyId}:${principal.email}:${principal.principalType}:${principal.piiMode}:${params.toString()}`,now=Date.now(),cached=reportCache.get(key);if(cached&&cached.expires>now)return cached.value;if(reportCache.size>200){for(const [cacheKey,item] of reportCache)if(item.expires<=now)reportCache.delete(cacheKey);if(reportCache.size>200)reportCache.clear();}const value=runReport(db,params,principal).then(result=>maskSupportProjection(result,principal));reportCache.set(key,{expires:now+5000,value});try{return await value;}catch(error){reportCache.delete(key);throw error;}}

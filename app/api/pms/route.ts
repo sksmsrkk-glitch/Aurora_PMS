@@ -20,6 +20,11 @@ export async function GET(request: Request) {
   try { await ready(rootDb); } catch (error) { const response=schemaNotReadyResponse(error); if(response)return response; throw error; }
   const principal = await principalFor(request, rootDb);
   if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
+  if(principal.principalType==="SUPPORT"){
+    if(!principal.supportGrantId||!principal.authUserId)return Response.json({error:"지원 세션이 만료되었습니다."},{status:403});
+    const audited=await rootDb.recordSupportAccess({grantId:principal.supportGrantId,authUserId:principal.authUserId,actorEmail:principal.email,write:false,requestId:crypto.randomUUID(),action:`GET:${new URL(request.url).searchParams.get("view")||"full"}`});
+    if(!audited)return Response.json({error:"지원 권한이 만료되었거나 회수되었습니다."},{status:403});
+  }
   if(principal.mustChangePassword)return Response.json({error:"임시 비밀번호를 먼저 변경해 주세요.",code:"PASSWORD_CHANGE_REQUIRED"},{status:428});
   if(!principal.capabilities.includes("READ"))return Response.json({error:"이 호텔에 부여된 활성 페이지 권한이 없습니다."},{status:403});
   const db = scopePmsDatabase(rootDb, principal.propertyId);

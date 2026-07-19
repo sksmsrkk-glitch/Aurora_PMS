@@ -2,6 +2,8 @@
 export type MappedPmsError={status:number;error:string};
 
 const mappings:readonly [RegExp,MappedPmsError][]=[
+  [/SUBSCRIPTION_ROOM_LIMIT_EXCEEDED/iu,{status:409,error:"현재 요금제의 활성 객실 수 한도를 초과합니다."}],
+  [/SUBSCRIPTION_USER_LIMIT_EXCEEDED/iu,{status:409,error:"현재 요금제의 활성 사용자 수 한도를 초과합니다."}],
   [/room_number_uq|rooms\.property_id/iu,{status:409,error:"다른 작업자가 같은 객실 번호를 먼저 생성했습니다. 객실 목록을 새로고침해 주세요."}],
   [/room_type_code_uq|room_types\.property_id/iu,{status:409,error:"이미 사용 중인 객실 타입 코드입니다."}],
   [/room_night_uq|reservation_nights\.property_id/iu,{status:409,error:"선택한 객실은 해당 일정에 이미 예약되어 있습니다. 다른 객실을 선택하세요."}],

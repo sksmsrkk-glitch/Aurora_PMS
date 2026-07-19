@@ -6,9 +6,8 @@ import { PmsSchemaNotReadyError, verifyPmsSchemaContract } from "../../../db/sch
 const MAX_STAY_NIGHTS = 30;
 
 const bindings: PmsRuntimeBindings = {
-  DATABASE_URL: process.env.DATABASE_URL,
+  DATABASE_URL: process.env.DATABASE_URL || process.env.TEST_DATABASE_URL,
 };
-const PUBLIC_PROPERTY_ID = process.env.AURORA_PUBLIC_PROPERTY_ID || "prop-seoul";
 
 type PropertyRow = { id: string; name: string; currency: string; business_date: string };
 type RoomTypeRow = { id: string; code: string; name: string; marketing_name: string; short_description: string; amenities_json: unknown; image_url: string | null; base_rate: number; capacity: number; physical: number };
@@ -38,7 +37,7 @@ export type AvailabilityResult = {
   offers: PublicRoomOffer[];
 };
 
-async function database() {
+async function database(propertyId: string) {
   const rootDatabase = getPmsDatabase(bindings);
   try {
     await verifyPmsSchemaContract(rootDatabase);
@@ -48,7 +47,16 @@ async function database() {
     }
     throw error;
   }
-  return scopePmsDatabase(rootDatabase, PUBLIC_PROPERTY_ID);
+  const scoped=scopePmsDatabase(rootDatabase, propertyId);
+  const [subscriptionResult,entitlementResult]=await scoped.batch([
+    scoped.prepare("SELECT status FROM property_subscriptions WHERE property_id=pms_current_property_id() LIMIT 1"),
+    scoped.prepare("SELECT enabled FROM property_entitlements WHERE property_id=pms_current_property_id() AND feature_key='DIRECT_BOOKING' LIMIT 1"),
+  ]);
+  const subscription=subscriptionResult.results[0] as {status?:string}|undefined;
+  const entitlement=entitlementResult.results[0] as {enabled?:boolean}|undefined;
+  if(subscription&&["SUSPENDED","CANCELLED"].includes(String(subscription.status)))throw new BookingError("현재 온라인 예약을 이용할 수 없습니다.",503,"SUBSCRIPTION_INACTIVE");
+  if(entitlement?.enabled!==true)throw new BookingError("현재 온라인 예약을 이용할 수 없습니다.",404,"DIRECT_BOOKING_DISABLED");
+  return scoped;
 }
 
 function isoDate(value: string) {
@@ -124,14 +132,14 @@ async function availabilityRows(db: PmsDatabase, arrival: string, departure: str
   };
 }
 
-export async function getAvailability(input: { arrival: string; departure: string; adults: unknown; children: unknown }): Promise<AvailabilityResult> {
+export async function getAvailability(input: { arrival: string; departure: string; adults: unknown; children: unknown }, propertyId = process.env.AURORA_PUBLIC_PROPERTY_ID || "prop-seoul"): Promise<AvailabilityResult> {
   const dates = bookingDates(input.arrival, input.departure);
   const adults = integer(input.adults, 1, 12);
   const children = integer(input.children, 0, 8);
   if (!dates.length) throw new BookingError("체크인·체크아웃 날짜를 확인해 주세요. 한 번에 최대 30박까지 예약할 수 있습니다.", 400, "INVALID_DATES");
   if (adults === null || children === null) throw new BookingError("투숙 인원을 확인해 주세요.", 400, "INVALID_OCCUPANCY");
 
-  const rows = await availabilityRows(await database(), input.arrival, input.departure);
+  const rows = await availabilityRows(await database(propertyId), input.arrival, input.departure);
   if (!rows.property) throw new BookingError("호텔 판매 정보를 불러올 수 없습니다.", 503, "PROPERTY_UNAVAILABLE");
   if (input.arrival < rows.property.business_date) throw new BookingError("호텔 영업일보다 이전 날짜는 예약할 수 없습니다.", 400, "PAST_BUSINESS_DATE");
 
@@ -208,7 +216,7 @@ export type ReservationInput = {
   firstName?: unknown; lastName?: unknown; email?: unknown; phone?: unknown; specialRequests?: unknown;
 };
 
-export async function createWebReservation(input: ReservationInput, idempotencyKey: string) {
+export async function createWebReservation(input: ReservationInput, idempotencyKey: string, propertyId = process.env.AURORA_PUBLIC_PROPERTY_ID || "prop-seoul") {
   const arrival = requiredText(input.arrival, 10);
   const departure = requiredText(input.departure, 10);
   const roomTypeId = requiredText(input.roomTypeId, 64);
@@ -221,7 +229,7 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
     throw new BookingError("예약자 이름, 이메일, 연락처와 투숙 정보를 정확히 입력해 주세요.", 400, "INVALID_GUEST");
   }
 
-  const db = await database();
+  const db = await database(propertyId);
   // A retried browser request returns the original reservation instead of
   // consuming another room. The unique booking_requests key is the final guard
   // when concurrent requests pass this fast-path lookup at the same time.
@@ -261,17 +269,17 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
   return { reservationId, confirmation, arrival, departure, status: "DUE_IN", roomType: offer.name, total: offer.total, currency: offer.currency, duplicate: false };
 }
 
-export async function findWebReservationByIdempotency(idempotencyKey: string) {
-  const existing = await (await database()).prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id=pms_current_property_id() AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
+export async function findWebReservationByIdempotency(idempotencyKey: string, propertyId = process.env.AURORA_PUBLIC_PROPERTY_ID || "prop-seoul") {
+  const existing = await (await database(propertyId)).prepare("SELECT r.id,r.confirmation_no,r.arrival_date,r.departure_date,r.status FROM booking_requests b JOIN reservations r ON r.id=b.reservation_id AND r.property_id=b.property_id WHERE b.property_id=pms_current_property_id() AND b.idempotency_key=? LIMIT 1").bind(idempotencyKey).first<Record<string, unknown>>();
   return existing ? { reservationId: String(existing.id), confirmation: String(existing.confirmation_no), arrival: String(existing.arrival_date), departure: String(existing.departure_date), status: String(existing.status), duplicate: true } : null;
 }
 
-export async function cancelWebReservation(input: { confirmation?: unknown; email?: unknown; lastName?: unknown }) {
+export async function cancelWebReservation(input: { confirmation?: unknown; email?: unknown; lastName?: unknown }, propertyId = process.env.AURORA_PUBLIC_PROPERTY_ID || "prop-seoul") {
   const confirmation = requiredText(input.confirmation, 64)?.toUpperCase();
   const email = requiredText(input.email, 254);
   const lastName = requiredText(input.lastName, 80);
   if (!confirmation || !email || !lastName || !validEmail(email)) throw new BookingError("예약번호, 이메일, 성을 정확히 입력해 주세요.", 400, "INVALID_LOOKUP");
-  const db = await database();
+  const db = await database(propertyId);
   const reservation = await db.prepare("SELECT r.id,r.status,r.arrival_date,r.departure_date,r.confirmation_no,r.version,g.last_name,b.email_hash,p.business_date FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id JOIN booking_requests b ON b.reservation_id=r.id AND b.property_id=r.property_id JOIN properties p ON p.id=r.property_id WHERE r.property_id=pms_current_property_id() AND r.confirmation_no=? LIMIT 1").bind(confirmation).first<Record<string, unknown>>();
   if (!reservation || String(reservation.email_hash) !== emailHash(email) || String(reservation.last_name).toLocaleLowerCase("en-US") !== lastName.toLocaleLowerCase("en-US")) {
     throw new BookingError("입력한 정보와 일치하는 웹 예약을 찾지 못했습니다.", 404, "BOOKING_NOT_FOUND");

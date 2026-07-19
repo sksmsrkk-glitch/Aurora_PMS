@@ -3,12 +3,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
+import { headers } from "next/headers";
 import type { CSSProperties, ReactNode } from "react";
 import HotelSearchForm from "./HotelSearchForm";
 import { hotelStructuredData, serializeJsonLd } from "./seo";
 import { formatMoney, seoulDateAfter } from "../../lib/format";
 import { getCachedWebsiteContent } from "./content";
 import type { WebsiteSectionId } from "../website-editor-contract";
+import { resolvePublicPropertyForRequest } from "../api/booking/property-resolver";
 
 // Published CMS content is refreshed at most one minute after an administrator
 // changes it without forcing every public request through a server render.
@@ -21,7 +23,9 @@ export default async function AuroraHotelPage() {
   // build before its matching migration is promoted. The projection itself is
   // cached for 60 seconds by getCachedWebsiteContent.
   await connection();
-  const content = await getCachedWebsiteContent();
+  const property=await resolvePublicPropertyForRequest({headers:await headers()});
+  if(!property)notFound();
+  const content = await getCachedWebsiteContent(property.propertyId);
   if (!content.published) notFound();
   const arrival = seoulDateAfter(1);
   const departure = seoulDateAfter(2);
@@ -29,7 +33,7 @@ export default async function AuroraHotelPage() {
   const hero = content.hotelMedia.find((item) => item.id === settings.heroMediaId)
     || content.hotelMedia.find((item) => item.role === "HERO")
     || content.hotelMedia[0];
-  const bookHref = `/hotel/book?arrival=${arrival}&departure=${departure}&adults=2&children=0`;
+  const bookHref = `${property.pathPrefix}/book?arrival=${arrival}&departure=${departure}&adults=2&children=0`;
   const heroCtaHref = settings.heroCtaHref === "/hotel/book" ? bookHref : settings.heroCtaHref;
   const overlay = settings.heroOverlay / 100;
   const siteStyle = { "--hotel-blue": settings.themeAccent } as CSSProperties;
@@ -64,9 +68,9 @@ export default async function AuroraHotelPage() {
   };
 
   return <main className="hotel-site" style={siteStyle}>
-    <script type="application/ld+json" dangerouslySetInnerHTML={{__html:serializeJsonLd(hotelStructuredData(content))}}/>
+    <script type="application/ld+json" dangerouslySetInnerHTML={{__html:serializeJsonLd(hotelStructuredData(content,property))}}/>
     <nav className="hotel-nav" aria-label="호텔 홈페이지">
-      <Link className="hotel-brand" href="/hotel"><Image src="/brand/aurora-mark-192.png" alt="" width={42} height={42} priority/><span><b>AURORA</b><small>SEOUL</small></span></Link>
+      <Link className="hotel-brand" href={property.pathPrefix||"/"}><Image src="/brand/aurora-mark-192.png" alt="" width={42} height={42} priority/><span><b>AURORA</b><small>SEOUL</small></span></Link>
       <div className="hotel-nav-links">{settings.navigation.filter((item)=>item.enabled).map((item)=><a href={`#${item.id}`} key={item.id}>{item.label}</a>)}</div>
       <Link className="hotel-nav-book" href={bookHref}>{settings.bookingCtaLabel}</Link>
     </nav>

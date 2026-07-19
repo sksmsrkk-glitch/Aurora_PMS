@@ -3,17 +3,17 @@
 
 | 지표 | 현재 값 | 계산 원본 |
 | --- | ---: | --- |
-| Migration | 20 | `supabase/migrations/*.sql` |
-| 런타임 스키마 계약 | `202607180015_staff_access_control` | 정렬상 마지막 migration |
-| Public table 선언 | 54 | 고유 `CREATE TABLE` |
-| Application trigger 선언 | 29 | 고유 `CREATE TRIGGER` |
-| Foreign key 선언 | 83 | 고유 named FK constraint |
-| Tenant RLS 대상 | 51 | RLS enable 선언과 tenant table catalog |
+| Migration | 21 | `supabase/migrations/*.sql` |
+| 런타임 스키마 계약 | `202607190016_multihotel_saas_control_plane` | 정렬상 마지막 migration |
+| Public table 선언 | 71 | 고유 `CREATE TABLE` |
+| Application trigger 선언 | 33 | 고유 `CREATE TRIGGER` |
+| Foreign key 선언 | 84 | 고유 named FK constraint |
+| Tenant RLS 대상 | 65 | RLS enable 선언과 tenant table catalog |
 | 등록 PMS action | 56 | action registry key |
-| Unit/behavior test | 40 | `tests/*.test.mjs`의 test case |
-| PostgreSQL integration test | 11 | `tests/*.integration.mjs`의 test case |
-| PMS CSS source | 150,709 bytes / 8 files | root PMS layout imports |
+| Unit/behavior test | 44 | `tests/*.test.mjs`의 test case |
+| PostgreSQL integration test | 18 | `tests/*.integration.mjs`의 test case |
+| PMS CSS source | 162,926 bytes / 9 files | root PMS layout imports |
 | Public hotel CSS source | 22,277 bytes / 1 file | isolated `app/hotel/hotel.css` |
-| 상세 문서 | 7 files | `docs/*.md` (generated 제외) |
+| 상세 문서 | 8 files | `docs/*.md` (generated 제외) |
 
 이 표는 소스 선언 수를 보여 줍니다. 배포 대상의 실제 catalog는 `npm run db:contract:verify`와 `npm run db:supabase:smoke`가 별도로 검증합니다.

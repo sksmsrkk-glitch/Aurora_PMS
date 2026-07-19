@@ -25,7 +25,10 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work",
     "db:supabase:migrate": "node scripts/migrate-supabase.mjs",
     "db:supabase:smoke": "node scripts/smoke-supabase.mjs",
+    "db:saas:preflight": "node scripts/preflight-saas-migration.mjs",
     "db:provision-role": "node --import tsx scripts/provision-role.mjs",
+    "ops:platform-operator": "node scripts/manage-platform-operator.mjs",
+    "ops:tenant:provision": "node --import tsx scripts/provision-tenant.mjs",
     "db:test:bootstrap": "node scripts/bootstrap-test-postgres.mjs",
     "db:contract:verify": "node --import tsx scripts/verify-runtime-contract.mjs"
   },
