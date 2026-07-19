@@ -7,6 +7,7 @@ import {
   parseCsv,
   validateImportRow,
 } from "../app/import-csv.ts";
+import { validatedWorkerEndpoint } from "../app/worker-kick.ts";
 
 test("CSV migration parser handles quoted commas, escaped quotes and CRLF", () => {
   const rows = parseCsv(
@@ -85,4 +86,21 @@ test("public booking routes derive tenant scope from a verified hostname", () =>
   assert.match(reservation, /resolvePublicPropertyForRequest/u);
   assert.match(database, /d\.status='ACTIVE'/u);
   assert.match(resolver, /NODE_ENV\s*!==\s*"production"/u);
+});
+
+test("worker kick accepts only a trusted fixed endpoint", () => {
+  assert.equal(
+    validatedWorkerEndpoint(
+      "https://aurora.example.com/api/internal/worker",
+      "production",
+    )?.href,
+    "https://aurora.example.com/api/internal/worker",
+  );
+  for (const unsafe of [
+    "http://attacker.example/api/internal/worker",
+    "https://attacker.example/other",
+    "https://user:secret@attacker.example/api/internal/worker",
+    "https://attacker.example/api/internal/worker?redirect=1",
+  ])
+    assert.equal(validatedWorkerEndpoint(unsafe, "production"), null);
 });

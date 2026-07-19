@@ -121,6 +121,7 @@ flowchart LR
 | 도메인 tenant resolver | `app/api/booking/property-resolver.ts` |
 | 데이터 이관 | `app/api/platform/imports/route.ts`, `app/import-csv.ts` |
 | durable worker | `app/api/internal/worker/route.ts` |
+| 즉시 worker kick·5분 독립 scheduler | `app/worker-kick.ts`, `.github/workflows/worker-scheduler.yml` |
 | SaaS 전체 운영 설계 | `docs/multihotel-saas.md` |
 
 ## 기능 및 데이터 계약
