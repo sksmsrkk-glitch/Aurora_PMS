@@ -471,6 +471,40 @@ class PostgresDatabase implements PmsDatabase {
     if(this.propertyId)throw new Error("Worker claims require the root database capability");
     if(!/^[A-Za-z0-9:_-]{3,100}$/u.test(workerId)||!Number.isInteger(limit)||limit<1||limit>25)throw new Error("Invalid worker claim");
     return this.client.begin(async(transaction)=>{
+      // A claim is the final durability boundary, so it must not depend on the
+      // scheduler having called recoverWorkerJobs first. Reap leases that have
+      // been abandoned for ten minutes while holding row locks in this same
+      // transaction; a concurrent worker can never reclaim the same job.
+      const expired=await this.executeRaw<{id:string;property_id:string;job_type:string;attempts:number;max_attempts:number;attempt_cycle:number}>(
+        `SELECT id,property_id,job_type,attempts,max_attempts,attempt_cycle FROM worker_jobs
+          WHERE status='RUNNING' AND locked_at<=clock_timestamp()-interval '10 minutes'
+          ORDER BY locked_at,id FOR UPDATE SKIP LOCKED LIMIT 100`,
+        [],transaction,
+      );
+      for(const job of expired.results){
+        const outcome=job.attempts<job.max_attempts?"RETRY":"DEAD";
+        await this.executeRaw(
+          `UPDATE worker_jobs SET status=?,available_at=CASE WHEN ?='RETRY' THEN clock_timestamp() ELSE available_at END,
+             completed_at=CASE WHEN ?='DEAD' THEN clock_timestamp() ELSE NULL END,locked_at=NULL,locked_by=NULL,
+             last_error='Worker lease expired before completion',updated_at=clock_timestamp() WHERE id=?`,
+          [outcome,outcome,outcome,job.id],transaction,
+        );
+        // Close every unfinished ledger row for the reclaimed job. Matching
+        // only the latest attempt would leave earlier crash residue orphaned.
+        await this.executeRaw(
+          `UPDATE worker_attempts SET completed_at=clock_timestamp(),outcome=?,
+             duration_ms=LEAST(2147483647,GREATEST(0,floor(extract(epoch FROM (clock_timestamp()-started_at))*1000)::bigint))::integer,
+             error_code='LEASE_EXPIRED'
+           WHERE job_id=? AND completed_at IS NULL`,
+          [outcome,job.id],transaction,
+        );
+        if(outcome==="DEAD")await this.executeRaw(
+          `INSERT INTO service_incidents(id,property_id,component,severity,status,summary,started_at,metadata)
+           VALUES ('incident-'||?, ?, ?, 'CRITICAL','OPEN','Worker lease expired at the retry limit',clock_timestamp(),jsonb_build_object('jobId',?::text,'attempts',?::integer,'attemptCycle',?::integer))
+           ON CONFLICT(id) DO UPDATE SET status='OPEN',summary=excluded.summary,metadata=excluded.metadata,resolved_at=NULL`,
+          [job.id,job.property_id,job.job_type,job.id,job.attempts,job.attempt_cycle],transaction,
+        );
+      }
       const claimed=await this.executeRaw<WorkerJob>(
         `WITH candidates AS (
            SELECT id FROM worker_jobs

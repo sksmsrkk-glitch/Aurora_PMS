@@ -292,6 +292,57 @@ test(
 );
 
 test(
+  "worker claim reaps ten-minute leases and closes every orphan attempt",
+  { skip },
+  async () => {
+    const sql = client(),
+      propertyId = "prop-seoul",
+      suffix = crypto.randomUUID().slice(0, 8),
+      pendingId = `job-claim-pending-${suffix}`,
+      retryId = `job-claim-retry-${suffix}`,
+      deadId = `job-claim-dead-${suffix}`,
+      jobIds = [pendingId, retryId, deadId];
+    try {
+      await sql`INSERT INTO worker_jobs(id,property_id,job_type,source_id,payload,status,priority,attempts,max_attempts,attempt_cycle,available_at,locked_at,locked_by,updated_at)
+        VALUES (${pendingId},${propertyId},'USAGE_ROLLUP',${`claim-pending-${suffix}`} ,'{}'::jsonb,'PENDING',-1000,0,3,1,clock_timestamp(),NULL,NULL,clock_timestamp()),
+               (${retryId},${propertyId},'USAGE_ROLLUP',${`claim-retry-${suffix}`} ,'{}'::jsonb,'RUNNING',100,1,3,1,clock_timestamp(),clock_timestamp()-interval '11 minutes','test:lost-retry',clock_timestamp()-interval '11 minutes'),
+               (${deadId},${propertyId},'USAGE_ROLLUP',${`claim-dead-${suffix}`} ,'{}'::jsonb,'RUNNING',110,2,2,1,clock_timestamp(),clock_timestamp()-interval '11 minutes','test:lost-dead',clock_timestamp()-interval '11 minutes')`;
+      // The older unfinished row simulates residue from a worker crash before
+      // the latest attempt. Both rows must be closed by the lease reclamation.
+      await sql`INSERT INTO worker_attempts(property_id,job_id,attempt_cycle,attempt_no,started_at)
+        VALUES (${propertyId},${retryId},1,1,clock_timestamp()-interval '12 minutes'),
+               (${propertyId},${deadId},1,1,clock_timestamp()-interval '13 minutes'),
+               (${propertyId},${deadId},1,2,clock_timestamp()-interval '11 minutes')`;
+
+      const db = getPmsDatabase({ DATABASE_URL: databaseUrl }),
+        claimed = await db.claimWorkerJobs("test:lease-reaper", 1);
+      assert.deepEqual(claimed.map((job) => job.id), [pendingId]);
+
+      const jobs = await sql`SELECT id,status,locked_at,locked_by,completed_at,last_error FROM worker_jobs WHERE id IN (${pendingId},${retryId},${deadId})`,
+        byId = new Map(jobs.map((job) => [job.id, job]));
+      assert.equal(byId.get(retryId).status, "RETRY");
+      assert.equal(byId.get(retryId).locked_by, null);
+      assert.equal(byId.get(deadId).status, "DEAD");
+      assert.ok(byId.get(deadId).completed_at);
+      assert.match(byId.get(deadId).last_error, /lease expired/u);
+
+      const attempts = await sql`SELECT job_id,attempt_no,outcome,error_code,completed_at FROM worker_attempts WHERE job_id IN (${retryId},${deadId}) ORDER BY job_id,attempt_no`;
+      assert.equal(attempts.length, 3);
+      assert.ok(attempts.every((attempt) => attempt.completed_at));
+      assert.ok(attempts.every((attempt) => attempt.error_code === "LEASE_EXPIRED"));
+      assert.equal(attempts.find((attempt) => attempt.job_id === retryId).outcome, "RETRY");
+      assert.ok(attempts.filter((attempt) => attempt.job_id === deadId).every((attempt) => attempt.outcome === "DEAD"));
+    } finally {
+      await sql`DELETE FROM worker_attempts WHERE job_id=ANY(${jobIds})`;
+      await sql`DELETE FROM service_incidents WHERE id IN (${`incident-${retryId}`},${`incident-${deadId}`})`;
+      await sql`DELETE FROM worker_jobs WHERE id=ANY(${jobIds})`;
+      await sql.end({ timeout: 2 });
+      await closePmsDatabase();
+    }
+  },
+);
+
+test(
   "worker reaper expires stale leases and reopens DEAD delivery in a bounded new cycle",
   { skip },
   async () => {
