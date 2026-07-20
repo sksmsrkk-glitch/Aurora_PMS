@@ -369,7 +369,7 @@ async function main() {
   assert.ok(finalReports.json.pagination.total > 0);
   record("감사 로그 키워드 추적", `${finalReports.json.pagination.total}건`);
 
-  console.log(`\nAurora PMS full workflow QA passed: ${results.length} checkpoints · run ${runId}`);
+  console.log(`\nTalos PMS full workflow QA passed: ${results.length} checkpoints · run ${runId}`);
 }
 
 main().catch((error) => {

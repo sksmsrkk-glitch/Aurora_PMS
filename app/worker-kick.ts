@@ -39,7 +39,7 @@ export function scheduleDurableWorkerKick() {
 
   const url = validatedWorkerEndpoint(configuredUrl);
   if (!url) {
-    console.error("Aurora worker kick is disabled: unsafe worker endpoint");
+    console.error("Talos worker kick is disabled: unsafe worker endpoint");
     return;
   }
 
@@ -53,10 +53,10 @@ export function scheduleDurableWorkerKick() {
         signal: AbortSignal.timeout(45_000),
       });
       if (!response.ok)
-        console.error(`Aurora worker kick returned HTTP ${response.status}`);
+        console.error(`Talos worker kick returned HTTP ${response.status}`);
     } catch (error) {
       console.error(
-        "Aurora worker kick failed; the scheduled sweep remains authoritative",
+        "Talos worker kick failed; the scheduled sweep remains authoritative",
         error instanceof Error ? error.name : "WORKER_KICK_ERROR",
       );
     }

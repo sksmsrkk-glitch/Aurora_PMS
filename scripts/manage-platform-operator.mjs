@@ -1,4 +1,4 @@
-/** Explicit break-glass registry management for Aurora support operators. */
+/** Explicit break-glass registry management for Talos support operators. */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import postgres from "postgres";
@@ -37,7 +37,7 @@ const directUrl = process.env.DIRECT_URL || local.DIRECT_URL || "",
     .trim()
     .toLowerCase(),
   displayName =
-    nameParts.join(" ").trim() || email.split("@")[0] || "Aurora Support",
+    nameParts.join(" ").trim() || email.split("@")[0] || "Talos Support",
   role = String(roleInput).toUpperCase();
 if (process.env.AURORA_PLATFORM_OPERATOR_CONFIRM !== "AURORA_PLATFORM_OPERATOR")
   throw new Error(

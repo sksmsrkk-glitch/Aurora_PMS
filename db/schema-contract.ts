@@ -17,7 +17,7 @@ export class PmsSchemaNotReadyError extends Error {
   readonly code = "SCHEMA_NOT_READY";
 
   constructor(readonly details: string[]) {
-    super(`Aurora PMS database contract is not ready: ${details.join(", ")}`);
+    super(`Talos PMS database contract is not ready: ${details.join(", ")}`);
     this.name = "PmsSchemaNotReadyError";
   }
 }

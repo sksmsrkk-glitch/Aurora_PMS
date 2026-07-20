@@ -1,4 +1,4 @@
-# Aurora PMS 운영 가이드
+# Talos PMS 운영 가이드
 
 ## 운영 체크리스트
 
@@ -227,10 +227,10 @@ WHERE departure_date <= arrival_date;
 | `c9989a9` | Vercel Node Functions를 Supabase에 가까운 `bom1` 리전으로 이동 |
 | `56d7202` | 730일 재고 캘린더, 채널 수수료/입금가 계약, 정산, 호텔 회계·손익, 신규 리포트, room modal UX |
 | `af50684` | 표준 Next.js 16 Vercel Production 배포와 환경 설정 |
-| `377816c` | 전체 PMS workflow QA, Aurora Flow UI, README/운영 문서 1차 확장 |
+| `377816c` | 전체 PMS workflow QA, Talos Flow UI, README/운영 문서 1차 확장 |
 
 릴리스 변경은 `main` 브랜치에 커밋하고 GitHub origin으로 push한 뒤 연결된 Vercel Production 프로젝트에 배포합니다. 배포 전후에는 같은 Supabase smoke, workflow, health, auth, booking 검증을 반복합니다.
 
 ## 라이선스 및 브랜드 고지
 
-Aurora PMS는 독립 프로젝트입니다. Toss, Toss Design System, OPERA PMS 또는 기타 언급된 제품과 제휴하거나 그 공식 제품임을 의미하지 않습니다. 공개된 UX 원칙과 업계 운영 패턴을 참고했으며, 타사 로고·전용 컴포넌트 코드·비공개 자산은 포함하지 않습니다. `Toss Product Sans` 파일은 저장소나 배포 번들에 복제하지 않고 Toss 공식 CDN 스타일시트를 런타임에 참조합니다. 실제 상업 운영 전에는 해당 외부 폰트의 최신 사용 조건과 사용 권한을 별도로 확인해야 합니다.
+Talos PMS는 독립 프로젝트입니다. Toss, Toss Design System, OPERA PMS 또는 기타 언급된 제품과 제휴하거나 그 공식 제품임을 의미하지 않습니다. 공개된 UX 원칙과 업계 운영 패턴을 참고했으며, 타사 로고·전용 컴포넌트 코드·비공개 자산은 포함하지 않습니다. `Toss Product Sans` 파일은 저장소나 배포 번들에 복제하지 않고 Toss 공식 CDN 스타일시트를 런타임에 참조합니다. 실제 상업 운영 전에는 해당 외부 폰트의 최신 사용 조건과 사용 권한을 별도로 확인해야 합니다.

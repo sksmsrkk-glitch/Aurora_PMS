@@ -1,0 +1,85 @@
+.allmytour-footer {
+  display: grid;
+  grid-template-columns: minmax(11rem, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem 2rem;
+  width: 100%;
+  padding: 1.5rem clamp(1rem, 4vw, 3rem);
+  border-top: 1px solid #e5e8eb;
+  background: #fff;
+  color: #4e5968;
+  font-family: "Toss Product Sans", "Pretendard", system-ui, sans-serif;
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+.talos-wordmark {
+  color: #191f28 !important;
+}
+.allmytour-footer-title {
+  display: grid;
+  gap: 0.15rem;
+}
+.allmytour-footer-title strong {
+  color: #191f28;
+  font-size: 0.875rem;
+}
+.allmytour-footer-title span {
+  color: #8b95a1;
+}
+.allmytour-footer-details {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem 1rem;
+  flex-wrap: wrap;
+}
+.allmytour-footer address {
+  font-style: normal;
+}
+.allmytour-footer a {
+  color: #4e5968;
+  text-decoration: none;
+}
+.allmytour-footer a:hover {
+  color: #191f28;
+  text-decoration: underline;
+}
+.allmytour-footer-login {
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1rem;
+  border-radius: 0.75rem;
+  background: #f2f4f6;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.allmytour-footer.compact {
+  grid-template-columns: 1fr;
+  gap: 0.65rem;
+  margin-top: 2rem;
+  padding: 1.25rem 0 0;
+  background: transparent;
+}
+.allmytour-footer.compact .allmytour-footer-details {
+  gap: 0.25rem 0.75rem;
+}
+@media (max-width: 760px) {
+  .allmytour-footer {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 0.8rem;
+  }
+  .allmytour-footer-details {
+    display: grid;
+    gap: 0.25rem;
+  }
+  .allmytour-footer-details a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+  .allmytour-footer-login {
+    width: 100%;
+  }
+}

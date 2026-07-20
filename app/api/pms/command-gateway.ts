@@ -575,7 +575,7 @@ export async function handlePmsPost(request: Request) {
     const mapped=mapPmsError(message);
     if(mapped)return Response.json({error:mapped.error},{status:mapped.status});
     const errorId=crypto.randomUUID();
-    console.error("[AURORA_PMS_ERROR]",{errorId,action:body.action,actor,propertyId:principal.propertyId,error:error instanceof Error?error.name:"UnknownError",message});
+    console.error("[TALOS_PMS_ERROR]",{errorId,action:body.action,actor,propertyId:principal.propertyId,error:error instanceof Error?error.name:"UnknownError",message});
     return Response.json({error:"처리 중 오류가 발생했습니다. 문제가 계속되면 오류 ID를 관리자에게 알려 주세요.",errorId},{status:500});
   }
 }

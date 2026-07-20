@@ -275,7 +275,7 @@ export async function POST(request: Request) {
         )
       )
         return Response.json(
-          { error: "AURORA_TENANT_BASE_DOMAIN 설정이 필요합니다." },
+          { error: "테넌트 기본 도메인 설정이 필요합니다." },
           { status: 503, headers: jsonHeaders() },
         );
       const digest = createHash("sha256")
@@ -378,8 +378,8 @@ export async function POST(request: Request) {
           hostname,
           dnsVerification: {
             type: "TXT",
-            name: `_aurora.${hostname}`,
-            value: `aurora-verification=${token}`,
+            name: `_talos.${hostname}`,
+            value: `talos-verification=${token}`,
           },
         },
         { status: 201, headers: jsonHeaders() },

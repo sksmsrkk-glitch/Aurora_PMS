@@ -45,7 +45,7 @@ try {
       (SELECT COUNT(*)::int FROM pg_policies WHERE policyname='aurora_property_isolation' AND 'aurora_app'=ANY(roles)) policy_count
   `;
   if (!catalog.migration_ready || !catalog.role_ready || !catalog.role_member || Number(catalog.policy_count) < REQUIRED_TENANT_POLICY_COUNT) {
-    throw new Error("Database catalog does not satisfy the Aurora runtime contract");
+    throw new Error("Database catalog does not satisfy the Talos runtime contract");
   }
 
   const tenantProbe = await sql.begin(async (transaction) => {
@@ -55,7 +55,7 @@ try {
     return result;
   });
   if (tenantProbe?.id !== propertyId) throw new Error("Tenant role probe did not return the configured property");
-  console.log(`Aurora runtime contract passed: ${REQUIRED_SCHEMA_VERSION}, ${catalog.policy_count} tenant policies, pooled role probe ready.`);
+  console.log(`Talos runtime contract passed: ${REQUIRED_SCHEMA_VERSION}, ${catalog.policy_count} tenant policies, pooled role probe ready.`);
 } finally {
   await sql.end({ timeout: 5 });
 }

@@ -15,7 +15,7 @@ async function adminRequest(path:string,init:RequestInit){
   const {url,secret}=configuration();
   const response=await fetch(`${url}/auth/v1/admin${path}`,{
     ...init,
-    headers:{apikey:secret,authorization:`Bearer ${secret}`,"content-type":"application/json","x-client-info":"aurora-pms/1.0",...(init.headers||{})},
+    headers:{apikey:secret,authorization:`Bearer ${secret}`,"content-type":"application/json","x-client-info":"talos-pms/1.0",...(init.headers||{})},
     cache:"no-store",
   });
   if(response.ok)return response;
@@ -41,5 +41,5 @@ export async function updateStaffAuthUser(userId:string,changes:{password?:strin
 
 export async function deleteStaffAuthUser(userId:string){
   try{await adminRequest(`/users/${encodeURIComponent(userId)}`,{method:"DELETE"});}
-  catch(error){console.error("[AURORA_STAFF_AUTH_ROLLBACK]",{userId,error:error instanceof Error?error.name:"UnknownError"});}
+  catch(error){console.error("[TALOS_STAFF_AUTH_ROLLBACK]",{userId,error:error instanceof Error?error.name:"UnknownError"});}
 }

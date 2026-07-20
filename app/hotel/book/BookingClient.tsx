@@ -2,11 +2,11 @@
 
 /** Interactive direct-booking flow with race-safe availability searches. */
 
-import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { addIsoDays, formatMoney, seoulDateAfter } from "../../../lib/format";
+import CompanyFooter from "../../company-footer";
 
 type Offer = { roomTypeId:string;code:string;name:string;description:string;imageUrl:string|null;amenities:string[];capacity:number;available:number;averageNightlyRate:number;total:number;currency:string;nights:{date:string;rate:number;available:number}[] };
 type Availability = { property:{name:string;currency:string;businessDate:string};search:{arrival:string;departure:string;adults:number;children:number;nights:number};offers:Offer[] };
@@ -94,7 +94,7 @@ export default function BookingClient() {
   }
 
   return <main className="booking-page">
-    <header className="booking-header"><Link className="hotel-brand" href="/hotel"><Image src="/brand/aurora-mark-192.png" alt="" width={38} height={38} priority/><span><b>AURORA</b><small>SEOUL</small></span></Link><div><span>01 객실 선택</span><i/><span>02 정보 입력</span><i/><span>03 예약 완료</span></div><Link href="/hotel">홈으로</Link></header>
+    <header className="booking-header"><Link className="hotel-brand" href="/hotel"><span><b>{availability?.property.name||"공식 호텔 예약"}</b><small>DIRECT BOOKING</small></span></Link><div><span>01 객실 선택</span><i/><span>02 정보 입력</span><i/><span>03 예약 완료</span></div><Link href="/hotel">홈으로</Link></header>
     <section className="booking-wrap">
       {confirmation ? <section className="booking-confirmed" aria-live="polite"><div className="confirm-check">✓</div><p>RESERVATION CONFIRMED</p><h1>예약이 완료되었습니다</h1><span>예약번호를 저장해 주세요. 예약 확인과 취소에 필요합니다.</span><strong>{confirmation.confirmation}</strong><dl><div><dt>체크인</dt><dd>{confirmation.arrival}</dd></div><div><dt>체크아웃</dt><dd>{confirmation.departure}</dd></div>{confirmation.total!=null&&<div><dt>총 금액</dt><dd>{money(confirmation.total,confirmation.currency)}</dd></div>}</dl><p className="payment-note">결제는 호텔 체크인 시 진행됩니다. 등록한 이메일로 예약 안내가 발송됩니다.</p><div><button onClick={()=>void runSearch(search)}>다른 객실 보기</button><Link href="/hotel">호텔 홈</Link></div></section> : <>
         <div className="booking-title"><div><p>BOOK YOUR STAY</p><h1>객실 예약</h1><span>PMS 실시간 재고와 요금이 바로 반영됩니다.</span></div><button type="button" className="cancel-link" onClick={()=>setCancelOpen(value=>!value)}>기존 예약 취소</button></div>
@@ -105,6 +105,7 @@ export default function BookingClient() {
         <section className="offer-list" aria-busy={loading}>{loading&&!availability?<div className="booking-loading">PMS에서 실시간 재고를 확인하고 있습니다.</div>:availability?.offers.length===0?<div className="no-offers"><b>현재 판매 가능한 객실이 없습니다</b><span>날짜나 투숙 인원을 변경해 다시 검색해 주세요.</span></div>:availability?.offers.map(offer=><article className="offer-card" key={offer.roomTypeId}><i className={`offer-art room-art ${offer.imageUrl?"cms-room-image":roomClass(offer.code)}`} style={offer.imageUrl?{backgroundImage:`url(${JSON.stringify(offer.imageUrl)})`}:undefined}><small>{offer.code}</small></i><div className="offer-copy"><small>{offer.code} · 최대 {offer.capacity}인</small><h2>{offer.name}</h2><p>{offer.description}</p><ul>{(offer.amenities.length?offer.amenities.slice(0,3):["무료 Wi-Fi","프리미엄 침구","현장 결제"]).map(item=><li key={item}>{item}</li>)}</ul>{offer.available<=3&&<em>해당 일정 {offer.available}실 남음</em>}</div><div className="offer-rate"><span>{availability.search.nights}박 총액</span><strong>{money(offer.total,offer.currency)}</strong><small>1박 평균 {money(offer.averageNightlyRate,offer.currency)}</small><button type="button" onClick={()=>{setSelected(offer);setError("");requestKey.current="";}}>선택</button></div></article>)}</section>
       </>}
     </section>
+    <CompanyFooter />
     {selected&&availability&&<div className="booking-drawer-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)setSelected(null)}}><aside className="booking-drawer" role="dialog" aria-modal="true" aria-labelledby="guest-title"><div className="booking-drawer-head"><div><small>GUEST DETAILS</small><h2 id="guest-title">예약자 정보를 입력해 주세요</h2></div><button type="button" aria-label="닫기" onClick={()=>setSelected(null)}>×</button></div><div className="drawer-offer"><i className={`room-art ${selected.imageUrl?"cms-room-image":roomClass(selected.code)}`} style={selected.imageUrl?{backgroundImage:`url(${JSON.stringify(selected.imageUrl)})`}:undefined}/><div><b>{selected.name}</b><span>{availability.search.arrival} — {availability.search.departure} · {availability.search.nights}박</span></div><strong>{money(selected.total,selected.currency)}</strong></div><form className="guest-form" onSubmit={reserve}><div className="guest-name"><label><span>이름</span><input name="firstName" autoComplete="given-name" maxLength={80} required/></label><label><span>성</span><input name="lastName" autoComplete="family-name" maxLength={80} required/></label></div><label><span>이메일</span><input name="email" type="email" autoComplete="email" maxLength={254} placeholder="예약 확인 메일을 보내드립니다" required/></label><label><span>연락처</span><input name="phone" type="tel" autoComplete="tel" maxLength={24} placeholder="010-0000-0000" required/></label><label><span>요청 사항 <small>선택</small></span><textarea name="specialRequests" maxLength={1000} rows={3} placeholder="호텔에 전달할 요청 사항을 입력해 주세요."/></label><label className="privacy-check"><input type="checkbox" required/><span>예약 처리 및 고객 응대를 위한 개인정보 수집·이용에 동의합니다.</span></label><div className="booking-total"><span><b>총 결제 예정 금액</b><small>호텔 현장 결제</small></span><strong>{money(selected.total,selected.currency)}</strong></div>{error&&<p className="booking-error" role="alert">{error}</p>}<button type="submit" className="booking-submit" disabled={loading}>{loading?"안전하게 예약 중":"예약 확정"}</button></form></aside></div>}
   </main>;
 }

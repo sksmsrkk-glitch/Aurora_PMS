@@ -1,9 +1,9 @@
 "use client";
 
-import Image from "next/image";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { WORKSPACE_LABELS } from "../../access-control";
+import CompanyFooter from "../../company-footer";
 import { PMS_WORKSPACES, type PmsWorkspace } from "../../pms-workspaces";
 
 type Domain = {
@@ -167,7 +167,7 @@ export default function PlatformConsole() {
   if (!data)
     return (
       <main className="platform-loading">
-        <Image src="/brand/aurora-mark-192.png" alt="" width={56} height={56} />
+        <b className="platform-loading-wordmark talos-wordmark">TALOS PMS</b>
         <h1>멀티호텔 운영 환경을 불러오고 있습니다</h1>
         {error && (
           <>
@@ -184,14 +184,9 @@ export default function PlatformConsole() {
     <main className="platform-console">
       <header className="platform-header">
         <div className="platform-brand">
-          <Image
-            src="/brand/aurora-mark-192.png"
-            alt=""
-            width={42}
-            height={42}
-          />
           <div>
-            <b>AURORA CONTROL PLANE</b>
+            <b className="talos-wordmark">TALOS PMS</b>
+            <small>CONTROL PLANE</small>
             <span>{data.organizationName}</span>
           </div>
         </div>
@@ -490,6 +485,7 @@ export default function PlatformConsole() {
           columns={["component", "severity", "status", "started_at"]}
         />
       </div>
+      <CompanyFooter />
     </main>
   );
 }

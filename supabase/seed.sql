@@ -6,21 +6,21 @@ BEGIN
   IF to_regclass('public.organizations') IS NULL THEN
     EXECUTE $sql$
       INSERT INTO properties(id,name,code,timezone,currency,business_date)
-      VALUES ('prop-seoul','오로라 서울 호텔','SEL01','Asia/Seoul','KRW','2026-07-16')
+      VALUES ('prop-seoul','서울 샘플 호텔','SEL01','Asia/Seoul','KRW','2026-07-16')
       ON CONFLICT (id) DO NOTHING
     $sql$;
   ELSE
     EXECUTE $sql$
       INSERT INTO organizations(id,name,slug,status)
-      VALUES ('org-prop-seoul','오로라 서울 호텔 운영사','aurora-seoul','ACTIVE')
+      VALUES ('org-prop-seoul','서울 샘플 호텔 운영사','sample-seoul','ACTIVE')
       ON CONFLICT(id) DO NOTHING;
 
       INSERT INTO properties(
         id,name,code,timezone,currency,business_date,organization_id,slug,
         status,onboarding_status,plan_code,cell_key,settings
       ) VALUES (
-        'prop-seoul','오로라 서울 호텔','SEL01','Asia/Seoul','KRW','2026-07-16',
-        'org-prop-seoul','aurora-seoul','ACTIVE','LIVE','STANDARD','primary','{}'::jsonb
+        'prop-seoul','서울 샘플 호텔','SEL01','Asia/Seoul','KRW','2026-07-16',
+        'org-prop-seoul','sample-seoul','ACTIVE','LIVE','STANDARD','primary','{}'::jsonb
       ) ON CONFLICT(id) DO NOTHING;
 
       INSERT INTO property_subscriptions(
@@ -177,7 +177,7 @@ INSERT INTO website_settings(
   checkout_time,published,version,updated_at,updated_by
 )
 SELECT
-  p.id,'Aurora Hotel Seoul','URBAN NIGHTS, QUIETLY BRIGHT',
+  p.id,'Seoul Sample Hotel','URBAN NIGHTS, QUIETLY BRIGHT',
   'A quiet glow in the heart of Seoul',
   'Thoughtful rooms and warm service for a clearer stay.',
   'Rooms designed around your time',
@@ -186,7 +186,7 @@ SELECT
   'Dining, lounge, and fitness experiences follow the natural pace of your stay.',
   'A bright starting point in Seoul',
   'Business, culture, and dining districts are within easy reach.',
-  '1 Aurora-ro, Jung-gu, Seoul','02-0000-2026','stay@aurora.hotel',
+  '112-7 Changgyeonggung-ro, Jongno-gu, Seoul','02-0000-2026','stay@example.com',
   '15:00','11:00','1',1,clock_timestamp(),'system:seed'
 FROM properties p
 WHERE p.id='prop-seoul'

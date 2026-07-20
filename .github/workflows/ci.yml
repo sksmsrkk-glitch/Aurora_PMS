@@ -1,4 +1,4 @@
-name: Aurora PMS CI
+name: Talos PMS CI
 
 on:
   pull_request:

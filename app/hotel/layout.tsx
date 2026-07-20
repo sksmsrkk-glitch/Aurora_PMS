@@ -14,7 +14,7 @@ export async function generateMetadata(): Promise<Metadata> {
   } catch {
     // Database or unpublished-content failures stay out of search results while
     // the page's normal error/not-found boundary handles the visible response.
-    return { title: "Aurora Hotel", robots: { index: false, follow: false } };
+    return { title: "호텔 공식 홈페이지", robots: { index: false, follow: false } };
   }
 }
 

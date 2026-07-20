@@ -1,4 +1,4 @@
-# Aurora PMS 개발자 가이드
+# Talos PMS 개발자 가이드
 
 ## 설치 및 Supabase 연결
 
@@ -99,7 +99,7 @@ native type 변환이나 CHECK 재검증처럼 lock·table rewrite 가능성이 
 | --- | --- | --- |
 | Web | Next.js 16 App Router, React 19, TypeScript 5.9 | SSR/route handler와 client 업무 UI를 한 코드베이스에서 운영 |
 | Auth | Supabase Auth + `jose` remote JWKS verifier | Auth 서버를 매 요청 hot path에 두지 않고 asymmetric JWT를 검증하며 key rotation을 추적 |
-| Style | 단일 `globals.css`, Tailwind PostCSS import, Aurora Flow tokens | 외부 컴포넌트 런타임 없이 세밀한 B2B 화면 제어 |
+| Style | 단일 `globals.css`, Tailwind PostCSS import, Talos Flow tokens | 외부 컴포넌트 런타임 없이 세밀한 B2B 화면 제어 |
 | DB access | `postgres` + Supavisor transaction pooler | Vercel instance별 연결을 pooler로 수렴하고 server-side transaction 보장 |
 | Schema | `supabase/migrations/` 단일 원본 | 운영 DDL과 테스트 DDL의 drift 및 이미 적용된 파일 덮어쓰기 제거 |
 | Excel | `fflate` 기반 직접 Open XML writer | 무거운 `xlsx` runtime dependency 없이 실제 `.xlsx` 생성 |
@@ -180,7 +180,7 @@ interface PmsPreparedStatement {
 
 ### 소스 주석 품질 기준
 
-Aurora PMS의 유지보수 대상은 `app`, `db`, `scripts`, `tests` 아래의 TypeScript, TSX, JavaScript, MJS 파일입니다. 파일 상단에는 책임을 설명하고, 보안 경계·트랜잭션·회계/재고 불변식처럼 코드만으로 의도가 불명확한 곳에는 “왜”를 기록합니다. 줄 수나 주석 개수를 품질 대리 지표로 강제하지 않습니다.
+Talos PMS의 유지보수 대상은 `app`, `db`, `scripts`, `tests` 아래의 TypeScript, TSX, JavaScript, MJS 파일입니다. 파일 상단에는 책임을 설명하고, 보안 경계·트랜잭션·회계/재고 불변식처럼 코드만으로 의도가 불명확한 곳에는 “왜”를 기록합니다. 줄 수나 주석 개수를 품질 대리 지표로 강제하지 않습니다.
 
 주석은 문법을 다시 읽어 주는 대신 다음 내용을 기록합니다.
 
@@ -287,7 +287,7 @@ PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONF
 | 격리 홈페이지 CMS E2E | homepage 200, 게시 객실 3, 검색 offer 3, 잘못된 날짜 400, 설정 version 증가, WEB OFF 제외·복원, media lifecycle 통과 |
 | 반응형 브라우저 QA | 1440px desktop·390px mobile, 가로 scroll 0, 홈페이지 검색 날짜 자동 보정, 공개 객실 3개, CMS 3개 탭·visual editor 3개 control group·hero picker·메뉴 3행·preview device 전환, 재고 WEB 노출 selector, 콘솔 오류 0 |
 | PMS 헤드리스 UI 전수 QA | 13개 업무 화면 가로 overflow 0, 10개 업무 검색 영역 필터·초기화 정상, 17개 dialog/drawer 포커스·Escape·action bar 정상, 객실 타입 modal 860px→416px, 모바일 modal 최대 92dvh |
-| 리포트 브라우저 QA | 11/11 서버 리포트 오류 0, 키워드 0건·초기화 복원, CSV `Aurora_room_inventory_2026-07-16.csv`, XLSX `Aurora_객실_마스터_2026-07-16.xlsx` 실제 다운로드 |
+| 리포트 브라우저 QA | 11/11 서버 리포트 오류 0, 키워드 0건·초기화 복원, CSV `Talos_room_inventory_2026-07-16.csv`, XLSX `Talos_객실_마스터_2026-07-16.xlsx` 실제 다운로드 |
 | Core benchmark | Vercel `icn1`, 200 requests, concurrency 10, 실패 0, 252.04 req/s, p50 36.13ms, p95 53.20ms, p99 96.01ms |
 | Security | health 200, CSP/HSTS/DENY/nosniff, cross-origin write 403, production dependency vulnerability 0 |
 

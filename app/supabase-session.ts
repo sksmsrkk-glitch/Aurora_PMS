@@ -80,7 +80,7 @@ async function locallyVerifiedIdentity(accessToken: string) {
 async function remoteVerifiedIdentity(accessToken: string, configuredUrl?: string, configuredSecret?: string) {
   const configuration = configuredUrl && configuredSecret ? { url: configuredUrl, secret: configuredSecret } : authConfiguration();
   const response = await fetch(`${configuration.url}/auth/v1/user`, {
-    headers: { apikey: configuration.secret, authorization: `Bearer ${accessToken}`, "x-client-info": "aurora-pms/1.0" },
+    headers: { apikey: configuration.secret, authorization: `Bearer ${accessToken}`, "x-client-info": "talos-pms/1.0" },
     cache: "no-store",
   });
   if (!response.ok) return null;
@@ -126,7 +126,7 @@ async function refreshSession(refreshToken: string) {
   const { url, secret } = authConfiguration();
   const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
     method: "POST",
-    headers: { apikey: secret, "content-type": "application/json", "x-client-info": "aurora-pms/1.0" },
+    headers: { apikey: secret, "content-type": "application/json", "x-client-info": "talos-pms/1.0" },
     body: JSON.stringify({ refresh_token: refreshToken }),
     cache: "no-store",
   });
@@ -169,7 +169,7 @@ export async function signInWithPassword(email: string, password: string) {
   const { url, secret } = authConfiguration();
   const response = await fetch(`${url}/auth/v1/token?grant_type=password`, {
     method: "POST",
-    headers: { apikey: secret, "content-type": "application/json", "x-client-info": "aurora-pms/1.0" },
+    headers: { apikey: secret, "content-type": "application/json", "x-client-info": "talos-pms/1.0" },
     body: JSON.stringify({ email: normalizedEmail, password }),
     cache: "no-store",
   });

@@ -15,7 +15,7 @@ const sql = postgres(directUrl, {
 
 try {
   // Supabase provides these roles and storage tables in hosted projects. A plain
-  // PostgreSQL CI service needs a minimal compatible shell before Aurora SQL runs.
+  // PostgreSQL CI service needs a minimal compatible shell before Talos SQL runs.
   await sql.unsafe(`
     DO $roles$
     BEGIN

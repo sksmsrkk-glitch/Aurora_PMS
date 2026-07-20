@@ -418,7 +418,7 @@ class PostgresDatabase implements PmsDatabase {
       );
       await this.executeRaw(
         `INSERT INTO website_settings(property_id,hotel_name,brand_eyebrow,hero_title,hero_subtitle,overview_title,overview_body,experience_title,experience_body,location_title,location_body,address,phone,email,checkin_time,checkout_time,published,version,updated_at,updated_by)
-         VALUES (?,?,?,'새로운 호텔 경험을 준비하고 있습니다','호텔 소개와 객실을 설정한 뒤 홈페이지를 공개하세요','호텔 소개','Aurora PMS Website Studio에서 호텔 소개를 입력하세요','호텔 경험','호텔만의 경험을 소개하세요','오시는 길','주소와 교통 정보를 입력하세요','주소 입력 필요','전화번호 입력 필요',?,'15:00','11:00',false,1,clock_timestamp(),?)`,
+         VALUES (?,?,?,'새로운 호텔 경험을 준비하고 있습니다','호텔 소개와 객실을 설정한 뒤 홈페이지를 공개하세요','호텔 소개','Talos PMS Website Studio에서 호텔 소개를 입력하세요','호텔 경험','호텔만의 경험을 소개하세요','오시는 길','주소와 교통 정보를 입력하세요','주소 입력 필요','전화번호 입력 필요',?,'15:00','11:00',false,1,clock_timestamp(),?)`,
         [id,input.name.trim(),input.name.trim().toUpperCase(),email,email],transaction,
       );
       await this.executeRaw(

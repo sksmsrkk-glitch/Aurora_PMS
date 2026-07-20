@@ -1,8 +1,8 @@
-# Aurora PMS 아키텍처와 설계 결정
+# Talos PMS 아키텍처와 설계 결정
 
 ## 제품 목표
 
-Aurora PMS는 호텔 운영자가 여러 시스템을 오가며 같은 정보를 반복 입력하는 문제를 줄이고, 다음 질문에 즉시 답할 수 있도록 설계했습니다.
+Talos PMS는 호텔 운영자가 여러 시스템을 오가며 같은 정보를 반복 입력하는 문제를 줄이고, 다음 질문에 즉시 답할 수 있도록 설계했습니다.
 
 - 오늘 도착·재실·출발 고객은 누구인가?
 - 어떤 객실이 판매 가능하고 어떤 객실이 청소·점검·판매 중지 상태인가?
@@ -40,9 +40,9 @@ OTA 메시지는 Message ID와 revision으로 순서를 검증하고, 처리 실
 ```mermaid
 flowchart LR
   U["호텔 운영자"] --> VERCEL["Vercel Production HTTPS"]
-  G["호텔 고객"] --> WEB["Aurora Hotel Website\nDirect Booking Engine"]
+  G["호텔 고객"] --> WEB["Tenant Hotel Website\nDirect Booking Engine"]
   VERCEL --> AUTH["Supabase Auth\naccess + refresh session"]
-  VERCEL --> UI["Aurora Flow UI\nNext.js Client"]
+  VERCEL --> UI["Talos Flow UI\nNext.js Client"]
   AUTH --> API["PMS Route Handler\nRBAC · Zod · idempotency"]
   UI --> API
   WEB --> BOOKING["Public Booking API\nrate · restriction · inventory validation"]
@@ -61,7 +61,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant User as 운영자
-  participant UI as Aurora UI
+  participant UI as Talos UI
   participant API as /api/pms
   participant DB as PostgreSQL
   User->>UI: 버튼 클릭 또는 폼 제출
@@ -87,7 +87,7 @@ sequenceDiagram
 | `app/(pms)/_components/pms-shell.tsx` | 공통 shell, 예약 Drawer와 업무 Modal, 상태 기반 CTA |
 | `app/pms-action-context.tsx` | 모든 workspace가 공유하는 command/busy Context; prop drilling 제거 |
 | `app/query-provider.tsx` | TanStack Query client와 읽기 모델 cache lifecycle |
-| `app/hotel/page.tsx` | Aurora 호텔 공개 홈페이지, 객실·경험·위치·예약 검색 진입점 |
+| `app/hotel/page.tsx` | 테넌트 호텔 공개 홈페이지, 객실·경험·위치·예약 검색 진입점 |
 | `app/homepage-manager.tsx` | 반응형 실시간 미리보기, 히어로·메뉴·섹션 visual controls, 객실 콘텐츠·게시, 타입 생성, 이미지 업로드·삭제 Website Studio |
 | `app/website-editor-contract.ts` | 에디터·명령 경계·공개 renderer가 공유하는 메뉴 allowlist, CTA·색상·layout 정규화 |
 | `app/hotel/book/BookingClient.tsx` | 실시간 객실 검색, 예약자 입력, 멱등 예약 확정, 기존 예약 취소 |
@@ -151,7 +151,7 @@ flowchart TB
 
 ### 읽기 모델과 쓰기 모델
 
-Aurora는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사용하지만, 내부적으로 읽기와 쓰기의 책임을 분리합니다.
+Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사용하지만, 내부적으로 읽기와 쓰기의 책임을 분리합니다.
 
 | 모델 | 진입점 | 특징 |
 | --- | --- | --- |
