@@ -16,11 +16,13 @@
 
 ### 멀티호텔 SaaS 배포 추가 점검
 
-- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607200018_exhausted_worker_retry_recovery`까지 적용 및 66개 tenant policy 계약 확인
+- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607200019_worker_enqueue_revival_guards`까지 적용 및 66개 tenant policy 계약 확인
 - [ ] `AURORA_TENANT_BASE_DOMAIN`, `AURORA_PLATFORM_HOSTS`, `PMS_REQUIRE_PLATFORM_MFA=true` 확인
 - [ ] Vercel·GitHub에 동일한 `CRON_SECRET`을 설정하고 즉시 kick, GitHub 5분 sweep, Vercel 일일 fail-safe의 성공·재시도·DEAD incident 확인
-- [ ] stale RUNNING lease가 `LEASE_EXPIRED` attempt로 종결되고 webhook·ARI DEAD가 설정된 cooldown·복구 상한 안에서만 재개되는지 확인
-- [ ] 정지 subscription의 custom domain·플랫폼 `/hotel`이 노출되지 않고, 정지·미배정 계정 로그인이 403 안내에 머무는지 확인
+- [ ] scheduler reaper와 직접 claim 모두 stale RUNNING lease를 `LEASE_EXPIRED` attempt로 종결하고, attempts 잔여 여부에 따라 RETRY/DEAD로 나누는지 확인
+- [ ] outbox·ARI source 재실패가 RUNNING lease를 보존하고 DEAD만 attempts=0·last_error=NULL·새 attempt cycle로 재개하는지 확인
+- [ ] 정지 subscription의 custom domain·플랫폼 `/hotel`·직접 CMS projection이 노출되지 않고, 정지·미배정 계정 로그인이 403 안내에 머무는지 확인
+- [ ] 성공 로그인 뒤 `aurora-pms-property` 선택 쿠키가 만료되고 현재 assignment에서 호텔을 다시 선택하는지 확인
 - [ ] outbound host allowlist와 provider별 ARI secret reference 확인
 - [ ] backup orchestrator가 storage reference·SHA-256 checksum receipt를 반환하는지 확인
 - [ ] custom domain TXT 검증 후에만 ACTIVE가 되는지 확인
@@ -225,6 +227,7 @@ WHERE departure_date <= arrival_date;
 
 | Commit | 작업 |
 | --- | --- |
+| 2026-07-20 worker durability follow-up | claim 내부 10분 lease 회수·고아 attempt 종결, DEAD enqueue 초기화·RUNNING lease 보호, CMS 구독 재검증, 로그인 선택 쿠키 초기화, migration 0019·PostgreSQL 회귀 테스트 |
 | 2026-07-20 worker delivery recovery | stale RUNNING lease reaper, bounded DEAD attempt cycle, incident 자동 종료, 정지 홈페이지·로그인 loop 차단, 0016→0017 격리 스테이징 19개 PostgreSQL 통합 검증 |
 | 2026-07-17 P2 platform hardening | 배포 schema gate, 닫힌 auth capability, native temporal types, Rate Plan/WEB-DIRECT, 실제 dashboard 비교, 호텔 SEO, CSS·README 모듈화 |
 | 2026-07-17 structural debt remediation | migration 단일 원본, tenant RLS context, API registry/Zod 모듈화, 13개 실제 route와 action Context, mutation receipt/TanStack Query, PostgreSQL CI, 20-way last-room concurrency test |

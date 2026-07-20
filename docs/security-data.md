@@ -114,6 +114,7 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `202607190016_multihotel_saas_control_plane.sql` | 멀티호텔 SaaS | 조직·도메인·구독·entitlement·JIT support·이관·worker·백업·incident·usage와 14개 추가 RLS policy |
 | `202607200017_worker_delivery_recovery.sql` | 외부 전달 복구 | worker attempt cycle, 자동 복구 상한·회수 시각, stale/dead partial index와 불변 시도 원장 unique key |
 | `202607200018_exhausted_worker_retry_recovery.sql` | 고갈 RETRY 복구 | DEAD 소스 재큐잉으로 생긴 `RETRY + attempts=max`를 동일한 제한형 복구 scan에 포함 |
+| `202607200019_worker_enqueue_revival_guards.sql` | enqueue 상태 전이 보호 | DEAD 재큐잉은 attempts·last_error를 초기화하고 attempt cycle을 증가, RUNNING 재큐잉은 lease·상태·시도 횟수를 보존 |
 
 ### 핵심 PostgreSQL 함수와 트리거
 

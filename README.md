@@ -14,7 +14,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607200018_exhausted_worker_retry_recovery` |
+| 스키마 계약 | `202607200019_worker_enqueue_revival_guards` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
@@ -100,8 +100,10 @@ flowchart LR
 9. 홈페이지 이미지는 DB 비노출 tombstone → Storage 삭제 → DB hard-delete 순서로 제거해 죽은 공개 URL을 방지합니다.
 10. 호텔 전환은 assignment 재검증, HttpOnly 선택 쿠키, client cache 제거와 hard navigation을 함께 수행합니다.
 11. 공개 홈페이지와 부킹 API는 요청 property ID를 신뢰하지 않고 ACTIVE domain의 Host mapping으로 scope를 결정합니다.
-12. 외부 전송은 worker가 `SKIP LOCKED`로 한 번만 claim합니다. 만료된 RUNNING lease는 다음 sweep이 회수하고, webhook·ARI의 DEAD는 새 attempt cycle로 최대 3회만 자동 복구한 뒤 다시 격리합니다.
-13. 로그인 성공 뒤 활성 호텔·구독 배정을 다시 확인하며, 미인증 401과 정지·미배정 403을 분리해 로그인 redirect loop를 차단합니다.
+12. 외부 전송은 worker가 `SKIP LOCKED`로 한 번만 claim합니다. scheduler reaper와 별개로 모든 claim이 10분 지난 RUNNING lease와 미완료 attempt를 같은 transaction에서 회수하며, webhook·ARI의 DEAD는 새 attempt cycle로 제한 복구합니다.
+13. source 재실패 enqueue는 RUNNING lease를 건드리지 않아 이중 전송을 막고, DEAD만 attempts·오류를 초기화한 새 cycle로 명시적으로 부활시킵니다.
+14. 로그인 성공 뒤 활성 호텔·구독 배정을 다시 확인하고 과거 호텔 선택 쿠키를 만료시키며, 미인증 401과 정지·미배정 403을 분리해 로그인 redirect loop를 차단합니다.
+15. 공개 CMS projection은 도메인 resolver와 별도로 구독을 재검증해 `SUSPENDED`·`CANCELLED` 호텔을 `published=false`로 강제합니다.
 
 주요 코드 진입점:
 
@@ -176,6 +178,7 @@ flowchart LR
 | 멀티호텔 Control Plane·구독·지원·이관·worker·백업 | `202607190016_multihotel_saas_control_plane.sql` |
 | worker lease reaper·attempt cycle·제한형 DEAD 복구 | `202607200017_worker_delivery_recovery.sql` |
 | exhausted RETRY 회수 인덱스·조용한 전달 유실 차단 | `202607200018_exhausted_worker_retry_recovery.sql` |
+| enqueue DEAD 새 cycle 초기화·RUNNING lease 보존 | `202607200019_worker_enqueue_revival_guards.sql` |
 
 배포 순서:
 
@@ -267,7 +270,7 @@ CI는 PR과 main push에서 lint → build → unit → migration bootstrap → 
 ### 배포가 schema contract에서 중단됨
 
 1. 앱을 우회 배포하지 않습니다.
-2. 대상 DB의 `pms_schema_migrations`에서 `202607200018_exhausted_worker_retry_recovery`를 확인합니다.
+2. 대상 DB의 `pms_schema_migrations`에서 `202607200019_worker_enqueue_revival_guards`를 확인합니다.
 3. `aurora_app`가 `NOLOGIN`, `NOBYPASSRLS`인지와 연결 사용자의 membership을 확인합니다.
 4. migration을 적용하고 `npm run db:contract:verify`를 재실행합니다.
 
