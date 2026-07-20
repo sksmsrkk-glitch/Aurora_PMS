@@ -7,7 +7,7 @@ import { useState, type ReactNode } from "react";
  * Owns one query cache per browser session. A state initializer avoids creating a
  * new client during React re-renders while keeping server renders request-safe.
  */
-export function AuroraQueryProvider({ children }: { children: ReactNode }) {
+export function TalosQueryProvider({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
     () =>
       new QueryClient({

@@ -18,7 +18,7 @@ export async function generateMetadata(): Promise<Metadata> {
     if(!property)throw new Error("Unknown public hotel domain");
     return bookingMetadata(await getCachedWebsiteContent(property.propertyId),property);
   }
-  catch { return { title:"객실 예약 | Aurora Hotel", robots:{index:false,follow:false} }; }
+  catch { return { title:"객실 예약 | 호텔 공식 홈페이지", robots:{index:false,follow:false} }; }
 }
 
 export default async function BookingPage() {

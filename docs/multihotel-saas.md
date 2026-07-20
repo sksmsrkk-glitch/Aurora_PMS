@@ -1,12 +1,12 @@
-# Aurora PMS 멀티호텔 SaaS 운영 설계
+# Talos PMS 멀티호텔 SaaS 운영 설계
 
-이 문서는 Aurora PMS를 여러 독립 호텔과 호텔 그룹에 제공하기 위한 기술 계약입니다. Supabase 서울 리전 이전, 향후 올마이투어 자체 DB 전환, 요금제 가격·계약·개인정보 법무 정책은 별도 결정 사항이며 여기서는 특정 공급자에 종속되지 않는 실행 기반을 정의합니다.
+이 문서는 Talos PMS를 여러 독립 호텔과 호텔 그룹에 제공하기 위한 기술 계약입니다. Supabase 서울 리전 이전, 향후 올마이투어 자체 DB 전환, 요금제 가격·계약·개인정보 법무 정책은 별도 결정 사항이며 여기서는 특정 공급자에 종속되지 않는 실행 기반을 정의합니다.
 
 ## 1. 테넌트 계층과 격리 경계
 
 ```mermaid
 flowchart TD
-  Operator["올마이투어 Platform Operator\nMFA · 별도 registry"] --> Control["Aurora Control Plane"]
+  Operator["올마이투어 Platform Operator\nMFA · 별도 registry"] --> Control["Talos Control Plane"]
   Org["Organization\n호텔 그룹 또는 독립 고객사"] --> P1["Property A"]
   Org --> P2["Property B"]
   P1 --> Staff1["직원·페이지 권한"]
@@ -145,7 +145,7 @@ GitHub 저장소에는 production Vercel과 같은 값을 `AURORA_CRON_SECRET` s
 
 ## 9. 백업과 복구
 
-Aurora는 특정 DB 공급자의 backup API를 코드에 고정하지 않습니다. `AURORA_BACKUP_ORCHESTRATOR_URL`이 Supabase PITR, logical export 또는 향후 올마이투어 DB backup을 수행하고 다음 receipt를 반환하는 계약입니다.
+Talos PMS는 특정 DB 공급자의 backup API를 코드에 고정하지 않습니다. `AURORA_BACKUP_ORCHESTRATOR_URL`이 Supabase PITR, logical export 또는 향후 올마이투어 DB backup을 수행하고 다음 receipt를 반환하는 계약입니다.
 
 ```json
 {"storageReference":"immutable://...","checksum":"sha256:...","sizeBytes":123456}

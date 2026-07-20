@@ -2,8 +2,8 @@
 
 /** Supabase password-login screen for PMS operators. */
 
-import Image from "next/image";
 import { FormEvent, useState } from "react";
+import CompanyFooter from "../../company-footer";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -26,15 +26,16 @@ export default function LoginPage() {
 
   return <main className="login-shell">
     <section className="login-card" aria-labelledby="login-title">
-      <div className="login-brand"><Image src="/brand/aurora-mark-192.png" alt="" width={52} height={52} priority/><span><b>AURORA PMS</b><small>HOTEL OPERATIONS</small></span></div>
-      <div className="login-copy"><p>WELCOME BACK</p><h1 id="login-title">호텔 운영을 시작합니다</h1><span>승인된 Aurora 계정으로 안전하게 로그인해 주세요.</span></div>
+      <div className="login-brand"><span><b className="talos-wordmark">TALOS PMS</b><small>HOTEL OPERATIONS</small></span></div>
+      <div className="login-copy"><p>WELCOME BACK</p><h1 id="login-title">호텔 운영을 시작합니다</h1><span>승인된 Talos 계정으로 안전하게 로그인해 주세요.</span></div>
       <form onSubmit={submit}>
         <label><span>이메일</span><input type="email" autoComplete="username" required value={email} onChange={(event)=>setEmail(event.target.value)} placeholder="name@hotel.com"/></label>
         <label><span>비밀번호</span><input type="password" autoComplete="current-password" minLength={8} required value={password} onChange={(event)=>setPassword(event.target.value)} placeholder="8자 이상 입력"/></label>
         {error && <p className="login-error" role="alert">{error}</p>}
-        <button className="primary" disabled={busy}>{busy ? "확인 중…" : "Aurora 로그인"}</button>
+        <button className="primary" disabled={busy}>{busy ? "확인 중…" : "Talos 로그인"}</button>
       </form>
       <p className="login-security">Supabase Auth · HttpOnly 보안 세션 · 역할 기반 접근 제어</p>
+      <CompanyFooter compact />
     </section>
   </main>;
 }

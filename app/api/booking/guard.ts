@@ -16,6 +16,6 @@ export function isSameOrigin(request: NextRequest) {
 
 export function publicBookingError(error: unknown) {
   const errorId = crypto.randomUUID();
-  console.error("[AURORA_BOOKING_ERROR]", { errorId, message: error instanceof Error ? error.message : String(error) });
+  console.error("[TALOS_BOOKING_ERROR]", { errorId, message: error instanceof Error ? error.message : String(error) });
   return Response.json({ error: "예약 처리 중 일시적인 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", code: "BOOKING_UNAVAILABLE", errorId }, { status: 503, headers: { "Cache-Control": "no-store" } });
 }

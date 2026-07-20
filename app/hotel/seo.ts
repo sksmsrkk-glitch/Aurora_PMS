@@ -43,8 +43,7 @@ export function hotelMetadata(content: WebsiteContent, property?: PublicProperty
   const title = `${settings.hotelName} | 공식 홈페이지`;
   const description = descriptionFor(content);
   const heroImage = content.hotelMedia.find((item) => item.role === "HERO")?.url
-    ?? content.hotelMedia[0]?.url
-    ?? "/og.png";
+    ?? content.hotelMedia[0]?.url;
   return {
     metadataBase: publicSiteUrl(property?.hostname),
     title,
@@ -58,9 +57,14 @@ export function hotelMetadata(content: WebsiteContent, property?: PublicProperty
       siteName: settings.hotelName,
       title,
       description,
-      images: [{ url: heroImage, alt: `${settings.hotelName} 대표 이미지` }],
+      ...(heroImage ? { images: [{ url: heroImage, alt: `${settings.hotelName} 대표 이미지` }] } : {}),
     },
-    twitter: { card: "summary_large_image", title, description, images: [heroImage] },
+    twitter: {
+      card: heroImage ? "summary_large_image" : "summary",
+      title,
+      description,
+      ...(heroImage ? { images: [heroImage] } : {}),
+    },
   };
 }
 

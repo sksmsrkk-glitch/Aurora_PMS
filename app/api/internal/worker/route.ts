@@ -115,7 +115,7 @@ async function postJson(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "User-Agent": "Aurora-PMS-Worker/1.0",
+        "User-Agent": "Talos-PMS-Worker/1.0",
         ...headers,
       },
       body: JSON.stringify(body),
@@ -172,8 +172,8 @@ async function processJob(job: WorkerJob) {
         .update(serialized)
         .digest("hex");
       const response = await postJson(String(hook.endpoint_url), envelope, {
-        "X-Aurora-Signature": `sha256=${signature}`,
-        "X-Aurora-Event-Id": String(event.id),
+        "X-Talos-Signature": `sha256=${signature}`,
+        "X-Talos-Event-Id": String(event.id),
       });
       if (!response.ok)
         throw Object.assign(new Error(`Webhook returned ${response.status}`), {
@@ -252,11 +252,25 @@ async function processJob(job: WorkerJob) {
       .first<Record<string, unknown>>();
     if (!domain) throw new Error("Domain source is missing");
     const hostname = String(domain.hostname),
-      records = await resolveTxt(`_aurora.${hostname}`),
-      tokens = records
-        .map((parts) => parts.join(""))
-        .filter((value) => value.startsWith("aurora-verification="))
-        .map((value) => value.slice("aurora-verification=".length));
+      tokens: string[] = [];
+    // Talos is canonical. The legacy Aurora record remains readable so an
+    // in-flight verification created before the rebrand does not get stranded.
+    for (const [recordName, prefix] of [
+      [`_talos.${hostname}`, "talos-verification="],
+      [`_aurora.${hostname}`, "aurora-verification="],
+    ] as const) {
+      try {
+        const records = await resolveTxt(recordName);
+        tokens.push(
+          ...records
+            .map((parts) => parts.join(""))
+            .filter((value) => value.startsWith(prefix))
+            .map((value) => value.slice(prefix.length)),
+        );
+      } catch {
+        // DNS NXDOMAIN on one namespace is expected during the transition.
+      }
+    }
     if (
       !tokens.some(
         (token) =>

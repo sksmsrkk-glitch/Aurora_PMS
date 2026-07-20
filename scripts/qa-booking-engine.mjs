@@ -30,7 +30,7 @@ const suffix=crypto.randomUUID().replaceAll("-","").slice(0,12);
 const email=`booking.qa.${suffix}@example.com`;
 const lastName=`QA${suffix.slice(0,7)}`;
 const idempotencyKey=`booking-qa:${suffix}`;
-const payload={arrival,departure,adults:2,children:0,roomTypeId:offer.roomTypeId,firstName:"Aurora",lastName,email,phone:"010-0000-0000",specialRequests:"Automated booking engine verification"};
+const payload={arrival,departure,adults:2,children:0,roomTypeId:offer.roomTypeId,firstName:"Talos",lastName,email,phone:"010-0000-0000",specialRequests:"Automated booking engine verification"};
 const headers={"content-type":"application/json","idempotency-key":idempotencyKey};
 
 const created=await json("/api/booking/reservations",{method:"POST",headers,body:JSON.stringify(payload)});

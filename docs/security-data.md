@@ -1,4 +1,4 @@
-# Aurora PMS 보안과 데이터 계약
+# Talos PMS 보안과 데이터 계약
 
 ## 권한과 보안
 
@@ -169,7 +169,7 @@ Idempotency-Key: <unique-key>
 
 {
   "action": "create_reservation",
-  "firstName": "Aurora",
+  "firstName": "Talos",
   "lastName": "Guest"
 }
 ```

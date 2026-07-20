@@ -35,6 +35,12 @@
 .platform-brand div {
   display: grid;
 }
+.platform-brand small {
+  color: #6b7684;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
 .platform-brand b {
   font-size: 0.88rem;
   letter-spacing: 0.05em;
@@ -330,6 +336,10 @@ button:disabled {
   text-align: center;
   justify-items: center;
   padding: 2rem;
+}
+.platform-loading-wordmark {
+  font-size: 1rem;
+  letter-spacing: 0.06em;
 }
 .property-switcher {
   display: grid;

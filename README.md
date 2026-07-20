@@ -1,6 +1,6 @@
-# Aurora PMS
+# Talos PMS
 
-Aurora PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우스키핑, 그룹, 폴리오, AR, 채널, 회계, 리포트, 야간 감사와 호텔 공식 홈페이지·직접 예약을 하나의 PostgreSQL 운영 원장으로 연결하는 호텔 관리 시스템입니다.
+Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우스키핑, 그룹, 폴리오, AR, 채널, 회계, 리포트, 야간 감사와 호텔 공식 홈페이지·직접 예약을 하나의 PostgreSQL 운영 원장으로 연결하는 호텔 관리 시스템입니다.
 
 이 README는 빠른 시작과 운영 진입점입니다. 전체 화면 명세, 업무 규칙, 데이터 모델, API, 보안, QA 및 운영 절차는 [분리형 개발·운영 문서 지도](docs/README.md)를 참조하세요.
 
@@ -241,7 +241,7 @@ CSS는 cascade 순서를 보존한 다음 모듈로 나뉩니다.
 | --- | --- |
 | `app/globals.css` | Tailwind 및 모듈 import만 유지 |
 | `app/styles/legacy-core.css` | 초기 PMS·리포트·마스터 호환 규칙 |
-| `app/styles/flow-system.css` | Aurora Flow/Toss 계열 토큰과 shell |
+| `app/styles/flow-system.css` | Talos Flow/Toss 계열 토큰과 shell |
 | `app/styles/revenue-accounting.css` | 재고, Rate Plan, 채널 계약, 회계 |
 | `app/styles/interaction-mobile.css` | 폰트, focus, dialog, 모바일 운용 |
 | `app/styles/website-overlays.css` | 홈페이지 CMS, 검색, overlay 보정 |
@@ -320,4 +320,12 @@ CI는 PR과 main push에서 lint → build → unit → migration bootstrap → 
 
 ## 라이선스 및 브랜드
 
-Aurora 브랜드 자산과 호텔 콘텐츠는 프로젝트 권리 정책을 따릅니다. Toss의 UX 원칙과 공식 배포 폰트 로딩 방식을 참고하지만 Toss 제품을 사칭하거나 해당 상표의 권리를 주장하지 않습니다.
+Talos PMS는 별도 심벌이나 이미지 BI/CI 없이 검정색(`#191f28`) 텍스트 워드마크만 사용합니다. PMS·플랫폼·공개 호텔·예약 화면의 공용 푸터에는 운영사인 주식회사 올마이투어의 회사명, 대표이사, 주소, 대표번호와 문의 이메일을 표시합니다. 테넌트 호텔이 홈페이지 관리에서 등록한 호텔명과 이미지는 고객 콘텐츠로서 제품 브랜드와 독립적으로 유지됩니다. Toss의 UX 원칙과 공식 배포 폰트 로딩 방식을 참고하지만 Toss 제품을 사칭하거나 해당 상표의 권리를 주장하지 않습니다.
+
+- 회사명: 주식회사 올마이투어
+- 대표이사: 석영규 / 정현일
+- 주소: 서울특별시 종로구 창경궁로 112-7 1101
+- 연락처: 1688-8376
+- 이메일: talos@allmytour.com
+
+현재 Vercel URL, GitHub 저장소명, `AURORA_*` 환경변수, `aurora_app` DB 역할, `x-aurora-*` 호환 헤더와 기존 세션 쿠키 이름은 서비스 중단 없는 이전을 위해 유지하는 기술 식별자입니다. 신규 화면이나 고객 응답에는 Aurora 브랜드를 노출하지 않으며, 이 식별자 변경은 별도 마이그레이션·세션 전환 계획 아래에서만 수행합니다.

@@ -246,14 +246,14 @@ export async function createWebReservation(input: ReservationInput, idempotencyK
   const guestId = crypto.randomUUID();
   const reservationId = crypto.randomUUID();
   const confirmation = `AUR-${arrival.replaceAll("-", "").slice(2)}-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
-  const actor = "booking-engine@aurora.hotel";
+  const actor = "booking-engine@talos.system";
   const average = Math.round(offer.total / offer.nights.length);
   // Guest, reservation, per-night inventory/rates, idempotency receipt, audit,
   // and outbox event form one atomic unit. Capacity constraints on the night rows
   // reject a stale offer rather than allowing an oversell after the availability read.
   const statements: PmsPreparedStatement[] = [
     db.prepare("INSERT INTO guests(id,property_id,first_name,last_name,email,phone,vip_level,nationality,preferences,created_at) VALUES (?, pms_current_property_id(), ?, ?, ?, ?, 'NONE', NULL, '[]', ?)").bind(guestId, firstName, lastName, normalizedEmail(email), phone, now),
-    db.prepare("INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (?, ?, pms_current_property_id(), ?, ?, NULL, ?, ?, 'DUE_IN', ?, ?, 'Aurora Web', 'WEB-DIRECT', ?, NULL, ?, 1, ?, ?)").bind(reservationId, confirmation, guestId, roomTypeId, arrival, departure, adults, children, average, specialRequests, now, now),
+    db.prepare("INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (?, ?, pms_current_property_id(), ?, ?, NULL, ?, ?, 'DUE_IN', ?, ?, 'Talos Web', 'WEB-DIRECT', ?, NULL, ?, 1, ?, ?)").bind(reservationId, confirmation, guestId, roomTypeId, arrival, departure, adults, children, average, specialRequests, now, now),
     db.prepare("INSERT INTO folio_windows(id,property_id,reservation_id,window_no,name,payee_type,payee_account_profile_id,status,created_at,created_by,closed_at) VALUES (?, pms_current_property_id(), ?, 1, 'Guest Folio', 'GUEST', NULL, 'OPEN', ?, ?, NULL)").bind(`fw-${reservationId}`, reservationId, now, actor),
   ];
   for (const night of offer.nights) {
@@ -289,7 +289,7 @@ export async function cancelWebReservation(input: { confirmation?: unknown; emai
     throw new BookingError("도착일 당일 이후 또는 이미 처리 중인 예약은 호텔로 문의해 주세요.", 409, "CANCELLATION_RESTRICTED");
   }
   const now = new Date().toISOString();
-  const actor = "booking-engine@aurora.hotel";
+  const actor = "booking-engine@talos.system";
   // Cancellation is an optimistic, atomic state transition. Releasing both room-
   // and type-level night rows in the same batch makes inventory immediately agree
   // with the reservation status while audit and integration consumers see one event.

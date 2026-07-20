@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import PlatformConsole from "./platform-console";
 
 export const metadata: Metadata = {
-  title: "멀티호텔 관리 | Aurora PMS",
+  title: "멀티호텔 관리 | Talos PMS",
   robots: { index: false, follow: false },
 };
 

@@ -1,4 +1,4 @@
-name: Aurora durable worker scheduler
+name: Talos durable worker scheduler
 
 on:
   schedule:

@@ -1,4 +1,4 @@
--- Server-only PostgreSQL bridge for the Aurora PMS Worker.
+-- Historical server-only PostgreSQL bridge for the Talos PMS Worker.
 BEGIN;
 
 CREATE OR REPLACE FUNCTION public.pms_render_sql(p_sql text, p_values jsonb DEFAULT '[]'::jsonb)

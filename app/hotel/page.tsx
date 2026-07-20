@@ -1,5 +1,4 @@
-/** Public Aurora Hotel site, fully projected from the PMS website CMS. */
-import Image from "next/image";
+/** Public hotel site, fully projected from each property's PMS website CMS. */
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
@@ -11,6 +10,7 @@ import { formatMoney, seoulDateAfter } from "../../lib/format";
 import { getCachedWebsiteContent } from "./content";
 import type { WebsiteSectionId } from "../website-editor-contract";
 import { resolvePublicPropertyForRequest } from "../api/booking/property-resolver";
+import CompanyFooter from "../company-footer";
 
 // Published CMS content is refreshed at most one minute after an administrator
 // changes it without forcing every public request through a server render.
@@ -18,7 +18,7 @@ export const revalidate = 60;
 
 const money = formatMoney;
 
-export default async function AuroraHotelPage() {
+export default async function HotelHomePage() {
   // Database-backed CMS rendering starts on the first request, so a release can
   // build before its matching migration is promoted. The projection itself is
   // cached for 60 seconds by getCachedWebsiteContent.
@@ -44,7 +44,7 @@ export default async function AuroraHotelPage() {
 
   const sections: Record<WebsiteSectionId, ReactNode> = {
     stay: <section className="hotel-intro" id="stay" key="stay">
-      <p>THE AURORA STAY</p>
+      <p>{settings.brandEyebrow}</p>
       <h2>{settings.overviewTitle}</h2>
       <span>{settings.overviewBody}</span>
       <div className="hotel-room-preview">
@@ -64,19 +64,18 @@ export default async function AuroraHotelPage() {
       <div className="experience-grid"><article><b>07:00</b><h3>Seasonal Breakfast</h3><p>제철 식재료로 가볍고 충실하게 시작하는 아침</p></article><article><b>18:00</b><h3>Sunset Lounge</h3><p>서울의 저녁빛과 함께하는 시그니처 티와 칵테일</p></article><article><b>24H</b><h3>Quiet Fitness</h3><p>여행의 리듬을 지켜주는 프라이빗 피트니스</p></article></div>
       <p className="experience-body">{settings.experienceBody}</p>
     </section>,
-    location: <section className="hotel-location" id="location" key="location"><div><p>IN THE HEART OF SEOUL</p><h2>{settings.locationTitle}</h2><span>{settings.locationBody}<br/>{settings.address} · {settings.phone}</span></div><div className="location-orbit" aria-hidden="true"><i/><i/><b>AURORA</b></div></section>,
+    location: <section className="hotel-location" id="location" key="location"><div><p>IN THE HEART OF SEOUL</p><h2>{settings.locationTitle}</h2><span>{settings.locationBody}<br/>{settings.address} · {settings.phone}</span></div><div className="location-orbit" aria-hidden="true"><i/><i/><b>SEOUL</b></div></section>,
   };
 
   return <main className="hotel-site" style={siteStyle}>
     <script type="application/ld+json" dangerouslySetInnerHTML={{__html:serializeJsonLd(hotelStructuredData(content,property))}}/>
     <nav className="hotel-nav" aria-label="호텔 홈페이지">
-      <Link className="hotel-brand" href={property.pathPrefix||"/"}><Image src="/brand/aurora-mark-192.png" alt="" width={42} height={42} priority/><span><b>AURORA</b><small>SEOUL</small></span></Link>
+      <Link className="hotel-brand" href={property.pathPrefix||"/"}><span><b>{settings.hotelName}</b><small>OFFICIAL SITE</small></span></Link>
       <div className="hotel-nav-links">{settings.navigation.filter((item)=>item.enabled).map((item)=><a href={`#${item.id}`} key={item.id}>{item.label}</a>)}</div>
       <Link className="hotel-nav-book" href={bookHref}>{settings.bookingCtaLabel}</Link>
     </nav>
 
     <section className={`hotel-hero hero-layout-${settings.heroLayout.toLowerCase()} ${hero?"has-cms-image":""}`} style={heroStyle}>
-      <div className="aurora-sky" aria-hidden="true"><i/><i/><i/><span/></div>
       <div className="hotel-hero-copy">
         <p>{settings.brandEyebrow}</p>
         <h1>{settings.heroTitle}</h1>
@@ -87,6 +86,6 @@ export default async function AuroraHotelPage() {
     </section>
 
     {settings.navigation.filter((item)=>item.enabled).map((item)=>sections[item.id])}
-    <footer className="hotel-footer"><div className="hotel-brand"><Image src="/brand/aurora-mark-192.png" alt="" width={38} height={38}/><span><b>AURORA</b><small>SEOUL</small></span></div><p>© 2026 {settings.hotelName}. All rights reserved.</p><Link href="/login">PMS 로그인</Link></footer>
+    <CompanyFooter showPmsLogin />
   </main>;
 }
