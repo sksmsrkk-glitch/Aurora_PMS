@@ -2,7 +2,7 @@
 import { getPmsDatabase, scopePmsDatabase } from "../../../../db/pms-database";
 import { schemaNotReadyResponse } from "../../../../db/schema-contract";
 import { consumeRateLimit, rateLimitHeaders } from "../../rate-limit";
-import { invalidatePrincipalCache, principalFor, ready, runtimeBindings } from "../../pms/auth";
+import { invalidatePrincipalCache, principalAccessFailureResponse, principalFor, ready, runtimeBindings } from "../../pms/auth";
 import { StaffAccessError, validateStaffPassword } from "../../pms/staff";
 import { StaffAuthError, updateStaffAuthUser } from "../../pms/staff-auth";
 
@@ -14,7 +14,7 @@ export async function POST(request:Request){
   const rootDb=getPmsDatabase(runtimeBindings);
   try{await ready(rootDb);}catch(error){const response=schemaNotReadyResponse(error);if(response)return response;throw error;}
   const principal=await principalFor(request,rootDb);
-  if(!principal)return Response.json({error:"로그인이 필요합니다."},{status:401});
+  if(!principal)return principalAccessFailureResponse(request);
   let limit;
   try{limit=await consumeRateLimit(request,"password-change",8,15*60_000,`${principal.propertyId}:${principal.email}`,rootDb);}catch{return Response.json({error:"요청 보호 서비스를 사용할 수 없습니다."},{status:503});}
   if(!limit.allowed)return Response.json({error:"비밀번호 변경 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."},{status:429,headers:rateLimitHeaders(limit)});

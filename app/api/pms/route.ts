@@ -7,7 +7,12 @@ import {
   loadWebsiteAdmin,
   PmsExtendedError,
 } from "./extended";
-import { principalFor, ready, runtimeBindings } from "./auth";
+import {
+  principalAccessFailureResponse,
+  principalFor,
+  ready,
+  runtimeBindings,
+} from "./auth";
 import {
   cachedCoreSnapshotResponse,
   cachedReport,
@@ -37,8 +42,7 @@ export async function GET(request: Request) {
     throw error;
   }
   const principal = await principalFor(request, rootDb);
-  if (!principal)
-    return Response.json({ error: "로그인이 필요합니다." }, { status: 401 });
+  if (!principal) return principalAccessFailureResponse(request);
   if (principal.principalType === "SUPPORT") {
     if (!principal.supportGrantId || !principal.authUserId)
       return Response.json(

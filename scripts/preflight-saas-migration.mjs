@@ -1,7 +1,11 @@
 /** Read-only impact check before the additive multi-hotel SaaS migration. */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import postgres from "postgres";
+import { assertStagingDatabaseTarget } from "./staging-db-target.mjs";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function parseEnv(contents) {
   const values = {};
@@ -22,20 +26,34 @@ function parseEnv(contents) {
   return values;
 }
 let local = {};
-try {
-  local = parseEnv(
-    await readFile(path.join(process.cwd(), ".env.local"), "utf8"),
-  );
-} catch (error) {
-  if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
-    throw error;
+if (path.resolve(process.cwd()) === root) {
+  try {
+    local = parseEnv(
+      await readFile(path.join(root, ".env.local"), "utf8"),
+    );
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+      throw error;
+  }
 }
-const directUrl = process.env.DIRECT_URL || local.DIRECT_URL || "";
+const directUrl =
+  process.env.DIRECT_URL ||
+  process.env.DATABASE_URL ||
+  local.DIRECT_URL ||
+  local.DATABASE_URL ||
+  "";
 if (!/^postgres(?:ql)?:\/\//u.test(directUrl))
   throw new Error("DIRECT_URL is required");
+if (
+  process.env.PMS_ENVIRONMENT === "staging" ||
+  process.env.PMS_QA_PROJECT_REF
+)
+  assertStagingDatabaseTarget();
 const host = new URL(directUrl).hostname,
   projectRef =
-    host.match(/^db\.([a-z0-9]+)\.supabase\.co$/u)?.[1] || "non-supabase",
+    host.match(/^db\.([a-z0-9]+)\.supabase\.co$/u)?.[1] ||
+    new URL(directUrl).username.match(/^postgres\.([a-z0-9]+)$/u)?.[1] ||
+    "non-supabase",
   sql = postgres(directUrl, {
     max: 1,
     prepare: false,

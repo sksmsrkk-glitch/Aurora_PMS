@@ -40,6 +40,17 @@ function object(value: unknown): Record<string, unknown> {
     }
   return {};
 }
+function boundedEnvInteger(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const parsed = Number(process.env[name] || fallback);
+  return Number.isInteger(parsed)
+    ? Math.min(maximum, Math.max(minimum, parsed))
+    : fallback;
+}
 function outboundUrl(value: string) {
   const url = new URL(value);
   const host = url.hostname.toLowerCase();
@@ -356,6 +367,20 @@ async function run(request: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   const root = getPmsDatabase({ DATABASE_URL: process.env.DATABASE_URL });
   await verifyPmsSchemaContract(root);
+  // A serverless timeout cannot run cleanup code. The next independent sweep
+  // therefore reclaims expired RUNNING leases before claiming fresh work and
+  // reopens only bounded webhook/ARI DEAD cycles.
+  const recovery = await root.recoverWorkerJobs({
+    leaseSeconds: boundedEnvInteger("AURORA_WORKER_LEASE_SECONDS", 300, 90, 3600),
+    deadCooldownSeconds: boundedEnvInteger(
+      "AURORA_WORKER_DEAD_COOLDOWN_SECONDS",
+      900,
+      60,
+      86400,
+    ),
+    maxRecoveries: boundedEnvInteger("AURORA_WORKER_MAX_RECOVERIES", 3, 0, 10),
+    limit: boundedEnvInteger("AURORA_WORKER_RECOVERY_BATCH_SIZE", 100, 1, 250),
+  });
   const usageDate = new Date(Date.now() - 86_400_000)
     .toISOString()
     .slice(0, 10);
@@ -396,25 +421,11 @@ async function run(request: Request) {
         errorCode: error instanceof Error ? error.name : "WORKER_ERROR",
         errorMessage: message,
       });
-      if (outcome === "DEAD") {
-        const scoped = scopePmsDatabase(root, job.property_id);
-        await scoped
-          .prepare(
-            "INSERT INTO service_incidents(id,property_id,component,severity,status,summary,started_at,metadata) VALUES (?,pms_current_property_id(),?,'CRITICAL','OPEN',?,clock_timestamp(),?) ON CONFLICT(id) DO UPDATE SET status='OPEN',summary=excluded.summary,metadata=excluded.metadata,resolved_at=NULL",
-          )
-          .bind(
-            `incident-${job.id}`,
-            job.job_type,
-            `비동기 작업이 DLQ로 이동했습니다: ${message.slice(0, 300)}`,
-            { jobId: job.id, attempts: job.attempts },
-          )
-          .run();
-      }
       results.push({ id: job.id, status: outcome, error: message });
     }
   }
   return Response.json(
-    { ok: true, workerId, claimed: jobs.length, results },
+    { ok: true, workerId, recovery, claimed: jobs.length, results },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

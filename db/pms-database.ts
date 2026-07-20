@@ -70,6 +70,13 @@ export type WorkerJob = {
   payload: unknown;
   attempts: number;
   max_attempts: number;
+  attempt_cycle: number;
+};
+
+export type WorkerRecoverySummary = {
+  staleRetried: number;
+  staleDead: number;
+  deadReset: number;
 };
 
 export type SupportAssignment = {
@@ -89,6 +96,7 @@ export interface PmsDatabase {
   recordSupportAccess(input:{grantId:string;authUserId:string;actorEmail:string;write:boolean;requestId:string;action:string}):Promise<boolean>;
   provisionProperty(input: ProvisionPropertyInput): Promise<{propertyId:string;hostname:string}>;
   claimWorkerJobs(workerId: string, limit: number): Promise<WorkerJob[]>;
+  recoverWorkerJobs(input:{leaseSeconds:number;deadCooldownSeconds:number;maxRecoveries:number;limit:number}):Promise<WorkerRecoverySummary>;
   enqueueUsageRollups(usageDate:string):Promise<number>;
   finishWorkerJob(input:{jobId:string;workerId:string;outcome:"SUCCEEDED"|"RETRY"|"DEAD";durationMs:number;httpStatus?:number;errorCode?:string;errorMessage?:string}):Promise<boolean>;
 }
@@ -213,6 +221,7 @@ class PostgresDatabase implements PmsDatabase {
          JOIN organizations o ON o.id=p.organization_id
         WHERE ra.auth_user_id=?::uuid AND lower(ra.email)=? AND ra.active
           AND p.status IN ('TRIAL','ACTIVE') AND o.status IN ('TRIAL','ACTIVE')
+          AND NOT EXISTS(SELECT 1 FROM property_subscriptions s WHERE s.property_id=p.id AND s.status IN ('SUSPENDED','CANCELLED'))
         ORDER BY p.name,ra.created_at`,
       [normalizedUserId, normalized],
       this.client,
@@ -236,6 +245,7 @@ class PostgresDatabase implements PmsDatabase {
          JOIN organizations o ON o.id=p.organization_id
         WHERE lower(ra.email)=? AND ra.active
           AND p.status IN ('TRIAL','ACTIVE') AND o.status IN ('TRIAL','ACTIVE')
+          AND NOT EXISTS(SELECT 1 FROM property_subscriptions s WHERE s.property_id=p.id AND s.status IN ('SUSPENDED','CANCELLED'))
         ORDER BY p.name,ra.created_at`,
       [normalized],
       this.client,
@@ -283,7 +293,11 @@ class PostgresDatabase implements PmsDatabase {
          FROM property_domains d JOIN properties p ON p.id=d.property_id
          JOIN organizations o ON o.id=p.organization_id
         WHERE d.hostname=? AND d.status='ACTIVE' AND p.status IN ('TRIAL','ACTIVE')
-          AND o.status IN ('TRIAL','ACTIVE') LIMIT 1`,
+          AND o.status IN ('TRIAL','ACTIVE')
+          AND NOT EXISTS(
+            SELECT 1 FROM property_subscriptions s
+             WHERE s.property_id=p.id AND s.status IN ('SUSPENDED','CANCELLED')
+          ) LIMIT 1`,
       [normalized],this.client,
     );
     return result.results[0]??null;
@@ -308,6 +322,7 @@ class PostgresDatabase implements PmsDatabase {
            AND g.starts_at<=clock_timestamp() AND g.expires_at>clock_timestamp()
            AND EXISTS(SELECT 1 FROM property_entitlements e WHERE e.property_id=p.id AND e.feature_key='SUPPORT_ACCESS' AND e.enabled)
            AND p.status IN ('TRIAL','ACTIVE') AND o.status IN ('TRIAL','ACTIVE')
+           AND NOT EXISTS(SELECT 1 FROM property_subscriptions s WHERE s.property_id=p.id AND s.status IN ('SUSPENDED','CANCELLED'))
         ORDER BY p.name,g.expires_at DESC`,
       [userId,normalized,normalized],this.client,
     );
@@ -466,11 +481,11 @@ class PostgresDatabase implements PmsDatabase {
          )
          UPDATE worker_jobs j SET status='RUNNING',attempts=j.attempts+1,locked_at=clock_timestamp(),locked_by=?,updated_at=clock_timestamp()
           FROM candidates c WHERE j.id=c.id
-         RETURNING j.id,j.property_id,j.job_type,j.source_id,j.payload,j.attempts,j.max_attempts`,
+         RETURNING j.id,j.property_id,j.job_type,j.source_id,j.payload,j.attempts,j.max_attempts,j.attempt_cycle`,
         [limit,workerId],transaction,
       );
       for(const job of claimed.results){
-        await this.executeRaw("INSERT INTO worker_attempts(property_id,job_id,attempt_no,started_at) VALUES (?,?,?,clock_timestamp())",[job.property_id,job.id,job.attempts],transaction);
+        await this.executeRaw("INSERT INTO worker_attempts(property_id,job_id,attempt_cycle,attempt_no,started_at) VALUES (?,?,?,?,clock_timestamp())",[job.property_id,job.id,job.attempt_cycle,job.attempts],transaction);
       }
       return claimed.results;
     });
@@ -480,7 +495,7 @@ class PostgresDatabase implements PmsDatabase {
     if(this.propertyId)throw new Error("Worker completion requires the root database capability");
     if(!/^[A-Za-z0-9:_-]{3,200}$/u.test(input.jobId)||!/^[A-Za-z0-9:_-]{3,100}$/u.test(input.workerId)||!Number.isInteger(input.durationMs)||input.durationMs<0)throw new Error("Invalid worker completion");
     return this.client.begin(async(transaction)=>{
-      const current=await this.executeRaw<{property_id:string;attempts:number;max_attempts:number}>("SELECT property_id,attempts,max_attempts FROM worker_jobs WHERE id=? AND status='RUNNING' AND locked_by=? FOR UPDATE",[input.jobId,input.workerId],transaction);
+      const current=await this.executeRaw<{property_id:string;job_type:string;attempts:number;max_attempts:number;attempt_cycle:number;recovery_count:number}>("SELECT property_id,job_type,attempts,max_attempts,attempt_cycle,recovery_count FROM worker_jobs WHERE id=? AND status='RUNNING' AND locked_by=? FOR UPDATE",[input.jobId,input.workerId],transaction);
       const job=current.results[0];if(!job)return false;
       const outcome=input.outcome==="RETRY"&&job.attempts>=job.max_attempts?"DEAD":input.outcome;
       const delaySeconds=Math.min(3600,Math.max(5,2**Math.min(job.attempts,10)*5));
@@ -492,10 +507,75 @@ class PostgresDatabase implements PmsDatabase {
         [outcome,outcome,String(delaySeconds),outcome,(input.errorMessage||"").slice(0,2000)||null,input.jobId],transaction,
       );
       await this.executeRaw(
-        "UPDATE worker_attempts SET completed_at=clock_timestamp(),outcome=?,http_status=?,duration_ms=?,error_code=? WHERE job_id=? AND attempt_no=?",
-        [outcome,input.httpStatus??null,input.durationMs,(input.errorCode||"").slice(0,100)||null,input.jobId,job.attempts],transaction,
+        "UPDATE worker_attempts SET completed_at=clock_timestamp(),outcome=?,http_status=?,duration_ms=?,error_code=? WHERE job_id=? AND attempt_cycle=? AND attempt_no=?",
+        [outcome,input.httpStatus??null,input.durationMs,(input.errorCode||"").slice(0,100)||null,input.jobId,job.attempt_cycle,job.attempts],transaction,
       );
+      if(outcome==="DEAD"){
+        await this.executeRaw(
+          `INSERT INTO service_incidents(id,property_id,component,severity,status,summary,started_at,metadata)
+           VALUES ('incident-'||?, ?, ?, 'CRITICAL','OPEN',?,clock_timestamp(),jsonb_build_object('jobId',?::text,'attempts',?::integer,'attemptCycle',?::integer,'recoveryCount',?::integer))
+           ON CONFLICT(id) DO UPDATE SET status='OPEN',summary=excluded.summary,metadata=excluded.metadata,resolved_at=NULL`,
+          [input.jobId,job.property_id,job.job_type,`Durable delivery exhausted its retry budget: ${(input.errorMessage||"unknown error").slice(0,300)}`,input.jobId,job.attempts,job.attempt_cycle,job.recovery_count],transaction,
+        );
+      }else if(outcome==="SUCCEEDED"){
+        await this.executeRaw("UPDATE service_incidents SET status='RESOLVED',resolved_at=clock_timestamp() WHERE id='incident-'||? AND property_id=? AND status<>'RESOLVED'",[input.jobId,job.property_id],transaction);
+      }
       return true;
+    });
+  }
+
+  /** Reclaims expired leases and performs a bounded recovery cycle for critical
+   * delivery jobs. Poison jobs remain DEAD after maxRecoveries, avoiding an
+   * infinite retry storm while preserving every attempt in worker_attempts. */
+  async recoverWorkerJobs(input:{leaseSeconds:number;deadCooldownSeconds:number;maxRecoveries:number;limit:number}){
+    if(this.propertyId)throw new Error("Worker recovery requires the root database capability");
+    const {leaseSeconds,deadCooldownSeconds,maxRecoveries,limit}=input;
+    if(!Number.isInteger(leaseSeconds)||leaseSeconds<90||leaseSeconds>3600||!Number.isInteger(deadCooldownSeconds)||deadCooldownSeconds<60||deadCooldownSeconds>86400||!Number.isInteger(maxRecoveries)||maxRecoveries<0||maxRecoveries>10||!Number.isInteger(limit)||limit<1||limit>250)throw new Error("Invalid worker recovery policy");
+    return this.client.begin(async transaction=>{
+      const stale=await this.executeRaw<{id:string;property_id:string;job_type:string;attempts:number;max_attempts:number;attempt_cycle:number}>(
+        `SELECT id,property_id,job_type,attempts,max_attempts,attempt_cycle FROM worker_jobs
+          WHERE status='RUNNING' AND locked_at<=clock_timestamp()-(?||' seconds')::interval
+          ORDER BY locked_at,id FOR UPDATE SKIP LOCKED LIMIT ?`,
+        [String(leaseSeconds),limit],transaction,
+      );
+      let staleRetried=0,staleDead=0;
+      for(const job of stale.results){
+        const outcome=job.attempts>=job.max_attempts?"DEAD":"RETRY";
+        if(outcome==="DEAD")staleDead+=1;else staleRetried+=1;
+        await this.executeRaw(
+          `UPDATE worker_jobs SET status=?,available_at=CASE WHEN ?='RETRY' THEN clock_timestamp() ELSE available_at END,
+             completed_at=CASE WHEN ?='DEAD' THEN clock_timestamp() ELSE NULL END,locked_at=NULL,locked_by=NULL,
+             last_error='Worker lease expired before completion',updated_at=clock_timestamp() WHERE id=?`,
+          [outcome,outcome,outcome,job.id],transaction,
+        );
+        await this.executeRaw(
+          `UPDATE worker_attempts SET completed_at=clock_timestamp(),outcome=?,
+             duration_ms=LEAST(2147483647,GREATEST(0,floor(extract(epoch FROM (clock_timestamp()-started_at))*1000)::bigint))::integer,
+             error_code='LEASE_EXPIRED' WHERE job_id=? AND attempt_cycle=? AND attempt_no=? AND completed_at IS NULL`,
+          [outcome,job.id,job.attempt_cycle,job.attempts],transaction,
+        );
+        if(outcome==="DEAD")await this.executeRaw(
+          `INSERT INTO service_incidents(id,property_id,component,severity,status,summary,started_at,metadata)
+           VALUES ('incident-'||?, ?, ?, 'CRITICAL','OPEN','Worker lease expired at the retry limit',clock_timestamp(),jsonb_build_object('jobId',?::text,'attempts',?::integer,'attemptCycle',?::integer))
+           ON CONFLICT(id) DO UPDATE SET status='OPEN',summary=excluded.summary,metadata=excluded.metadata,resolved_at=NULL`,
+          [job.id,job.property_id,job.job_type,job.id,job.attempts,job.attempt_cycle],transaction,
+        );
+      }
+      if(maxRecoveries===0)return {staleRetried,staleDead,deadReset:0};
+      const recoverable=await this.executeRaw<{id:string}>(
+        `SELECT id FROM worker_jobs WHERE job_type IN ('OUTBOX_WEBHOOK','ARI_DELIVERY')
+          AND (status='DEAD' OR (status='RETRY' AND attempts>=max_attempts))
+          AND COALESCE(completed_at,updated_at)<=clock_timestamp()-(?||' seconds')::interval AND recovery_count<?
+          ORDER BY priority,COALESCE(completed_at,updated_at),created_at FOR UPDATE SKIP LOCKED LIMIT ?`,
+        [String(deadCooldownSeconds),maxRecoveries,limit],transaction,
+      );
+      for(const job of recoverable.results)await this.executeRaw(
+        `UPDATE worker_jobs SET status='RETRY',attempts=0,attempt_cycle=attempt_cycle+1,recovery_count=recovery_count+1,
+           last_recovered_at=clock_timestamp(),available_at=clock_timestamp(),completed_at=NULL,locked_at=NULL,locked_by=NULL,
+           last_error='Automated DEAD delivery recovery scheduled',updated_at=clock_timestamp() WHERE id=?`,
+        [job.id],transaction,
+      );
+      return {staleRetried,staleDead,deadReset:recoverable.results.length};
     });
   }
 

@@ -8,6 +8,8 @@ import {
   validateImportRow,
 } from "../app/import-csv.ts";
 import { validatedWorkerEndpoint } from "../app/worker-kick.ts";
+import { hasUsableTenantAccess } from "../app/tenant-access.ts";
+import { assertStagingDatabaseTarget } from "../scripts/staging-db-target.mjs";
 
 test("CSV migration parser handles quoted commas, escaped quotes and CRLF", () => {
   const rows = parseCsv(
@@ -103,4 +105,52 @@ test("worker kick accepts only a trusted fixed endpoint", () => {
     "https://attacker.example/api/internal/worker?redirect=1",
   ])
     assert.equal(validatedWorkerEndpoint(unsafe, "production"), null);
+});
+
+test("login entry rejects suspended-only tenants without creating a redirect loop", () => {
+  assert.equal(
+    hasUsableTenantAccess([{ subscription_status: "SUSPENDED" }]),
+    false,
+  );
+  assert.equal(
+    hasUsableTenantAccess([{ subscription_status: "CANCELLED" }]),
+    false,
+  );
+  assert.equal(
+    hasUsableTenantAccess([{ subscription_status: "ACTIVE" }]),
+    true,
+  );
+  assert.equal(
+    hasUsableTenantAccess([{ subscription_status: "SUSPENDED" }], 1),
+    true,
+    "an active, MFA-gated support grant remains a valid entry path",
+  );
+});
+
+test("staging database release guard requires environment, opt-in and exact project ref", () => {
+  const keys = [
+      "DATABASE_URL",
+      "SUPABASE_URL",
+      "PMS_ENVIRONMENT",
+      "PMS_ALLOW_DESTRUCTIVE_QA",
+      "PMS_QA_PROJECT_REF",
+    ],
+    previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) delete process.env[key];
+    assert.throws(assertStagingDatabaseTarget, /Staging database target rejected/u);
+    process.env.DATABASE_URL = "postgres://user:secret@db.example.test:5432/postgres";
+    process.env.SUPABASE_URL = "https://isolated-staging.supabase.co";
+    process.env.PMS_ENVIRONMENT = "staging";
+    process.env.PMS_ALLOW_DESTRUCTIVE_QA = "true";
+    process.env.PMS_QA_PROJECT_REF = "isolated-staging";
+    assert.equal(assertStagingDatabaseTarget().projectRef, "isolated-staging");
+    process.env.PMS_QA_PROJECT_REF = "production-ref";
+    assert.throws(assertStagingDatabaseTarget, /actualRef=isolated-staging/u);
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
 });

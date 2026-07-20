@@ -16,9 +16,11 @@
 
 ### 멀티호텔 SaaS 배포 추가 점검
 
-- [ ] `202607190016_multihotel_saas_control_plane` 적용 및 66개 tenant policy 계약 확인
+- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607200018_exhausted_worker_retry_recovery`까지 적용 및 66개 tenant policy 계약 확인
 - [ ] `AURORA_TENANT_BASE_DOMAIN`, `AURORA_PLATFORM_HOSTS`, `PMS_REQUIRE_PLATFORM_MFA=true` 확인
 - [ ] Vercel·GitHub에 동일한 `CRON_SECRET`을 설정하고 즉시 kick, GitHub 5분 sweep, Vercel 일일 fail-safe의 성공·재시도·DEAD incident 확인
+- [ ] stale RUNNING lease가 `LEASE_EXPIRED` attempt로 종결되고 webhook·ARI DEAD가 설정된 cooldown·복구 상한 안에서만 재개되는지 확인
+- [ ] 정지 subscription의 custom domain·플랫폼 `/hotel`이 노출되지 않고, 정지·미배정 계정 로그인이 403 안내에 머무는지 확인
 - [ ] outbound host allowlist와 provider별 ARI secret reference 확인
 - [ ] backup orchestrator가 storage reference·SHA-256 checksum receipt를 반환하는지 확인
 - [ ] custom domain TXT 검증 후에만 ACTIVE가 되는지 확인
@@ -27,6 +29,15 @@
 - [ ] 신규 고객 데이터 이관을 dry-run → 대사 → commit → 제한된 rollback 순서로 스테이징에서 검증
 
 상세 구조와 환경 변수, 신규 고객 온보딩, worker·DLQ·복구 절차는 [멀티호텔 SaaS 운영 설계](multihotel-saas.md)를 따릅니다.
+
+0016 이후 SaaS 변경은 반드시 격리 스테이징에서 아래 순서를 한 release gate로 실행합니다. `release:staging`은 Vercel cloud build 안에서 project ref를 먼저 대조하므로 Sensitive DB URL을 로컬 파일로 복호화하지 않습니다.
+
+```bash
+npm run db:saas:preflight
+npm run db:supabase:migrate
+npm run qa:staging:db
+npm run db:contract:verify
+```
 
 ### 테이블 재작성 마이그레이션 점검 창
 
@@ -214,6 +225,7 @@ WHERE departure_date <= arrival_date;
 
 | Commit | 작업 |
 | --- | --- |
+| 2026-07-20 worker delivery recovery | stale RUNNING lease reaper, bounded DEAD attempt cycle, incident 자동 종료, 정지 홈페이지·로그인 loop 차단, 0016→0017 격리 스테이징 19개 PostgreSQL 통합 검증 |
 | 2026-07-17 P2 platform hardening | 배포 schema gate, 닫힌 auth capability, native temporal types, Rate Plan/WEB-DIRECT, 실제 dashboard 비교, 호텔 SEO, CSS·README 모듈화 |
 | 2026-07-17 structural debt remediation | migration 단일 원본, tenant RLS context, API registry/Zod 모듈화, 13개 실제 route와 action Context, mutation receipt/TanStack Query, PostgreSQL CI, 20-way last-room concurrency test |
 | 2026-07-17 seven-finding security remediation | runtime/seed admin 제거, Host 기반 localhost 인증 제거, 금전 strict 멱등 receipt, 임의 SQL RPC 폐기와 pooler 전환, booking schema readiness, production QA hard gate, DB 분산 rate limit |

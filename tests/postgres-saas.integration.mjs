@@ -20,6 +20,29 @@ const client = () =>
     idle_timeout: 2,
   });
 
+/** Provisioning intentionally spans several tenant masters whose foreign keys
+ * are RESTRICT. Integration fixtures remove children explicitly so repeated
+ * staging runs never become customer-like orphan properties. */
+async function deleteProvisionedTestProperty(sql, propertyId) {
+  await sql.begin(async (transaction) => {
+    await transaction`DELETE FROM rooms WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM room_type_website WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM rate_plan_calendar WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM rate_plan_room_types WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM room_types WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM rate_plans WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM transaction_codes WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM accounting_accounts WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM audit_logs WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM role_assignments WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM property_domains WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM property_entitlements WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM property_subscriptions WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM website_settings WHERE property_id=${propertyId}`;
+    await transaction`DELETE FROM properties WHERE id=${propertyId}`;
+  });
+}
+
 test(
   "control plane schema and all new tenant tables enforce RLS",
   { skip },
@@ -51,13 +74,14 @@ test(
       email = "saas-owner@example.com",
       suffix = crypto.randomUUID().slice(0, 8),
       organizationId = `org-saas-${suffix}`,
+      propertyId = `prop-saas-${suffix}`,
       slug = `saas-test-${suffix}`;
     try {
       await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'SaaS Test',${slug},'ACTIVE')`;
       await sql`INSERT INTO organization_memberships(id,organization_id,auth_user_id,email,display_name,role,active) VALUES (${`org-member-${suffix}`},${organizationId},${userId}::uuid,${email},'SaaS Owner','OWNER',true)`;
       const db = getPmsDatabase({ DATABASE_URL: databaseUrl }),
         input = {
-          propertyId: `prop-saas-${suffix}`,
+          propertyId,
           organizationId,
           authUserId: userId,
           actorEmail: email,
@@ -82,6 +106,19 @@ test(
         property_slug: input.slug,
         organization_id: input.organizationId,
       });
+      await sql`UPDATE property_subscriptions SET status='SUSPENDED' WHERE property_id=${input.propertyId}`;
+      assert.equal(
+        await db.resolvePublicProperty(input.hostname),
+        null,
+        "a suspended subscription must remove the public hotel site",
+      );
+      assert.equal(
+        (await db.findActiveRoleAssignments(userId, email)).length,
+        0,
+        "a suspended tenant must not produce a login principal",
+      );
+      await sql`UPDATE property_subscriptions SET status='ACTIVE' WHERE property_id=${input.propertyId}`;
+      assert.equal((await db.findActiveRoleAssignments(userId, email)).length, 1);
       const [counts] =
         await sql`SELECT (SELECT COUNT(*)::int FROM property_entitlements WHERE property_id=${input.propertyId}) entitlements,(SELECT COUNT(*)::int FROM rate_plans WHERE property_id=${input.propertyId}) plans,(SELECT COUNT(*)::int FROM role_assignments WHERE property_id=${input.propertyId}) admins`;
       assert.equal(counts.entitlements, 10);
@@ -121,6 +158,8 @@ test(
         /SUBSCRIPTION_USER_LIMIT_EXCEEDED/u,
       );
     } finally {
+      await deleteProvisionedTestProperty(sql, propertyId);
+      await sql`DELETE FROM organizations WHERE id=${organizationId}`;
       await sql.end({ timeout: 2 });
       await closePmsDatabase();
     }
@@ -182,6 +221,10 @@ test(
         false,
       );
     } finally {
+      await sql`DELETE FROM audit_logs WHERE entity_type='support_session' AND entity_id IN (SELECT id FROM support_sessions WHERE operator_user_id=${operatorId}::uuid)`;
+      await sql`DELETE FROM support_sessions WHERE operator_user_id=${operatorId}::uuid`;
+      await sql`DELETE FROM support_access_grants WHERE operator_user_id=${operatorId}::uuid`;
+      await sql`DELETE FROM platform_operators WHERE auth_user_id=${operatorId}::uuid AND email=${email}`;
       await sql.end({ timeout: 2 });
       await closePmsDatabase();
     }
@@ -215,6 +258,8 @@ test(
           error?.code === "DIRECT_BOOKING_DISABLED" && error?.status === 404,
       );
     } finally {
+      await deleteProvisionedTestProperty(sql, propertyId);
+      await sql`DELETE FROM organizations WHERE id=${organizationId}`;
       await sql.end({ timeout: 2 });
       await closePmsDatabase();
     }
@@ -238,6 +283,76 @@ test(
       assert.equal(a.length + b.length, 1);
       assert.equal([...a, ...b][0].id, "job-concurrency-saas");
     } finally {
+      await sql`DELETE FROM worker_attempts WHERE job_id='job-concurrency-saas'`;
+      await sql`DELETE FROM worker_jobs WHERE id='job-concurrency-saas'`;
+      await sql.end({ timeout: 2 });
+      await closePmsDatabase();
+    }
+  },
+);
+
+test(
+  "worker reaper expires stale leases and reopens DEAD delivery in a bounded new cycle",
+  { skip },
+  async () => {
+    const sql = client(),
+      propertyId = "prop-seoul",
+      suffix = crypto.randomUUID().slice(0, 8),
+      retryId = `job-reaper-retry-${suffix}`,
+      deadId = `job-reaper-dead-${suffix}`,
+      resetId = `job-reaper-reset-${suffix}`,
+      exhaustedRetryId = `job-reaper-exhausted-${suffix}`;
+    try {
+      await sql`INSERT INTO worker_jobs(id,property_id,job_type,source_id,payload,status,priority,attempts,max_attempts,attempt_cycle,available_at,locked_at,locked_by,updated_at)
+        VALUES (${retryId},${propertyId},'USAGE_ROLLUP',${`reaper-retry-${suffix}`} ,'{}'::jsonb,'RUNNING',-200,1,3,1,clock_timestamp(),clock_timestamp()-interval '10 minutes','test:lost-a',clock_timestamp()-interval '10 minutes'),
+               (${deadId},${propertyId},'USAGE_ROLLUP',${`reaper-dead-${suffix}`} ,'{}'::jsonb,'RUNNING',-190,2,2,1,clock_timestamp(),clock_timestamp()-interval '10 minutes','test:lost-b',clock_timestamp()-interval '10 minutes'),
+               (${resetId},${propertyId},'OUTBOX_WEBHOOK',${`reaper-reset-${suffix}`} ,'{}'::jsonb,'DEAD',-300,2,2,1,clock_timestamp(),NULL,NULL,clock_timestamp()-interval '20 minutes'),
+               (${exhaustedRetryId},${propertyId},'ARI_DELIVERY',${`reaper-exhausted-${suffix}`} ,'{}'::jsonb,'RETRY',-290,2,2,1,clock_timestamp(),NULL,NULL,clock_timestamp()-interval '20 minutes')`;
+      await sql`UPDATE worker_jobs SET completed_at=clock_timestamp()-interval '20 minutes' WHERE id=${resetId}`;
+      await sql`INSERT INTO worker_attempts(property_id,job_id,attempt_cycle,attempt_no,started_at)
+        VALUES (${propertyId},${retryId},1,1,clock_timestamp()-interval '10 minutes'),
+               (${propertyId},${deadId},1,2,clock_timestamp()-interval '10 minutes'),
+               (${propertyId},${resetId},1,1,clock_timestamp()-interval '30 minutes'),
+               (${propertyId},${resetId},1,2,clock_timestamp()-interval '20 minutes')`;
+
+      const db = getPmsDatabase({ DATABASE_URL: databaseUrl }),
+        recovery = await db.recoverWorkerJobs({
+          leaseSeconds: 90,
+          deadCooldownSeconds: 60,
+          maxRecoveries: 3,
+          limit: 20,
+        });
+      assert.ok(recovery.staleRetried >= 1);
+      assert.ok(recovery.staleDead >= 1);
+      assert.ok(recovery.deadReset >= 2);
+      const rows = await sql`SELECT id,status,attempts,attempt_cycle,recovery_count,locked_at,locked_by FROM worker_jobs WHERE id IN (${retryId},${deadId},${resetId},${exhaustedRetryId}) ORDER BY id`;
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      assert.equal(byId.get(retryId).status, "RETRY");
+      assert.equal(byId.get(deadId).status, "DEAD");
+      assert.equal(byId.get(resetId).status, "RETRY");
+      assert.equal(byId.get(resetId).attempts, 0);
+      assert.equal(byId.get(resetId).attempt_cycle, 2);
+      assert.equal(byId.get(resetId).recovery_count, 1);
+      assert.equal(byId.get(exhaustedRetryId).status, "RETRY");
+      assert.equal(byId.get(exhaustedRetryId).attempts, 0);
+      assert.equal(byId.get(exhaustedRetryId).attempt_cycle, 2);
+      assert.equal(byId.get(retryId).locked_by, null);
+      const [expiredAttempt] =
+        await sql`SELECT outcome,error_code,completed_at FROM worker_attempts WHERE job_id=${retryId} AND attempt_cycle=1 AND attempt_no=1`;
+      assert.equal(expiredAttempt.outcome, "RETRY");
+      assert.equal(expiredAttempt.error_code, "LEASE_EXPIRED");
+      assert.ok(expiredAttempt.completed_at);
+      const claimed = await db.claimWorkerJobs("test:recovery-cycle", 2),
+        resetClaim = claimed.find((job) => job.id === resetId);
+      assert.ok(resetClaim, "the reset delivery must be claimable");
+      assert.equal(resetClaim.attempt_cycle, 2);
+      const [newCycleAttempt] =
+        await sql`SELECT attempt_cycle,attempt_no FROM worker_attempts WHERE job_id=${resetId} AND attempt_cycle=2`;
+      assert.equal(newCycleAttempt.attempt_no, 1);
+    } finally {
+      await sql`DELETE FROM worker_attempts WHERE job_id LIKE ${`job-reaper-%-${suffix}`}`;
+      await sql`DELETE FROM service_incidents WHERE id LIKE ${`incident-job-reaper-%-${suffix}`}`;
+      await sql`DELETE FROM worker_jobs WHERE id LIKE ${`job-reaper-%-${suffix}`}`;
       await sql.end({ timeout: 2 });
       await closePmsDatabase();
     }
@@ -248,14 +363,17 @@ test(
   "new control tables remain isolated across property scopes",
   { skip },
   async () => {
-    const sql = client();
+    const sql = client(),
+      suffix = crypto.randomUUID().slice(0, 8),
+      organizationId = `org-scope-${suffix}`,
+      propertyId = `prop-scope-${suffix}`;
     try {
+      await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'Scope Test',${`scope-${suffix}`},'ACTIVE')`;
+      await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date,organization_id,slug,status,onboarding_status,plan_code,cell_key,settings) VALUES (${propertyId},'Scope Hotel',${`X${suffix.slice(0, 6)}`},'Asia/Seoul','KRW','2026-07-19',${organizationId},${`scope-hotel-${suffix}`},'ACTIVE','LIVE','STANDARD','primary','{}'::jsonb)`;
       await sql`INSERT INTO backup_runs(id,property_id,backup_type,status,requested_by) VALUES ('backup-scope-a','prop-seoul','PROPERTY_EXPORT','REQUESTED','test') ON CONFLICT(id) DO NOTHING`;
-      const [otherProperty] =
-        await sql`SELECT id FROM properties WHERE id<>'prop-seoul' ORDER BY created_at DESC LIMIT 1`;
       const db = getPmsDatabase({ DATABASE_URL: databaseUrl }),
         seoul = scopePmsDatabase(db, "prop-seoul"),
-        other = scopePmsDatabase(db, otherProperty.id);
+        other = scopePmsDatabase(db, propertyId);
       assert.equal(
         Number(
           (
@@ -281,6 +399,9 @@ test(
         0,
       );
     } finally {
+      await sql`DELETE FROM backup_runs WHERE id='backup-scope-a'`;
+      await deleteProvisionedTestProperty(sql, propertyId);
+      await sql`DELETE FROM organizations WHERE id=${organizationId}`;
       await sql.end({ timeout: 2 });
       await closePmsDatabase();
     }
