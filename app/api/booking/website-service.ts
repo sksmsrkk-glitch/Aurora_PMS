@@ -16,7 +16,7 @@ import {
 } from "../../website-editor-contract";
 
 const bindings: PmsRuntimeBindings = {
-  DATABASE_URL: process.env.DATABASE_URL,
+  DATABASE_URL: process.env.DATABASE_URL || process.env.TEST_DATABASE_URL,
 };
 
 export type WebsiteMedia = {
@@ -101,17 +101,22 @@ export async function getWebsiteContent(propertyId: string): Promise<WebsiteCont
   const rootDatabase = getPmsDatabase(bindings);
   await verifyPmsSchemaContract(rootDatabase);
   const db = scopePmsDatabase(rootDatabase, propertyId);
-  const [settingsResult, roomResult, mediaResult, entitlementResult] = await db.batch([
+  const [settingsResult, roomResult, mediaResult, entitlementResult, subscriptionResult] = await db.batch([
     db.prepare("SELECT * FROM website_settings WHERE property_id=pms_current_property_id() LIMIT 1"),
     db.prepare("SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,rw.marketing_name,rw.short_description,rw.long_description,rw.amenities_json,rw.display_order FROM room_types rt JOIN room_type_website rw ON rw.property_id=rt.property_id AND rw.room_type_id=rt.id WHERE rt.property_id=pms_current_property_id() AND rt.active AND rw.published ORDER BY rw.display_order,rt.base_rate,rt.code"),
     db.prepare("SELECT id,scope,room_type_id,role,public_url,alt_text,sort_order FROM website_media WHERE property_id=pms_current_property_id() AND active ORDER BY scope,room_type_id,sort_order,created_at"),
     db.prepare("SELECT enabled FROM property_entitlements WHERE property_id=pms_current_property_id() AND feature_key='WEBSITE_CMS' LIMIT 1"),
+    db.prepare("SELECT status FROM property_subscriptions WHERE property_id=pms_current_property_id() LIMIT 1"),
   ]);
   const row = settingsResult.results[0] as Record<string, unknown> | undefined;
   if (!row) throw new Error("Website content is not initialized");
   const media = mediaResult.results.map((item) => mediaFromRow(item));
+  const subscription = subscriptionResult.results[0] as { status?: string } | undefined;
+  const subscriptionPublished = !subscription || !["SUSPENDED", "CANCELLED"].includes(String(subscription.status));
   return {
-    published: Boolean(row.published)&&Boolean((entitlementResult.results[0] as {enabled?:boolean}|undefined)?.enabled),
+    published: Boolean(row.published)
+      && Boolean((entitlementResult.results[0] as { enabled?: boolean } | undefined)?.enabled)
+      && subscriptionPublished,
     settings: {
       hotelName: String(row.hotel_name),
       brandEyebrow: String(row.brand_eyebrow),
