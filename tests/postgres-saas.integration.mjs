@@ -343,6 +343,78 @@ test(
 );
 
 test(
+  "enqueue triggers revive DEAD cycles without releasing RUNNING leases",
+  { skip },
+  async () => {
+    const sql = client(),
+      propertyId = "prop-seoul",
+      suffix = crypto.randomUUID().slice(0, 8),
+      outboxDead = `enqueue-outbox-dead-${suffix}`,
+      outboxRunning = `enqueue-outbox-running-${suffix}`,
+      ariDead = `enqueue-ari-dead-${suffix}`,
+      ariRunning = `enqueue-ari-running-${suffix}`,
+      jobIds = [
+        `job-outbox-${outboxDead}`,
+        `job-outbox-${outboxRunning}`,
+        `job-ari-${ariDead}`,
+        `job-ari-${ariRunning}`,
+      ];
+    try {
+      await sql`INSERT INTO outbox_events(id,property_id,topic,aggregate_type,aggregate_id,payload_json,status,attempts,created_at)
+        VALUES (${outboxDead},${propertyId},'test.dead','test',${outboxDead},'{}'::jsonb,'PENDING',0,clock_timestamp()),
+               (${outboxRunning},${propertyId},'test.running','test',${outboxRunning},'{}'::jsonb,'PENDING',0,clock_timestamp())`;
+      await sql`INSERT INTO ari_updates(id,property_id,connection_id,mapping_id,stay_date,revision,available,closed,min_stay,close_to_arrival,close_to_departure,rate,currency,payload_json,status,attempts,created_at)
+        VALUES (${ariDead},${propertyId},${`connection-${suffix}`},${`mapping-dead-${suffix}`},'2026-08-01',1,1,false,1,false,false,100000,'KRW','{}'::jsonb,'PENDING',0,clock_timestamp()),
+               (${ariRunning},${propertyId},${`connection-${suffix}`},${`mapping-running-${suffix}`},'2026-08-02',1,1,false,1,false,false,100000,'KRW','{}'::jsonb,'PENDING',0,clock_timestamp())`;
+
+      await sql`UPDATE worker_jobs SET status='DEAD',attempts=max_attempts,attempt_cycle=1,recovery_count=2,completed_at=clock_timestamp(),last_error='retry budget exhausted',locked_at=NULL,locked_by=NULL WHERE id IN (${jobIds[0]},${jobIds[2]})`;
+      await sql`UPDATE worker_jobs SET status='RUNNING',attempts=1,attempt_cycle=1,locked_at=clock_timestamp(),locked_by='test:in-flight',last_error='in-flight marker' WHERE id IN (${jobIds[1]},${jobIds[3]})`;
+
+      // A repeated source failure executes each enqueue trigger's conflict path.
+      await sql`UPDATE outbox_events SET status='FAILED' WHERE id IN (${outboxDead},${outboxRunning})`;
+      await sql`UPDATE ari_updates SET status='FAILED',last_error='source failed again' WHERE id IN (${ariDead},${ariRunning})`;
+
+      const rows = await sql`SELECT id,status,attempts,attempt_cycle,recovery_count,locked_by,completed_at,last_error FROM worker_jobs WHERE id=ANY(${jobIds})`,
+        byId = new Map(rows.map((row) => [row.id, row]));
+      for (const id of [jobIds[0], jobIds[2]]) {
+        const job = byId.get(id);
+        assert.equal(job.status, "RETRY");
+        assert.equal(job.attempts, 0);
+        assert.equal(job.attempt_cycle, 2);
+        assert.equal(job.recovery_count, 2);
+        assert.equal(job.locked_by, null);
+        assert.equal(job.completed_at, null);
+        assert.equal(job.last_error, null);
+      }
+      for (const id of [jobIds[1], jobIds[3]]) {
+        const job = byId.get(id);
+        assert.equal(job.status, "RUNNING");
+        assert.equal(job.attempts, 1);
+        assert.equal(job.attempt_cycle, 1);
+        assert.equal(job.locked_by, "test:in-flight");
+        assert.equal(job.last_error, "in-flight marker");
+      }
+
+      // Both revived jobs must enter attempt 1 of the new cycle without a
+      // unique-key collision against their immutable previous history.
+      await sql`UPDATE worker_jobs SET priority=-2000 WHERE id IN (${jobIds[0]},${jobIds[2]})`;
+      const db = getPmsDatabase({ DATABASE_URL: databaseUrl }),
+        claimed = await db.claimWorkerJobs("test:dead-revival", 2);
+      assert.deepEqual(new Set(claimed.map((job) => job.id)), new Set([jobIds[0], jobIds[2]]));
+      assert.ok(claimed.every((job) => job.attempts === 1 && job.attempt_cycle === 2));
+    } finally {
+      await sql`DELETE FROM worker_attempts WHERE job_id=ANY(${jobIds})`;
+      await sql`DELETE FROM service_incidents WHERE id=ANY(${jobIds.map((id) => `incident-${id}`)})`;
+      await sql`DELETE FROM worker_jobs WHERE id=ANY(${jobIds})`;
+      await sql`DELETE FROM outbox_events WHERE id IN (${outboxDead},${outboxRunning})`;
+      await sql`DELETE FROM ari_updates WHERE id IN (${ariDead},${ariRunning})`;
+      await sql.end({ timeout: 2 });
+      await closePmsDatabase();
+    }
+  },
+);
+
+test(
   "worker reaper expires stale leases and reopens DEAD delivery in a bounded new cycle",
   { skip },
   async () => {
