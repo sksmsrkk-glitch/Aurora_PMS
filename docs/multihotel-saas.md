@@ -74,7 +74,7 @@ npm run ops:tenant:provision
 | `DATA_IMPORT` | migration API |
 | `SUPPORT_ACCESS` | JIT support principal 생성 |
 
-`SUSPENDED`와 `CANCELLED`는 PMS 권한을 서버에서 닫습니다. `PAST_DUE` 처리는 추후 상품 정책에 따라 entitlement 변경으로 제어합니다. 객실과 사용자 한도는 UI precheck에 더해 subscription row lock을 사용하는 DB trigger가 병렬 초과 생성을 막습니다.
+`SUSPENDED`와 `CANCELLED`는 PMS 권한과 공개 홈페이지 도메인 해석을 서버에서 함께 닫습니다. 로그인은 Supabase 인증 성공 후에도 활성 assignment와 사용 가능한 subscription을 재검증하며, 정지·미배정 계정은 쿠키를 제거하고 `403 TENANT_ACCESS_INACTIVE`로 고정해 로그인↔PMS redirect loop를 만들지 않습니다. `PAST_DUE` 처리는 추후 상품 정책에 따라 entitlement 변경으로 제어합니다. 객실과 사용자 한도는 UI precheck에 더해 subscription row lock을 사용하는 DB trigger가 병렬 초과 생성을 막습니다.
 
 ## 4. 호텔 전환과 cache 격리
 
@@ -82,7 +82,7 @@ npm run ops:tenant:provision
 
 ## 5. 도메인 기반 홈페이지와 직접 예약
 
-공개 API는 브라우저가 전송한 property ID를 받지 않습니다. Vercel의 신뢰된 forwarding host 또는 직접 Host를 정규화하고 `property_domains.status='ACTIVE'`인 행을 root capability로 해석합니다.
+공개 API는 브라우저가 전송한 property ID를 받지 않습니다. Vercel의 신뢰된 forwarding host 또는 직접 Host를 정규화하고 domain·property·organization이 활성 상태이며 subscription이 정지·해지되지 않은 경우에만 root capability가 호텔을 해석합니다. 이미 cache된 도메인도 60초 안에 제거되며 availability·예약 서비스가 subscription을 다시 검사합니다.
 
 ```mermaid
 sequenceDiagram
@@ -141,7 +141,9 @@ GitHub 저장소에는 production Vercel과 같은 값을 `AURORA_CRON_SECRET` s
 | `BACKUP_VERIFY` | 외부 backup orchestrator 요청과 checksum receipt 확인 |
 | `USAGE_ROLLUP` | 호텔별 객실·사용자·예약·report 사용량 집계 |
 
-실패는 지수 backoff 후 재시도하며 최대 횟수에 도달하면 `DEAD`와 CRITICAL `service_incidents`를 만듭니다. outbound endpoint는 HTTPS, 선택적 host allowlist, DNS private-address 차단, 10초 timeout, redirect 금지를 적용합니다. 운영에서는 DNS rebinding까지 차단하는 고정 egress proxy를 추가합니다.
+실패는 지수 backoff 후 재시도하며 최대 횟수에 도달하면 `DEAD`와 CRITICAL `service_incidents`를 만듭니다. 각 scheduler sweep은 claim 전에 기본 300초가 지난 `RUNNING` lease를 `RETRY` 또는 `DEAD`로 회수하고, 열려 있던 attempt를 `LEASE_EXPIRED`로 종결합니다. webhook·ARI DEAD 작업은 기본 15분 cooldown 뒤 `attempt_cycle`을 증가시키고 attempts를 0으로 만든 새 cycle에서 최대 3회만 자동 복구합니다. `worker_attempts(job_id, attempt_cycle, attempt_no)`는 과거 실패를 덮어쓰지 않으며, 최종 성공 시 해당 incident를 자동 종료합니다. 영구 poison job은 복구 상한 뒤 DEAD로 남습니다.
+
+복구 정책은 `AURORA_WORKER_LEASE_SECONDS`, `AURORA_WORKER_DEAD_COOLDOWN_SECONDS`, `AURORA_WORKER_MAX_RECOVERIES`, `AURORA_WORKER_RECOVERY_BATCH_SIZE`로 조절합니다. 안전 범위는 코드가 각각 90~3,600초, 60~86,400초, 0~10회, 1~250건으로 고정합니다. outbound endpoint는 HTTPS, 선택적 host allowlist, DNS private-address 차단, 10초 timeout, redirect 금지를 적용합니다. 운영에서는 DNS rebinding까지 차단하는 고정 egress proxy를 추가합니다.
 
 ## 9. 백업과 복구
 
@@ -192,4 +194,4 @@ npm run db:supabase:smoke
 npm run build
 ```
 
-PostgreSQL integration은 20개 동시 마지막 1실 예약 중 정확히 1건 성공, 분산 rate limit, RLS 교차 호텔 차단, worker 중복 claim 차단, 병렬 객실 한도, JIT revoke, import commit/rollback을 실제 migration에서 검증합니다.
+PostgreSQL integration은 20개 동시 마지막 1실 예약 중 정확히 1건 성공, 분산 rate limit, RLS 교차 호텔 차단, worker 중복 claim·stale lease·DEAD 새 cycle 복구, 정지 subscription 공개 도메인 차단, 병렬 객실 한도, JIT revoke, import commit/rollback을 실제 migration에서 검증합니다.

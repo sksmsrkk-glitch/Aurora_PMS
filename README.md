@@ -14,7 +14,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607190016_multihotel_saas_control_plane` |
+| 스키마 계약 | `202607200018_exhausted_worker_retry_recovery` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
@@ -31,7 +31,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - 호텔별 다중 직원 ID, 14개 페이지별 없음/조회/입력 권한, 별도 개인정보 export 권한과 계정 생명주기
 - 조직→다중 호텔 계층, 안전한 호텔 전환, 구독·기능 entitlement, 객실·사용자 DB 한도
 - 도메인 기반 호텔별 홈페이지·직접 예약, DNS 검증, JIT MFA 지원 접근과 개인정보 마스킹
-- CSV dry-run·원자적 반영·안전 rollback, durable worker·재시도·DLQ·백업 검증·사용량 집계
+- CSV dry-run·원자적 반영·안전 rollback, durable worker·lease reaper·제한형 DEAD 복구·백업 검증·사용량 집계
 - 12px 보조정보·14px 업무본문·44px 조작영역을 하한으로 하는 전역 가독성 시스템, 모바일 예약 카드·하단 내비게이션·하단 시트
 
 `완료`는 저장소와 자동 QA 범위를 뜻합니다. 실제 영업 전에는 결제대행, 법정 회계, 개인정보 보유 정책, OTA 인증, 백업 복구 목표를 호텔별로 확정해야 합니다.
@@ -100,7 +100,8 @@ flowchart LR
 9. 홈페이지 이미지는 DB 비노출 tombstone → Storage 삭제 → DB hard-delete 순서로 제거해 죽은 공개 URL을 방지합니다.
 10. 호텔 전환은 assignment 재검증, HttpOnly 선택 쿠키, client cache 제거와 hard navigation을 함께 수행합니다.
 11. 공개 홈페이지와 부킹 API는 요청 property ID를 신뢰하지 않고 ACTIVE domain의 Host mapping으로 scope를 결정합니다.
-12. 외부 전송은 worker가 `SKIP LOCKED`로 한 번만 claim하고 지수 재시도 후 DLQ·incident로 승격합니다.
+12. 외부 전송은 worker가 `SKIP LOCKED`로 한 번만 claim합니다. 만료된 RUNNING lease는 다음 sweep이 회수하고, webhook·ARI의 DEAD는 새 attempt cycle로 최대 3회만 자동 복구한 뒤 다시 격리합니다.
+13. 로그인 성공 뒤 활성 호텔·구독 배정을 다시 확인하며, 미인증 401과 정지·미배정 403을 분리해 로그인 redirect loop를 차단합니다.
 
 주요 코드 진입점:
 
@@ -173,11 +174,15 @@ flowchart LR
 | 홈페이지 비주얼 에디터 | `202607170014_website_visual_editor.sql` |
 | 직원 계정·세부 권한 | `202607180015_staff_access_control.sql` |
 | 멀티호텔 Control Plane·구독·지원·이관·worker·백업 | `202607190016_multihotel_saas_control_plane.sql` |
+| worker lease reaper·attempt cycle·제한형 DEAD 복구 | `202607200017_worker_delivery_recovery.sql` |
+| exhausted RETRY 회수 인덱스·조용한 전달 유실 차단 | `202607200018_exhausted_worker_retry_recovery.sql` |
 
 배포 순서:
 
 ```bash
+npm run db:saas:preflight
 npm run db:supabase:migrate
+npm run test:integration
 npm run db:contract:verify
 npm run release:build
 ```
@@ -262,7 +267,7 @@ CI는 PR과 main push에서 lint → build → unit → migration bootstrap → 
 ### 배포가 schema contract에서 중단됨
 
 1. 앱을 우회 배포하지 않습니다.
-2. 대상 DB의 `pms_schema_migrations`에서 `202607190016_multihotel_saas_control_plane`을 확인합니다.
+2. 대상 DB의 `pms_schema_migrations`에서 `202607200018_exhausted_worker_retry_recovery`를 확인합니다.
 3. `aurora_app`가 `NOLOGIN`, `NOBYPASSRLS`인지와 연결 사용자의 membership을 확인합니다.
 4. migration을 적용하고 `npm run db:contract:verify`를 재실행합니다.
 

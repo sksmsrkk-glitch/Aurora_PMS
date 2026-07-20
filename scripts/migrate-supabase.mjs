@@ -1,9 +1,11 @@
 /** Ordered, history-aware Supabase migration and seed runner. */
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import postgres from "postgres";
+import { assertStagingDatabaseTarget } from "./staging-db-target.mjs";
 
-const root = process.cwd();
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function parseEnv(contents) {
   const values = {};
@@ -21,14 +23,17 @@ function parseEnv(contents) {
 }
 
 let env = {};
-try {
-  env = parseEnv(await readFile(path.join(root,".env.local"),"utf8"));
-} catch (error) {
-  // CI supplies DIRECT_URL directly and intentionally has no developer env file.
-  if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+if(path.resolve(process.cwd())===root){
+  try {
+    env = parseEnv(await readFile(path.join(root,".env.local"),"utf8"));
+  } catch (error) {
+    // CI supplies DIRECT_URL directly and intentionally has no developer env file.
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
 }
-const directUrl = process.env.DIRECT_URL || env.DIRECT_URL;
+const directUrl = process.env.DIRECT_URL || process.env.DATABASE_URL || env.DIRECT_URL || env.DATABASE_URL;
 if (!directUrl || !/^postgres(?:ql)?:\/\//u.test(directUrl)) throw new Error("DIRECT_URL is missing or invalid");
+if(process.env.PMS_ENVIRONMENT==="staging"||process.env.PMS_QA_PROJECT_REF)assertStagingDatabaseTarget();
 
 const directHost=new URL(directUrl).hostname;
 const sql = postgres(directUrl, { max:1, prepare:false, ssl:/^(?:localhost|127\.0\.0\.1)$/u.test(directHost)?false:"require", connect_timeout:15, idle_timeout:5 });

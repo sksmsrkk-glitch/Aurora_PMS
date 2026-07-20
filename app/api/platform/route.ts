@@ -102,11 +102,22 @@ async function context(request: Request) {
     authenticateSupabaseRequest(request),
     principalFor(request, db),
   ]);
-  if (!identity || !principal)
+  if (!identity)
     return {
       response: Response.json(
         { error: "로그인이 필요합니다." },
         { status: 401, headers: jsonHeaders() },
+      ),
+    };
+  if (!principal)
+    return {
+      response: Response.json(
+        {
+          error:
+            "현재 접근 가능한 호텔이 없습니다. 호텔 상태와 계정 배정을 확인해 주세요.",
+          code: "TENANT_ACCESS_INACTIVE",
+        },
+        { status: 403, headers: jsonHeaders() },
       ),
     };
   return { db, identity, principal };

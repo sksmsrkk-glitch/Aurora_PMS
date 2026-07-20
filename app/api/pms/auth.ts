@@ -161,6 +161,27 @@ export async function principalFor(request: Request, db: D1): Promise<Principal 
   return buildPrincipal(email,displayName||decodedDisplayName(request,email),assignment,identity?.id||null);
 }
 
+/** Distinguishes an expired/missing Auth session from a valid identity whose
+ * hotel was suspended, closed, or unassigned. Clients must redirect only the
+ * former to /login; the latter is a stable authorization error, not a login
+ * challenge. */
+export async function principalAccessFailureResponse(request: Request) {
+  const identity = await authenticateSupabaseRequest(request);
+  if (identity)
+    return Response.json(
+      {
+        error:
+          "현재 접근 가능한 호텔이 없습니다. 호텔 상태와 구독 또는 계정 배정을 확인해 주세요.",
+        code: "TENANT_ACCESS_INACTIVE",
+      },
+      { status: 403, headers: { "Cache-Control": "private, no-store" } },
+    );
+  return Response.json(
+    { error: "로그인이 필요합니다.", code: "AUTH_REQUIRED" },
+    { status: 401, headers: { "Cache-Control": "private, no-store" } },
+  );
+}
+
 /** Subscription state and feature flags are authoritative server-side gates.
  * Hiding a navigation item alone would still leave the command API callable. */
 function entitledAccess(value:unknown,role:Role,rawEntitlements:unknown,subscriptionStatus:string){

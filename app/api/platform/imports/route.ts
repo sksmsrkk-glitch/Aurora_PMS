@@ -14,7 +14,12 @@ import {
   validateImportRow,
   type ImportKind,
 } from "../../../import-csv";
-import { principalFor, ready, runtimeBindings } from "../../pms/auth";
+import {
+  principalAccessFailureResponse,
+  principalFor,
+  ready,
+  runtimeBindings,
+} from "../../pms/auth";
 import { authenticateSupabaseRequest } from "../../../supabase-session";
 
 export const runtime = "nodejs";
@@ -50,7 +55,7 @@ async function context(request: Request) {
   }
   const principal = await principalFor(request, root);
   if (!principal)
-    return { rejected: response({ error: "로그인이 필요합니다." }, 401) };
+    return { rejected: await principalAccessFailureResponse(request) };
   if (!principal.capabilities.includes("USER_ADMIN"))
     return {
       rejected: response({ error: "데이터 이관 권한이 필요합니다." }, 403),

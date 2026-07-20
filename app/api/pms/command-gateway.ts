@@ -4,7 +4,7 @@ import { schemaNotReadyResponse } from "../../../db/schema-contract";
 import { consumeRateLimit, rateLimitHeaders } from "../rate-limit";
 import { handleExtendedAction, PmsExtendedError } from "./extended";
 import { ReportRequestError, runReport } from "./reporting";
-import { principalFor, ready, runtimeBindings } from "./auth";
+import { principalAccessFailureResponse, principalFor, ready, runtimeBindings } from "./auth";
 import { invalidateSnapshots } from "./read-model";
 import { registrationFor, validationMessage } from "./action-registry";
 import { mapPmsError } from "./error-map";
@@ -111,7 +111,7 @@ export async function handlePmsPost(request: Request) {
   try { await ready(rootDb); } catch (error) { const response=schemaNotReadyResponse(error); if(response)return response; throw error; }
   const principal = await principalFor(request, rootDb);
   if(principal?.mustChangePassword)return Response.json({error:"임시 비밀번호를 먼저 변경해 주세요.",code:"PASSWORD_CHANGE_REQUIRED"},{status:428});
-  if (!principal) return Response.json({error:"로그인이 필요합니다."},{status:401});
+  if (!principal) return principalAccessFailureResponse(request);
   const origin=request.headers.get("origin");
   if(origin&&origin!==new URL(request.url).origin)return Response.json({error:"허용되지 않은 요청 출처입니다."},{status:403});
   let rateLimit;

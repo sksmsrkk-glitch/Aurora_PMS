@@ -72,7 +72,7 @@ const resolveActiveDomain = unstable_cache(
     await verifyPmsSchemaContract(db);
     return db.resolvePublicProperty(hostname);
   },
-  ["aurora-public-property-domain-v1"],
+  ["aurora-public-property-domain-v2"],
   { revalidate: 60 },
 );
 

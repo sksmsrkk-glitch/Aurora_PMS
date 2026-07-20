@@ -112,6 +112,8 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `202607170014_website_visual_editor.sql` | 홈페이지 비주얼 편집 | hero media/layout/overlay/height/CTA, theme accent, 고정 3섹션 navigation JSONB와 DB CHECK |
 | `202607180015_staff_access_control.sql` | 호텔별 직원 계정·세부 권한 | Auth UUID 연계, 14개 workspace 권한, export·비밀번호·version·감사 |
 | `202607190016_multihotel_saas_control_plane.sql` | 멀티호텔 SaaS | 조직·도메인·구독·entitlement·JIT support·이관·worker·백업·incident·usage와 14개 추가 RLS policy |
+| `202607200017_worker_delivery_recovery.sql` | 외부 전달 복구 | worker attempt cycle, 자동 복구 상한·회수 시각, stale/dead partial index와 불변 시도 원장 unique key |
+| `202607200018_exhausted_worker_retry_recovery.sql` | 고갈 RETRY 복구 | DEAD 소스 재큐잉으로 생긴 `RETRY + attempts=max`를 동일한 제한형 복구 scan에 포함 |
 
 ### 핵심 PostgreSQL 함수와 트리거
 
