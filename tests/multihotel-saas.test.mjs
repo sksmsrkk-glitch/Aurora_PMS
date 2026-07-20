@@ -127,6 +127,21 @@ test("login entry rejects suspended-only tenants without creating a redirect loo
   );
 });
 
+test("successful login clears the previous active-property cookie", () => {
+  const login = readFileSync(
+    new URL("../app/api/auth/login/route.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    login,
+    /import \{ clearSelectedProperty \} from "\.\.\/\.\.\/\.\.\/property-selection";/u,
+  );
+  assert.match(
+    login,
+    /if \(!hasUsableTenantAccess\(assignments, support\.length\)\)[\s\S]+await clearSelectedProperty\(\);[\s\S]+return Response\.json\(\{ user: identity \}/u,
+  );
+});
+
 test("staging database release guard requires environment, opt-in and exact project ref", () => {
   const keys = [
       "DATABASE_URL",

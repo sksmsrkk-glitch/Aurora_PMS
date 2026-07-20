@@ -1,6 +1,7 @@
 /** Same-origin login endpoint that issues hardened Supabase session cookies. */
 import { getPmsDatabase } from "../../../../db/pms-database";
 import { verifyPmsSchemaContract } from "../../../../db/schema-contract";
+import { clearSelectedProperty } from "../../../property-selection";
 import { signInWithPassword, signOut } from "../../../supabase-session";
 import { hasUsableTenantAccess } from "../../../tenant-access";
 import { consumeRateLimit, rateLimitHeaders } from "../../rate-limit";
@@ -45,6 +46,10 @@ export async function POST(request: Request) {
         { status: 403, headers: { "Cache-Control": "no-store" } },
       );
     }
+    // A successful identity may have a different hotel assignment than the
+    // previous session. Expire the HttpOnly preference before the PMS shell
+    // selects from the newly verified set of active assignments.
+    await clearSelectedProperty();
   } catch {
     await signOut();
     return Response.json(
