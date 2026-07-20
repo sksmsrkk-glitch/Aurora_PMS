@@ -9,6 +9,7 @@ import {
 import { ROLE_ACCESS_TEMPLATES } from "../app/access-control.ts";
 import { commit, dryRun, rollback } from "../app/api/platform/imports/route.ts";
 import { getAvailability } from "../app/api/booking/service.ts";
+import { getWebsiteContent } from "../app/api/booking/website-service.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL || "",
   skip = !databaseUrl;
@@ -106,6 +107,8 @@ test(
         property_slug: input.slug,
         organization_id: input.organizationId,
       });
+      await sql`UPDATE website_settings SET published=true WHERE property_id=${input.propertyId}`;
+      assert.equal((await getWebsiteContent(input.propertyId)).published, true);
       await sql`UPDATE property_subscriptions SET status='SUSPENDED' WHERE property_id=${input.propertyId}`;
       assert.equal(
         await db.resolvePublicProperty(input.hostname),
@@ -117,7 +120,19 @@ test(
         0,
         "a suspended tenant must not produce a login principal",
       );
+      assert.equal(
+        (await getWebsiteContent(input.propertyId)).published,
+        false,
+        "a suspended subscription must override the CMS publish switch",
+      );
+      await sql`UPDATE property_subscriptions SET status='CANCELLED' WHERE property_id=${input.propertyId}`;
+      assert.equal(
+        (await getWebsiteContent(input.propertyId)).published,
+        false,
+        "a cancelled subscription must override the CMS publish switch",
+      );
       await sql`UPDATE property_subscriptions SET status='ACTIVE' WHERE property_id=${input.propertyId}`;
+      assert.equal((await getWebsiteContent(input.propertyId)).published, true);
       assert.equal((await db.findActiveRoleAssignments(userId, email)).length, 1);
       const [counts] =
         await sql`SELECT (SELECT COUNT(*)::int FROM property_entitlements WHERE property_id=${input.propertyId}) entitlements,(SELECT COUNT(*)::int FROM rate_plans WHERE property_id=${input.propertyId}) plans,(SELECT COUNT(*)::int FROM role_assignments WHERE property_id=${input.propertyId}) admins`;
