@@ -16,7 +16,7 @@
 
 ### 멀티호텔 SaaS 배포 추가 점검
 
-- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607210024_hotelstory_reporting_deposits`까지 적용 및 77개 tenant policy 계약 확인
+- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607210025_hotelstory_final_operations`까지 적용 및 80개 tenant policy 계약 확인
 - [ ] 채널 입금 스테이징 표본에서 ACCRUED → PAID → RESTORE → ACCRUED와 원전표 REVERSED·반대전표·불변 사건을 대사
 - [ ] `AURORA_TENANT_BASE_DOMAIN`, `AURORA_PLATFORM_HOSTS`, `PMS_REQUIRE_PLATFORM_MFA=true` 확인
 - [ ] Vercel·GitHub에 동일한 `CRON_SECRET`을 설정하고 즉시 kick, GitHub 5분 sweep, Vercel 일일 fail-safe의 성공·재시도·DEAD incident 확인
@@ -230,6 +230,7 @@ WHERE departure_date <= arrival_date;
 | Commit | 작업 |
 | --- | --- |
 | 2026-07-21 HotelStory channel/rate block/catalogs | 판매채널 2열 lifecycle·순서·서플라이어·상품마감, 객실×상품×채널×날짜 5,000셀 블럭요금/ARI 원자 처리, 성수기·휴일·편의시설·서비스·이미지와 migration 0023 행동 검증 |
+| 2026-07-21 HotelStory final operations | 연회 월 캘린더·병렬 시간충돌 단일 성공, 체크인/아웃 전용 URL·18일 점유, 예약 CSV dry-run/commit replay/rollback, scrypt 회원·PII 마스킹과 migration 0025 행동 검증 |
 | 2026-07-21 HotelStory voucher | KR/EN·금액 표시 정책, 한글 글꼴 임베딩 PDF, XLSX·인쇄, immutable 문서 snapshot, 멱등 메일 worker와 migration 0022·PostgreSQL 회귀 테스트 |
 | 2026-07-20 worker durability follow-up | claim 내부 10분 lease 회수·고아 attempt 종결, DEAD enqueue 초기화·RUNNING lease 보호, CMS 구독 재검증, 로그인 선택 쿠키 초기화, migration 0019·PostgreSQL 회귀 테스트 |
 | 2026-07-20 worker delivery recovery | stale RUNNING lease reaper, bounded DEAD attempt cycle, incident 자동 종료, 정지 홈페이지·로그인 loop 차단, 0016→0017 격리 스테이징 19개 PostgreSQL 통합 검증 |

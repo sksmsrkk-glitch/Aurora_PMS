@@ -8,6 +8,7 @@ import { snapshot } from "../app/api/pms/read-model.ts";
 import { handlePmsPost } from "../app/api/pms/command-gateway.ts";
 import { runReport } from "../app/api/pms/reporting.ts";
 import { loadChannelCatalog, loadOperationalCatalogs, loadRateBlockMatrix } from "../app/api/pms/hotelstory-catalog-service.ts";
+import { handleFinalOperationsAction, loadBanquetCalendar, loadHotelMembers, loadStayOperations } from "../app/api/pms/final-operations-service.ts";
 import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL || "";
@@ -67,6 +68,43 @@ test("operational dates and timestamps use native PostgreSQL types", { skip }, a
   } finally {
     await sql.end({ timeout: 2 });
   }
+});
+
+test("HotelStory final-operation masters use native types and forced tenant RLS", { skip }, async()=>{
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),organizationId=`org-final-${suffix}`,propertyId=`prop-final-${suffix}`,memberId=`member-final-${suffix}`;try{
+    const rows=await sql`SELECT c.relname,c.relforcerowsecurity,COUNT(p.policyname)::int policies FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_policies p ON p.schemaname=n.nspname AND p.tablename=c.relname AND p.policyname='aurora_property_isolation' WHERE n.nspname='public' AND c.relname IN ('banquet_venues','banquet_reservations','hotel_members') GROUP BY c.relname,c.relforcerowsecurity ORDER BY c.relname`;
+    assert.equal(rows.length,3);assert.ok(rows.every(row=>row.relforcerowsecurity&&row.policies===1));
+    const [types]=await sql`SELECT COUNT(*) FILTER(WHERE table_name='banquet_reservations' AND data_type='date')::int dates,COUNT(*) FILTER(WHERE table_name='banquet_reservations' AND data_type='time without time zone')::int times,COUNT(*) FILTER(WHERE table_name='hotel_members' AND data_type='boolean')::int flags,COUNT(*) FILTER(WHERE table_name IN ('banquet_venues','hotel_members') AND data_type='jsonb')::int jsons FROM information_schema.columns WHERE table_schema='public'`;
+    assert.equal(types.dates,1);assert.equal(types.times,2);assert.equal(types.flags,1);assert.equal(types.jsons,2);
+    await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'Final Ops Other',${`final-${suffix}`},'ACTIVE')`;await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date,organization_id,slug) VALUES (${propertyId},'Other Hotel',${`F${suffix.slice(0,6)}`},'Asia/Seoul','KRW','2031-01-01',${organizationId},${`final-hotel-${suffix}`})`;await sql`INSERT INTO hotel_members(id,property_id,member_no,member_type,name,grade,administrator_type,active,joined_date,updated_by) VALUES (${memberId},${propertyId},'OTHER-MEMBER','HOTEL','Other Tenant','GENERAL','NONE',true,'2031-01-01','integration')`;
+    const scoped=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul"),hidden=await scoped.prepare("SELECT COUNT(*)::int count FROM hotel_members WHERE id=?").bind(memberId).first();assert.equal(hidden.count,0);
+  }finally{await sql`DELETE FROM hotel_members WHERE id=${memberId}`;await sql`DELETE FROM properties WHERE id=${propertyId}`;await sql`DELETE FROM organizations WHERE id=${organizationId}`;await closePmsDatabase();await sql.end({timeout:2});}
+});
+
+test("concurrent banquet reservations allow exactly one active venue time slot", { skip }, async()=>{
+  const sql=client(4),suffix=crypto.randomUUID().slice(0,8),db=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul"),principal={email:"banquet.integration@example.com",principalType:"STAFF",piiMode:"FULL"};
+  try{
+    await handleFinalOperationsAction(db,{action:"upsert_banquet_venue",code:`V${suffix.toUpperCase()}`,name:"Integration Ballroom",capacity:"100",location:"2F"},principal,new Date().toISOString(),`it-venue-key-${suffix}`);
+    const [venue]=await sql`SELECT id FROM banquet_venues WHERE property_id='prop-seoul' AND code=${`V${suffix.toUpperCase()}`}`;assert.ok(venue?.id);
+    const payload={action:"upsert_banquet_reservation",venueId:venue.id,eventDate:"2031-03-10",startTime:"14:00",endTime:"16:00",eventName:"Concurrent Event",contactName:"Test Manager",attendees:"40",fee:"500000",status:"CONFIRMED"};
+    const results=await Promise.allSettled([handleFinalOperationsAction(db,payload,principal,new Date().toISOString(),`it-banquet-a-${suffix}`),handleFinalOperationsAction(db,{...payload,eventName:"Concurrent Event B"},principal,new Date().toISOString(),`it-banquet-b-${suffix}`)]);
+    assert.equal(results.filter(item=>item.status==="fulfilled").length,1);
+    assert.equal(results.filter(item=>item.status==="rejected"&&item.reason?.code==="23P01").length,1);
+    const [count]=await sql`SELECT COUNT(*)::int count FROM banquet_reservations WHERE property_id='prop-seoul' AND venue_id=${venue.id} AND event_date='2031-03-10'`;assert.equal(count.count,1);
+    const calendar=await loadBanquetCalendar(db,new URLSearchParams({month:"2031-03"}));assert.equal(calendar.reservations.length,1);
+  }finally{
+    await sql`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND actor='banquet.integration@example.com'`;await sql`DELETE FROM idempotency_keys WHERE property_id='prop-seoul' AND actor='banquet.integration@example.com'`;await sql`DELETE FROM banquet_reservations WHERE property_id='prop-seoul' AND event_date='2031-03-10'`;await sql`DELETE FROM banquet_venues WHERE property_id='prop-seoul' AND code=${`V${suffix.toUpperCase()}`}`;await closePmsDatabase();await sql.end({timeout:2});
+  }
+});
+
+test("member passwords are hashed, PII is masked, and daily operation views stay bounded", { skip }, async()=>{
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),db=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul"),principal={email:"member.integration@example.com",principalType:"STAFF",piiMode:"FULL"};
+  try{
+    await handleFinalOperationsAction(db,{action:"upsert_hotel_member",memberNo:`M${suffix.toUpperCase()}`,loginId:`member-${suffix}`,memberType:"BOTH",name:"통합 테스트 회원",phone:"010-1234-5678",email:`member-${suffix}@example.com`,company:"Talos Test",grade:"VIP",administratorType:"NONE",active:"true",joinedDate:"2031-03-01",password:"StrongPassword!2031"},principal,new Date().toISOString(),`it-member-${suffix}`);
+    const [stored]=await sql`SELECT password_hash FROM hotel_members WHERE property_id='prop-seoul' AND member_no=${`M${suffix.toUpperCase()}`}`;assert.match(stored.password_hash,/^scrypt\$16384\$8\$1\$/u);assert.ok(!stored.password_hash.includes("StrongPassword"));
+    const masked=await loadHotelMembers(db,new URLSearchParams({q:`M${suffix.toUpperCase()}`}),{principalType:"SUPPORT",piiMode:"MASKED"});assert.equal(masked.members.length,1);assert.equal(masked.members[0].phone,"***-****-****");assert.equal(masked.members[0].email,"masked@support.invalid");
+    const stay=await loadStayOperations(db,new URLSearchParams({mode:"occupancy",date:"2031-03-01"}));assert.equal(stay.dates.length,18);assert.ok(stay.rooms.length>0);assert.ok(Array.isArray(stay.ratePlans));
+  }finally{await sql`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND actor='member.integration@example.com'`;await sql`DELETE FROM idempotency_keys WHERE property_id='prop-seoul' AND actor='member.integration@example.com'`;await sql`DELETE FROM hotel_members WHERE property_id='prop-seoul' AND member_no=${`M${suffix.toUpperCase()}`}`;await closePmsDatabase();await sql.end({timeout:2});}
 });
 
 test("flags and structured payloads use native types with reservation invariants", { skip }, async () => {

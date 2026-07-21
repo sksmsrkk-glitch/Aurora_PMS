@@ -3,8 +3,8 @@ import type { PmsDatabase } from "./pms-database";
 
 // Bump this value in the same change that adds the latest required migration.
 // A unit test keeps it synchronized with the migration directory.
-export const REQUIRED_SCHEMA_VERSION = "202607210024_hotelstory_reporting_deposits";
-export const REQUIRED_TENANT_POLICY_COUNT = 77;
+export const REQUIRED_SCHEMA_VERSION = "202607210025_hotelstory_final_operations";
+export const REQUIRED_TENANT_POLICY_COUNT = 80;
 
 type RuntimeContractRow = {
   migration_ready: boolean;

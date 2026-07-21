@@ -22,7 +22,7 @@ flowchart TD
 - `properties`는 실제 PMS 데이터 격리 단위입니다. 한 조직은 여러 호텔을 가질 수 있습니다.
 - `organization_memberships`는 조직 Owner/Admin/Analyst를 Auth UUID와 이메일의 이중 일치로 연결합니다.
 - `role_assignments`는 호텔별 직무와 14개 workspace의 `NONE/READ/WRITE`, export 권한을 보관합니다.
-- 77개 tenant policy와 `FORCE ROW LEVEL SECURITY`가 앱 실수나 누락 SQL의 교차 호텔 접근을 DB에서 거부합니다.
+- 80개 tenant policy와 `FORCE ROW LEVEL SECURITY`가 앱 실수나 누락 SQL의 교차 호텔 접근을 DB에서 거부합니다.
 - 루트 연결은 자유 SQL을 허용하지 않습니다. 인증 조회, 도메인 해석, 프로비저닝, worker claim처럼 입력 구조가 고정된 capability만 제공합니다.
 
 ## 2. Control Plane과 프로비저닝
@@ -199,4 +199,4 @@ npm run db:supabase:smoke
 npm run build
 ```
 
-PostgreSQL integration은 20개 동시 마지막 1실 예약 중 정확히 1건 성공, 분산 rate limit, RLS 교차 호텔 차단, worker 중복 claim·10분 lease 회수·고아 attempt 종결·DEAD trigger 새 cycle·RUNNING lease 보존, 정지 subscription의 도메인·CMS projection 차단, 바우처 delivery 멱등 수렴·payload 불변성, 채널 비활성 ARI 차단·5,000셀 bounded 블럭요금·운영 카탈로그 격리, 리드타임·예약곡선·BOOK/REV YoY DB 대조, 채널 입금/복구·동시 중복 차단, 병렬 객실 한도, JIT revoke, import commit/rollback을 실제 migration에서 검증합니다. 배포는 반드시 최신 migration `202607210024_hotelstory_reporting_deposits` 적용과 runtime contract 확인을 먼저 완료한 뒤 같은 commit의 애플리케이션 코드를 올립니다.
+PostgreSQL integration은 20개 동시 마지막 1실 예약 중 정확히 1건 성공, 분산 rate limit, RLS 교차 호텔 차단, worker 중복 claim·10분 lease 회수·고아 attempt 종결·DEAD trigger 새 cycle·RUNNING lease 보존, 정지 subscription의 도메인·CMS projection 차단, 바우처 delivery 멱등 수렴·payload 불변성, 채널 비활성 ARI 차단·5,000셀 bounded 블럭요금·운영 카탈로그 격리, 리드타임·예약곡선·BOOK/REV YoY DB 대조, 채널 입금/복구·동시 중복 차단, 연회 시간대 병렬 단일 성공, 회원 비밀번호 평문 비저장·PII 마스킹, 예약 CSV 내장 고객·commit replay·rollback, 병렬 객실 한도, JIT revoke를 실제 migration에서 검증합니다. 배포는 반드시 최신 migration `202607210025_hotelstory_final_operations` 적용과 runtime contract 확인을 먼저 완료한 뒤 같은 commit의 애플리케이션 코드를 올립니다.

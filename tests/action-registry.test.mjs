@@ -5,13 +5,20 @@ import { actionRegistry, registrationFor } from "../app/api/pms/action-registry.
 import { mapPmsError } from "../app/api/pms/error-map.ts";
 
 test("every registered action has one capability, domain, and Zod schema",()=>{
-  assert.equal(actionRegistry.size,76);
+  assert.equal(actionRegistry.size,82);
   for(const [action,registration] of actionRegistry){
     assert.equal(registration.action,action);
     assert.ok(registration.capability);
     assert.ok(registration.domain);
     assert.equal(typeof registration.schema.safeParse({action}).success,"boolean");
   }
+});
+
+test("HotelStory banquet and member commands have closed required fields",()=>{
+  assert.equal(registrationFor("upsert_banquet_reservation").schema.safeParse({action:"upsert_banquet_reservation",venueId:"v1",eventDate:"2031-01-02",startTime:"10:00",endTime:"12:00",eventName:"행사",contactName:"담당자",attendees:"30",fee:"100000"}).success,true);
+  assert.equal(registrationFor("upsert_banquet_reservation").schema.safeParse({action:"upsert_banquet_reservation",venueId:"v1",eventDate:"01/02/2031"}).success,false);
+  assert.equal(registrationFor("reset_hotel_member_password").capability,"USER_ADMIN");
+  assert.equal(registrationFor("set_banquet_reservation_status").capability,"GROUP_WRITE");
 });
 
 test("Zod rejects malformed commands before a domain handler runs",()=>{
@@ -79,4 +86,5 @@ test("database errors map through a stable table instead of includes branches",(
   });
   assert.equal(mapPmsError("unexpected driver fault"),null);
   assert.equal(mapPmsError("receipt must match the current paid settlement journal")?.status,409);
+  assert.equal(mapPmsError("banquet venue time slot overlaps an active reservation")?.status,409);
 });

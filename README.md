@@ -14,7 +14,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607210024_hotelstory_reporting_deposits` |
+| 스키마 계약 | `202607210025_hotelstory_final_operations` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
@@ -28,6 +28,10 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - HotelStory형 판매채널 카탈로그: 사용 가능/설정 목록, 연동·자체 배지, 드래그 등록·정렬, 활성/중지, 외부 호텔 ID·서플라이어·별도관리와 상품별 D-n 마감
 - 객실×판매상품×채널×날짜 블럭요금 매트릭스: Today/1W/2W/4W/Month, 31일 조회, 최대 5,000셀 할당·판매가·입금가·MLOS·CTA·CTD 원자 저장과 ARI/Outbox 생성
 - 호텔별 성수기·휴일·편의시설·유료 서비스·이미지 운영 카탈로그
+- HotelStory형 연회장 월 캘린더와 행사 등록·편집, 수용 인원·상태·금액·메모, 동일 장소/일자 시간대의 DB 동시 충돌 차단
+- 당일 체크인·체크아웃 전용 URL과 판매상품 복합필터, 객실×18일 점유 timeline, 예약 상세 딥링크
+- 예약 Excel용 CSV 양식·2,000행 dry-run·오류 결과·원자 commit/replay·변경 감지 rollback, CSV 안의 고객 동시 생성
+- 호텔·홈페이지 회원 코드·ID·연락처·회사·등급·관리유형·활성 관리, scrypt 비밀번호 해시와 지원 PII 마스킹
 - 폴리오 창·라우팅·분할·반대전표·수납·환불·AR 이관·후불 수납
 - 그룹 블록·rooming list·pickup·cutoff, 채널 연결·계약·ARI·inbound·outbox
 - 복식부기 journal, 채널 수수료/입금가 정산, P/L, 15종 리포트와 CSV/XLSX; 리드타임·4개 시간대 예약곡선·월별 BOOK/REV YoY·후불 정산·입금/복구 원장
@@ -215,6 +219,7 @@ flowchart LR
 | 예약 바우처 immutable payload·메일 전달 queue | `202607210022_reservation_voucher_delivery.sql` |
 | 채널 카탈로그·블럭요금·호텔 운영 카탈로그 | `202607210023_channel_rateblock_operational_catalogs.sql` |
 | HotelStory 리포트·채널 입금/복구 불변 원장 | `202607210024_hotelstory_reporting_deposits.sql` |
+| HotelStory 연회·당일 운영·예약 import·호텔/웹 회원 | `202607210025_hotelstory_final_operations.sql` |
 
 배포 순서:
 
@@ -240,6 +245,9 @@ npm run release:build
 - `?view=channel_catalog`: 사용 가능/설정 채널, 외부 연결, 상품 마감과 Rate Plan을 한 번에 반환
 - `?view=rateblock&from&to&connectionId&roomTypeId`: 최대 31일의 채널×상품×객실 블럭요금과 실제 객실·예약·그룹 hold 잔여량 반환
 - `?view=hotel_catalogs`: 성수기·휴일·편의시설·서비스·홈페이지 이미지 카탈로그 반환
+- `?view=stay_operations&mode=checkin|checkout|occupancy&date=YYYY-MM-DD`: 당일 queue 또는 18일 점유 projection; 고객·예약·전화·객실, 채널, 타입, 상품 필터
+- `?view=banquet&month=YYYY-MM`: 월간 연회 예약과 연회장 master; 검색·장소·상태 필터
+- `?view=hotel_members`: 호텔·웹 회원 500건 이하 서버 검색; 이름·전화·ID·회사·코드·가입일·활성·등급·관리유형 필터
 - `?view=inventory|accounting|website`: 기간 또는 도메인 전용 projection
 - `?view=report&report=...`: 최대 367일·25/50/100행의 15종 서버 리포트. 공통 `q/from/to/status/source/roomTypeId`와 채널 입금의 `scope=EXCLUDE_ONSITE`를 지원하고 lead time·예약곡선·YoY·후불·입금 집계를 반환합니다.
 - 기본 view: 그룹, 재무, 채널을 포함한 전체 read model
@@ -251,6 +259,14 @@ npm run release:build
 - 성공 응답은 전체 snapshot이 아니라 변경 entity와 invalidation key를 담은 mutation receipt입니다.
 - 오류는 안정적인 코드 매핑으로 변환하며 문자열 `includes()` 분기를 사용하지 않습니다.
 - `mark_channel_settlement_paid`는 입금일·메모와 회계 전표를 확정하고, `restore_channel_settlement_payment`는 필수 사유로 반대전표를 생성해 미입금 상태로 복구합니다.
+- 연회·회원 명령은 `GROUP_WRITE`/`USER_ADMIN`, Zod, optimistic version, audit, strict idempotency를 통과합니다. 연회 중복은 API가 아니라 PostgreSQL trigger가 최종 차단합니다.
+
+### `GET/POST /api/pms/reservation-imports`
+
+- `RESERVATION_WRITE`와 호텔의 `DATA_IMPORT` entitlement를 모두 요구하며 serverless 공유 rate limit과 same-origin 검사를 적용합니다.
+- `dry_run`은 SHA-256 content hash, 필수 열, 숙박 범위, 객실타입, 활성 상품, 확인번호, 고객을 검증하고 행 오류를 저장합니다.
+- `commit`은 오류 0건인 job만 guest·예약·folio·stay nights와 함께 전량 원자 반영합니다. 같은 파일 재요청은 기존 commit receipt를 반환합니다.
+- `rollback`은 예약 상태·version·folio 전표가 이관 후 바뀌지 않은 경우만 생성 entity를 역순으로 삭제하고 증빙 job은 `ROLLED_BACK`으로 보존합니다.
 
 ### `GET /api/booking/availability`
 
