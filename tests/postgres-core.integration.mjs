@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import postgres from "postgres";
 import { consumeRateLimit } from "../app/api/rate-limit.ts";
+import { loadPmsSearch } from "../app/api/pms/frontdesk-read.ts";
 import { snapshot } from "../app/api/pms/read-model.ts";
 import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
 
@@ -165,6 +166,9 @@ test("dashboard comparisons match current and prior business-day facts", { skip 
           WHERE r.property_id='prop-seoul' AND r.arrival_date=c.current_day
             AND r.status NOT IN ('CANCELLED','NO_SHOW')) current_arrivals,
         (SELECT COUNT(*)::int FROM reservations r,context c
+          WHERE r.property_id='prop-seoul' AND r.arrival_date=c.current_day
+            AND r.status IN ('IN_HOUSE','CHECKED_OUT')) current_processed_arrivals,
+        (SELECT COUNT(*)::int FROM reservations r,context c
           WHERE r.property_id='prop-seoul' AND r.arrival_date<=c.current_day
             AND r.departure_date>c.current_day
             AND r.status NOT IN ('CANCELLED','NO_SHOW')) current_occupied,
@@ -176,6 +180,7 @@ test("dashboard comparisons match current and prior business-day facts", { skip 
     const db = scopePmsDatabase(getPmsDatabase({ DATABASE_URL: databaseUrl }), "prop-seoul");
     const model = await snapshot(db);
     assert.equal(model.metrics.comparison.current.arrivals, expected.current_arrivals);
+    assert.equal(model.metrics.comparison.current.processedArrivals, expected.current_processed_arrivals);
     assert.equal(model.metrics.comparison.current.occupied, expected.current_occupied);
     assert.equal(model.metrics.comparison.prior.arrivals, expected.prior_arrivals);
     assert.equal(model.metrics.occupied, model.metrics.comparison.current.occupied);
@@ -186,6 +191,24 @@ test("dashboard comparisons match current and prior business-day facts", { skip 
     if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previousDatabaseUrl;
     await sql.end({ timeout: 2 });
+  }
+});
+
+test("global PMS search executes every permitted domain query on the production schema", { skip }, async () => {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  try {
+    process.env.DATABASE_URL = databaseUrl;
+    const db = scopePmsDatabase(getPmsDatabase({ DATABASE_URL: databaseUrl }), "prop-seoul");
+    const result = await loadPmsSearch(db, new URLSearchParams({ q: "Sofia" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.ok(result.total >= 1);
+    assert.ok(result.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("Sofia"))));
+  } finally {
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
   }
 });
 

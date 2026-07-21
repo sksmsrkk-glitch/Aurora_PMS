@@ -163,7 +163,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | --- | --- | --- |
 | Core Snapshot | `GET /api/pms?view=core` | 오늘 도착·현재 재실·오늘 체크아웃과 객실·14일 재고만 제공; 과거 전체 예약은 제외 |
 | 프런트 페이지 | `GET /api/pms?view=frontdesk` | 업무 큐·복합 필터·정렬·최대 50행 server pagination |
-| 통합 검색 | `GET /api/pms?view=search` | 현재 직원이 열 수 있는 예약·객실·AR 도메인만 각각 8/6/6건 반환 |
+| 통합 검색 | `GET /api/pms?view=search` | 현재 직원이 열 수 있는 예약·객실·AR 도메인만 각각 8/6/6건 반환; AR 잔액은 청구서의 저장 값이 아니라 원장 debit-credit 합계로 계산 |
 | 예약 가용성 | `GET /api/pms?view=reservation_availability` | 최대 30박의 타입 재고·블록 hold·Rate Plan·MLOS·CTA·CTD·일자 요금 계산 |
 | 장기 재고 | `GET /api/pms?view=inventory` | 선택은 730일까지 허용하되 UI가 한 요청당 14/30일만 조회 |
 | 회계 센터 | `GET /api/pms?view=accounting` | 기간별 journal, settlement, account, P/L summary를 별도 조회 |

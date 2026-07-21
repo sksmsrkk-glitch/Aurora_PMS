@@ -5,6 +5,7 @@ import { ROLE_ACCESS_TEMPLATES } from "../app/access-control.ts";
 import { navigationGroupsFor, primaryNavigationFor } from "../app/pms-navigation.ts";
 import { parseFrontdeskQuery, PmsReadError } from "../app/api/pms/frontdesk-read.ts";
 import { boundedCalendarWindow, inclusiveDays, matchingDayCount } from "../app/inventory-window.ts";
+import { reservationOfferWindow } from "../app/reservation-wizard.tsx";
 
 test("role navigation exposes only authorized workspaces in job-first order", () => {
   const housekeeping = navigationGroupsFor("HOUSEKEEPING", ROLE_ACCESS_TEMPLATES.HOUSEKEEPING.permissions);
@@ -44,4 +45,15 @@ test("long inventory selections always render a bounded read window", () => {
     from: "2026-12-25", to: "2026-12-31", days: 7,
   });
   assert.equal(matchingDayCount("2026-07-01", "2026-07-31", [1, 2, 3, 4, 5]), 23);
+});
+
+test("reservation availability renders five room types and supports plan-aware filtering", () => {
+  const offers = Array.from({ length: 12 }, (_, index) => ({
+    roomTypeId: `type-${index}`, code: `T${index}`, name: `객실 ${index}`,
+    capacity: 2, available: 1,
+    plans: [{ id: `plan-${index}`, code: index === 9 ? "CORP" : "BAR", name: index === 9 ? "기업 전용" : "일반", cancellationPolicy: "", mealPlan: "ROOM_ONLY", guaranteePolicy: "", total: 100000, average: 100000, nights: [] }],
+  }));
+  assert.deepEqual(reservationOfferWindow(offers, "", 0).visibleOffers.map((item) => item.roomTypeId), ["type-0", "type-1", "type-2", "type-3", "type-4"]);
+  assert.equal(reservationOfferWindow(offers, "", 99).safePage, 2);
+  assert.deepEqual(reservationOfferWindow(offers, "기업 전용", 0).visibleOffers.map((item) => item.roomTypeId), ["type-9"]);
 });
