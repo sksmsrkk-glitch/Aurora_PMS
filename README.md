@@ -23,6 +23,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - 예약 생성·편집·취소·노쇼·배정·체크인·룸 무브·체크아웃
 - 최대 730일 선택·벌크 범위를 유지하면서 14/30일 읽기 창만 렌더링하는 재고 캘린더, 5,000셀 원자적 벌크 저장, MLOS·CTA·CTD·stop-sell
 - HotelStory형 판매 상품 Rate Plan, 부모 상품 요금 상속, 식사·패키지·판매기간·기준/최대 인원·인원별 요금, 예약 시 상품 snapshot, 객실 타입 매핑, 일자별 직판 요금과 홈페이지 실시간 가격·재고
+- HotelStory형 예약 상세: 예약자/투숙자 분리, 고객요청·응답, 관리자/호텔 메모, 예약 확인, 시간 연장, PCI-safe Card Info, 연계·복사, 일자별 요금·취소정책과 4종 인라인 로그
 - 폴리오 창·라우팅·분할·반대전표·수납·환불·AR 이관·후불 수납
 - 그룹 블록·rooming list·pickup·cutoff, 채널 연결·계약·ARI·inbound·outbox
 - 복식부기 journal, 채널 수수료/입금가 정산, P/L, 11종 리포트와 CSV/XLSX
@@ -41,6 +42,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 1. 업무 정보구조 | 직원 역할별로 `오늘 운영`, `판매·매출`, `정산·회계`, `호텔 설정` 메뉴를 재정렬하고 허용된 페이지만 표시 | 역할 템플릿의 14개 페이지 권한과 실제 메뉴가 행동 테스트에서 일치 |
 | 2. 검색·프런트 | 모든 화면에서 `Cmd/Ctrl+K` 통합 검색, 오늘 업무 큐, 서버 필터·정렬·20건 페이지네이션, 저장 보기를 제공 | 검색 도메인이 페이지 권한을 넘지 않고 URL 입력은 enum·길이·최대 50건으로 제한 |
 | 3. 예약 생성 | HotelStory형 목록/달력 전환 → 상품·일정·인원 → 실시간 가용 객실·요금 → 고객·배정 → 최종 검토; 목록의 객실종류·조식·기준/최대인원·총액 비교와 월 달력의 상품별 가격·잔여/전체 객실 | 목록·달력이 하나의 고정 배치 projection을 공유하고, DB가 정원·30박·재고·MLOS·CTA·CTD·판매/숙박기간·인원요금을 재검증한 뒤 매일의 상품 snapshot과 예약을 원자 확정 |
+| 3-1. 예약 상세 | 좌측 예약/상품/일자요금/취소규정, 우측 예약자와 실제 투숙자/요청/응답/메모/확인/시간/Card Info, 하단 연동·수정·요금·블럭 로그 | 예약자≠투숙자 저장, 기대 버전 경쟁 차단, PCI 원문 거부, 취소정책 snapshot 불변, 감사·Outbox·멱등 영수증 원자 반영 |
 | 4. 요금·재고 | 730일 전체 선택과 벌크 편집은 유지하되 서버 조회와 DOM은 14/30일 창, 객실 타입은 페이지당 10개로 제한 | 365일 선택도 첫 읽기·렌더가 14열이며 50셀 초과 벌크는 영향 범위 재확인 필수 |
 | 5. 리포트 | 업무별 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 25/50/100행, export 확인 | 서버 필터·마스킹·export 권한·감사 로그를 우회하지 않고 CSV/XLSX 생성 전 범위를 확인 |
 | 6. 모바일·가독성·성능 | 역할별 4개 핵심 하단 내비게이션, 카드형 예약 큐, 전체폭 하단 시트, 12/14px·44px 하한, reduced motion | 390px에서 수평 root overflow 없이 핵심 업무와 팝업을 조작하고 core는 오늘 업무 예약만 전달 |
@@ -135,7 +137,7 @@ flowchart LR
 | 홈페이지 CMS projection | `app/api/booking/website-service.ts` |
 | PMS shell | `app/(pms)/_components/pms-shell.tsx` |
 | 역할별 메뉴·모바일 핵심 업무 | `app/pms-navigation.ts` |
-| 프런트 업무대기열·예약 마법사 | `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx` |
+| 프런트 업무대기열·예약 마법사·상세 | `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx`, `app/reservation-detail-panel.tsx` |
 | 재고 캘린더 | `app/inventory-calendar.tsx` |
 | 공개 호텔 SEO | `app/hotel/seo.ts` |
 | 멀티호텔 Control Plane | `app/(pms)/platform`, `app/api/platform/route.ts` |
@@ -197,6 +199,8 @@ flowchart LR
 | worker lease reaper·attempt cycle·제한형 DEAD 복구 | `202607200017_worker_delivery_recovery.sql` |
 | exhausted RETRY 회수 인덱스·조용한 전달 유실 차단 | `202607200018_exhausted_worker_retry_recovery.sql` |
 | enqueue DEAD 새 cycle 초기화·RUNNING lease 보존 | `202607200019_worker_enqueue_revival_guards.sql` |
+| HotelStory 판매 상품·인원별 요금·상품 snapshot | `202607210020_rate_product_catalog.sql` |
+| 예약자/투숙자·운영 옵션·취소정책·연계예약 | `202607210021_reservation_operational_detail.sql` |
 
 배포 순서:
 
@@ -217,6 +221,7 @@ npm run release:build
 - 인증·property assignment 필수
 - `?view=core`: 첫 화면용 예약, 객실, 재고, 실제 대시보드 비교 지표
 - `?view=groups|finance|channels`: 해당 화면만 위한 bounded projection(각 4/8/8 query)
+- `?view=reservation_availability|reservation_calendar|reservation_detail`: 목록·월 달력·단건 상세 전용 bounded projection
 - `?view=inventory|accounting|website|report`: 기간 또는 도메인 전용 projection
 - 기본 view: 그룹, 재무, 채널을 포함한 전체 read model
 - 응답은 `private, no-store`, gzip representation cache를 사용합니다.

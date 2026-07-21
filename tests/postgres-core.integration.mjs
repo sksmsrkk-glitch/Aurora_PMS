@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import postgres from "postgres";
 import { consumeRateLimit } from "../app/api/rate-limit.ts";
-import { loadPmsSearch, loadReservationAvailability, loadReservationCalendar } from "../app/api/pms/frontdesk-read.ts";
+import { loadPmsSearch, loadReservationAvailability, loadReservationCalendar, loadReservationDetail } from "../app/api/pms/frontdesk-read.ts";
 import { snapshot } from "../app/api/pms/read-model.ts";
 import { handlePmsPost } from "../app/api/pms/command-gateway.ts";
 import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
@@ -428,6 +428,53 @@ test("authenticated reservation command writes product snapshots on the upgraded
       const envKey={databaseUrl:"DATABASE_URL",allow:"PMS_ALLOW_DEMO_AUTH",token:"PMS_DEMO_AUTH_TOKEN",email:"PMS_DEMO_USER_EMAIL",rate:"PMS_RATE_LIMIT_SECRET",node:"NODE_ENV"}[key];
       if(value===undefined)delete process.env[envKey];else process.env[envKey]=value;
     }
+    await sql.end({timeout:2});
+  }
+});
+
+test("reservation detail separates booker and guest with optimistic audit history", { skip }, async () => {
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),email=`detail-command-${suffix}@example.com`;
+  const assignmentId=`it-detail-role-${suffix}`,token=`integration-detail-token-${crypto.randomUUID()}`;
+  const previous={databaseUrl:process.env.DATABASE_URL,allow:process.env.PMS_ALLOW_DEMO_AUTH,token:process.env.PMS_DEMO_AUTH_TOKEN,email:process.env.PMS_DEMO_USER_EMAIL,rate:process.env.PMS_RATE_LIMIT_SECRET,node:process.env.NODE_ENV};
+  const permissions={overview:"WRITE",frontdesk:"WRITE",inventory:"WRITE",website:"WRITE",groups:"WRITE",finance:"WRITE",accounting:"WRITE",channels:"WRITE",rooms:"WRITE",reports:"WRITE",master:"WRITE",revenue:"WRITE",users:"WRITE",audit:"WRITE"};
+  const firstName=`Stay${suffix}`,secondName=`Link${suffix}`,keys=[];
+  const post=async(body,key)=>{keys.push(key);return handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":key},body:JSON.stringify(body)}));};
+  try {
+    await sql`INSERT INTO role_assignments(id,property_id,email,role,active,created_at,display_name,workspace_permissions,can_export,updated_at) VALUES (${assignmentId},'prop-seoul',${email},'PROPERTY_ADMIN',true,now(),'Detail Command',${sql.json(permissions)},true,now())`;
+    process.env.DATABASE_URL=databaseUrl;process.env.PMS_ALLOW_DEMO_AUTH="true";process.env.PMS_DEMO_AUTH_TOKEN=token;process.env.PMS_DEMO_USER_EMAIL=email;process.env.PMS_RATE_LIMIT_SECRET=`integration-rate-${crypto.randomUUID()}`;process.env.NODE_ENV="test";
+    for(const [name,arrival,departure] of [[firstName,"2032-02-10","2032-02-12"],[secondName,"2032-03-10","2032-03-11"]]){
+      const response=await post({action:"create_reservation",firstName:name,lastName:"Guest",email:`${name.toLowerCase()}@example.com`,phone:"010-1234-5678",arrivalDate:arrival,departureDate:departure,roomTypeId:"rt-dlx",adults:"2",children:"0",ratePlan:"BAR",source:"Integration",nightlyRate:"180000",rateOverride:"false"},`detail-create-${name}`);
+      assert.equal(response.status,200,await response.text());
+    }
+    const [source,target]=await sql`SELECT r.id,r.confirmation_no,r.guest_id,r.version,g.first_name FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id WHERE r.property_id='prop-seoul' AND g.first_name IN (${firstName},${secondName}) ORDER BY g.first_name DESC`;
+    assert.equal(source.first_name,firstName);
+    const update=await post({action:"update_reservation_detail",reservationId:source.id,expectedVersion:String(source.version),bookerName:"Agency Booker",bookerPhone:"02-123-4567",bookerEmail:"booker@example.com",guestFirstName:"Actual",guestLastName:"Staying Guest",guestPhone:"010-9999-1111",guestEmail:"stay@example.com",adults:"1",children:"1",channelProductName:"Breakfast Package",paymentType:"PREPAID",guestRequest:"High floor",guestRequestResponse:"Assigned where possible",managerMemo:"VIP review",hotelMemo:"Welcome amenity",reservationChecked:"true",earlyCheckin:"true",earlyCheckinTime:"08:30",lateCheckout:"true",lateCheckoutTime:"14:00",cardInfoRef:"tok_test_****4242",serviceFeeIncluded:"false"},`detail-update-${suffix}`);
+    assert.equal(update.status,200,await update.text());
+    const link=await post({action:"link_reservation",reservationId:source.id,linkedConfirmationNo:target.confirmation_no,relationType:"COMPANION",notes:"Travel together"},`detail-link-${suffix}`);
+    assert.equal(link.status,200,await link.text());
+    const scoped=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul");
+    const detail=await loadReservationDetail(scoped,source.id,{piiMode:"FULL"});
+    assert.equal(detail.reservation.booker_name,"Agency Booker");
+    assert.equal(detail.reservation.first_name,"Actual");
+    assert.equal(detail.reservation.children,1);
+    assert.equal(detail.reservation.early_checkin_time,"08:30:00");
+    assert.ok(Array.isArray(detail.reservation.cancellation_terms));
+    assert.equal(detail.links[0].confirmation_no,target.confirmation_no);
+    assert.ok(detail.logs.edits.some(row=>row.action==="UPDATE_RESERVATION_DETAIL"));
+    const concurrentPayload={action:"update_reservation_detail",reservationId:source.id,expectedVersion:"2",bookerName:"Agency Booker",bookerPhone:"02-123-4567",bookerEmail:"booker@example.com",guestFirstName:"Actual",guestLastName:"Staying Guest",guestPhone:"010-9999-1111",guestEmail:"stay@example.com",adults:"1",children:"1",channelProductName:"Breakfast Package",paymentType:"PREPAID",guestRequest:"Concurrent edit",guestRequestResponse:"Assigned",managerMemo:"Reviewed",hotelMemo:"Amenity",reservationChecked:"true",earlyCheckin:"false",lateCheckout:"false",cardInfoRef:"tok_test_****4242",serviceFeeIncluded:"false"};
+    const concurrent=await Promise.all([post(concurrentPayload,`detail-race-a-${suffix}`),post({...concurrentPayload,guestRequest:"Competing edit"},`detail-race-b-${suffix}`)]);
+    assert.deepEqual(concurrent.map(response=>response.status).sort((a,b)=>a-b),[200,409]);
+    const rejected=await post({action:"update_reservation_detail",reservationId:source.id,expectedVersion:"3",bookerName:"Agency Booker",guestFirstName:"Actual",guestLastName:"Staying Guest",adults:"1",children:"1",paymentType:"PREPAID",reservationChecked:"true",earlyCheckin:"false",lateCheckout:"false",cardInfoRef:"4111111111111111"},`detail-pci-${suffix}`);
+    assert.equal(rejected.status,400);
+    const [unchanged]=await sql`SELECT version,card_info_ref FROM reservations WHERE id=${source.id}`;
+    assert.equal(unchanged.version,3);assert.equal(unchanged.card_info_ref,"tok_test_****4242");
+    const [contract]=await sql`SELECT (SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.reservation_links'::regclass) forced_rls,(SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='reservations' AND column_name='early_checkin_time') early_type`;
+    assert.equal(contract.forced_rls,true);assert.equal(contract.early_type,"time without time zone");
+  } finally {
+    await sql.begin(async(tx)=>{await tx.unsafe("SET LOCAL session_replication_role='replica'");const rows=await tx`SELECT r.id,r.guest_id FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id WHERE r.property_id='prop-seoul' AND g.first_name IN (${firstName},${secondName},'Actual')`;for(const row of rows){await tx`DELETE FROM reservation_links WHERE property_id='prop-seoul' AND (reservation_id=${row.id} OR linked_reservation_id=${row.id})`;await tx`DELETE FROM worker_attempts WHERE property_id='prop-seoul' AND job_id IN (SELECT id FROM worker_jobs WHERE source_id IN (SELECT id FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=${row.id}))`;await tx`DELETE FROM worker_jobs WHERE property_id='prop-seoul' AND source_id IN (SELECT id FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=${row.id})`;await tx`DELETE FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=${row.id}`;await tx`DELETE FROM reservation_rate_nights WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;await tx`DELETE FROM reservation_nights WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;await tx`DELETE FROM reservation_type_nights WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;await tx`DELETE FROM folio_windows WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;await tx`DELETE FROM reservation_mutations WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;await tx`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND entity_id=${row.id}`;await tx`DELETE FROM reservations WHERE id=${row.id}`;await tx`DELETE FROM guests WHERE id=${row.guest_id}`;}});
+    for(const key of keys)await sql`DELETE FROM idempotency_keys WHERE property_id='prop-seoul' AND key=${key}`;
+    await sql`DELETE FROM api_rate_limits WHERE scope='pms-write'`;await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;await closePmsDatabase();
+    for(const [key,value] of Object.entries(previous)){const envKey={databaseUrl:"DATABASE_URL",allow:"PMS_ALLOW_DEMO_AUTH",token:"PMS_DEMO_AUTH_TOKEN",email:"PMS_DEMO_USER_EMAIL",rate:"PMS_RATE_LIMIT_SECRET",node:"NODE_ENV"}[key];if(value===undefined)delete process.env[envKey];else process.env[envKey]=value;}
     await sql.end({timeout:2});
   }
 });

@@ -6,7 +6,7 @@ export type ActionDomain =
   | "integrations" | "accounting" | "website" | "operations" | "reports" | "users";
 
 const actionCapability = {
-  create_reservation:"RESERVATION_WRITE",edit_reservation:"RESERVATION_WRITE",cancel_reservation:"RESERVATION_WRITE",assign_room:"RESERVATION_WRITE",
+  create_reservation:"RESERVATION_WRITE",edit_reservation:"RESERVATION_WRITE",update_reservation_detail:"RESERVATION_WRITE",link_reservation:"RESERVATION_WRITE",cancel_reservation:"RESERVATION_WRITE",assign_room:"RESERVATION_WRITE",
   mark_no_show:"STAY_WRITE",check_in:"STAY_WRITE",check_out:"STAY_WRITE",move_room:"STAY_WRITE",
   update_inventory_control:"INVENTORY_WRITE",bulk_update_inventory_controls:"INVENTORY_WRITE",upsert_rate_plan:"INVENTORY_WRITE",
   create_account_profile:"GROUP_WRITE",create_business_block:"GROUP_WRITE",update_block_inventory:"GROUP_WRITE",add_rooming_entry:"GROUP_WRITE",cutoff_block:"GROUP_WRITE",pickup_rooming_entry:"GROUP_PICKUP",
@@ -24,7 +24,7 @@ const actionCapability = {
 export type PmsAction = keyof typeof actionCapability;
 
 const domainActions: Record<ActionDomain, readonly PmsAction[]> = {
-  reservation:["create_reservation","edit_reservation","cancel_reservation","assign_room","mark_no_show","check_in","check_out","move_room"],
+  reservation:["create_reservation","edit_reservation","update_reservation_detail","link_reservation","cancel_reservation","assign_room","mark_no_show","check_in","check_out","move_room"],
   rooms:["create_room_type","update_room_type","create_room","update_room","bulk_create_rooms","housekeeping"],
   inventory:["update_inventory_control","bulk_update_inventory_controls","upsert_rate_plan"],
   groups:["create_account_profile","create_business_block","update_block_inventory","add_rooming_entry","cutoff_block","pickup_rooming_entry"],
@@ -45,6 +45,8 @@ for (const [domain, actions] of Object.entries(domainActions) as [ActionDomain, 
 const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
   create_reservation:["firstName","lastName","arrivalDate","departureDate","roomTypeId"],
   edit_reservation:["reservationId","arrivalDate","departureDate","roomTypeId","expectedVersion"],
+  update_reservation_detail:["reservationId","expectedVersion","bookerName","guestFirstName","guestLastName","adults","children","paymentType","reservationChecked","earlyCheckin","lateCheckout"],
+  link_reservation:["reservationId","linkedConfirmationNo","relationType"],
   cancel_reservation:["reservationId","expectedVersion","reason"],assign_room:["reservationId","roomId","expectedVersion"],
   move_room:["reservationId","roomId","expectedVersion","reason"],mark_no_show:["reservationId"],check_in:["reservationId"],check_out:["reservationId"],
   create_room_type:["code","name","baseRate","capacity"],update_room_type:["roomTypeId","code","name","baseRate","capacity","expectedVersion"],

@@ -9,7 +9,7 @@
 | 메인 대시보드 | 상품별 잔여 객실·현재가·변경가, 상품/채널/일자 리포트, 채널 입금가, 전년 대비 BOOK/REV | 상품 KPI와 실데이터 대시보드 | 진행 예정 |
 | 신규 예약 목록 | Calendar/List, 입·퇴실일, 박수, 객실 수, 객실종류·조식·기준/최대인원·총액·예약 | 상품 중심 예약 생성 | 완료 — PR 2 |
 | 신규 예약 달력 | 월 이동, 판매상품 선택, 일자별 가격·잔여/전체 객실 | 상품/인원 가격과 달력 예약 | 완료 — PR 2 |
-| 예약 관리 | 2개 날짜조건, 채널/고객 검색, 상태·결제·페이지 크기, Excel import/export, 상세·바우처 | 검색 가능한 예약 원장과 상세 | PR 3·7 |
+| 예약 관리 | 2개 날짜조건, 채널/고객 검색, 상태·결제·페이지 크기, Excel import/export, 상세·바우처 | 검색 가능한 예약 원장과 상세 | 상세 완료 — PR 3; import/export PR 7 |
 | 예약 바우처 | KR/EN, 금액 표시/숨김, 제목·수신자, 다운로드·Excel·인쇄·메일 | 확인서 문서·전송 queue | PR 4 |
 | 채널 설정 | 사용 가능/선택 catalog, 통합/수동 구분, 외부 ID, 설정·수정·활성/중지·삭제·순서·로그 | 채널 catalog와 연결 lifecycle | PR 5 |
 | 신규 블록·요금 | 객실 × 상품 × 채널 × 날짜의 대량 stop-sell/재고/요금 | 대량 matrix editor | PR 5 |
@@ -26,7 +26,7 @@
 | --- | --- | --- | --- | --- |
 | A | 상품형 Rate Plan | 부모 상품 상속, 식사·패키지·판매기간·포함사항, 예약 스냅샷 | `재고 & 요금`의 판매상품 card/editor | 부모요금 변경 반영, 과거 예약 snapshot 불변 |
 | B | Calendar/List 신규 예약 | 상품·인원별 가용성과 원자 예약 | List/Calendar 전환, 객실종류·조식·기준/최대·총액 | 마지막 1실 병렬 예약 1건만 성공 |
-| C | 예약 상세 | 예약자와 투숙자 분리, 예약 옵션·상태·금액 | 한 화면 섹션형 detail | 권한·낙관적 잠금·감사 로그 |
+| C | 예약 상세 | 예약자와 투숙자 분리, 예약 옵션·상태·금액 | 한 화면 섹션형 detail | 완료 — 권한·낙관적 잠금·감사 로그 |
 | D | 확인서 | KR/EN, 금액 visibility, 문서 payload, worker delivery | PDF/Excel/인쇄/메일 dialog | 같은 요청 중복 발송 방지 |
 | E | 채널 catalog | catalog/connection/mapping lifecycle | 검색·좌우 선택·통합/수동·정렬 | tenant RLS, 외부 ID 유일성 |
 | F | block/rate matrix | 날짜별 객실·상품·채널 restriction/upsert | sticky 4축 matrix, bulk apply | 365일 fixed query/bulk count |
@@ -37,7 +37,7 @@
 | K | 오늘 업무 URL | check-in/out/occupancy projection | 독립 route·filter·deep link | 새로고침 상태 보존 |
 | L | 예약 import/export | dry-run·검증·원자 commit·rollback | template/upload/result | 교차호텔 참조 차단 |
 | M | 회원 | 고객 profile·등급·회사·승인 | 검색·상태·page size | 개인정보 권한·RLS |
-| N | 예약 inline log | 예약 entity audit projection | 상세 timeline | before/after·actor·time |
+| N | 예약 inline log | 예약·rooming/block entity audit projection | 상세 4탭 timeline | 완료 — before/after·actor·time |
 
 ## PR 1 — 판매 상품과 인원 요금
 
@@ -66,6 +66,22 @@
 - 월간 달력은 객실·날짜마다 API나 DB를 다시 호출하지 않는다. 월 범위 사실 집합을 고정된 9개 tenant-scoped 쿼리로 읽고 메모리에서 cell projection을 만든다.
 - 예약 확정은 UI의 `arrival/departure`를 command 계약의 `arrivalDate/departureDate`로 명시 변환한다. 서버는 확정 직전 상품 판매기간·숙박기간·최대인원·모든 숙박일의 실효 요금과 가용 재고를 다시 검증한다.
 - PostgreSQL 통합 테스트는 같은 상품에 대해 목록·달력의 3인 인원요금이 일치하는지 검증한다. 기존 마지막 1실 병렬 예약 테스트가 동시 요청 중 1건만 성공하는 재고 불변식을 계속 보증한다.
+
+## PR 3 — 예약 상세, 예약자/투숙자와 인라인 로그
+
+`202607210021_reservation_operational_detail.sql`은 예약의 운영 정보를 자유 메모가 아닌 typed column과 JSONB snapshot으로 승격한다. 과거 예약은 기존 투숙자 연락처를 예약자로 backfill하고 각 변경을 migration audit로 남긴다.
+
+- 예약자: 이름·전화·이메일. 기존 `guests`는 실제 투숙자이며 두 인물은 서로 달라도 정상 저장된다.
+- 상품/결제: 채널 상품명, H 객실/상품 코드, 식사, 결제구분, 서비스 요금 포함 여부를 표시한다.
+- 요청/메모: 고객요청, 호텔 응답, 관리자메모, 호텔메모를 분리하고 각각 2,000자로 제한한다.
+- 예약 확인: 확인/미확인, 얼리체크인과 레이트체크아웃의 native `time`, 성인/소인 인원을 저장한다.
+- 카드정보: 원문 PAN은 받지 않는다. 최대 160자의 PG token 또는 마스킹 참조만 허용하며 12자리 이상 연속 숫자는 DB CHECK와 command에서 모두 거부한다.
+- 취소 규정: 상품의 구조화된 취소 조건을 예약 상품 JSONB snapshot에 고정한다. 이후 상품 정책을 바꾸어도 기존 예약 화면은 예약 시점 규정을 표시한다.
+- 연계/복사: 예약번호로 동반·연박·그룹 예약을 연결하며, 예약 복사는 고객/상품을 복사한 뒤 새 일정의 재고와 판매 조건을 다시 검증해 새 예약으로 확정한다.
+- 로그: 연동/수정/요금/블럭 4탭으로 actor, 시각, before/after를 표시한다. 요금 탭은 immutable `reservation_rate_nights`도 함께 표시한다.
+- 저장은 `expectedVersion`과 `reservation_mutations(property_id,reservation_id,expected_version)` unique guard를 사용한다. 같은 버전을 동시에 저장한 두 요청 중 하나만 commit되며 모든 변경은 감사·Outbox·멱등 영수증과 원자 처리된다.
+
+PostgreSQL 통합 테스트는 예약자와 투숙자 불일치, 요청/응답·시간 옵션, 취소조건 snapshot, 연계예약, before/after 로그, PCI 원문 거부와 RLS를 운영 스키마에서 검증한다.
 
 ## 공통 완료 판정
 
