@@ -465,7 +465,7 @@ export async function commit(
       statements.push(
         db
           .prepare(
-            "INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (?,?,pms_current_property_id(),?,?,NULL,?::date,?::date,'DUE_IN',?,?,?,?,?::numeric,?::time,?,1,?,?)",
+            "INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at,booker_name,channel_product_name,payment_type) VALUES (?,?,pms_current_property_id(),?,?,NULL,?::date,?::date,'DUE_IN',?,?,?,?,?::numeric,?::time,?,1,?,?,(SELECT first_name||' '||last_name FROM guests WHERE property_id=pms_current_property_id() AND id=?),?,'HOTEL')",
           )
           .bind(
             entityId,
@@ -483,6 +483,8 @@ export async function commit(
             row.notes,
             now,
             now,
+            guestId,
+            row.rate_plan,
           ),
       );
       statements.push(

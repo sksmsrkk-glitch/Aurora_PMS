@@ -46,7 +46,7 @@ flowchart LR
   AUTH --> API["PMS Route Handler\nRBAC · Zod · idempotency"]
   UI --> API
   WEB --> BOOKING["Public Booking API\nrate · restriction · inventory validation"]
-  API --> REGISTRY["51-action registry\ndomain · capability · schema"]
+  API --> REGISTRY["58-action registry\ndomain · capability · schema"]
   REGISTRY --> ADAPTER["Tenant-scoped PmsDatabase"]
   BOOKING --> ADAPTER
   ADAPTER --> PG["Supavisor transaction pooler\nDATABASE_URL · prepared=false"]
@@ -89,6 +89,7 @@ sequenceDiagram
 | `app/global-pms-search.tsx` | 250ms debounce, 키보드 이동, 권한별 도메인 결과를 제공하는 통합 검색 |
 | `app/frontdesk-workbench.tsx` | 서버 업무 큐·복합 필터·저장 보기·20건 페이지네이션 |
 | `app/reservation-wizard.tsx` | 실시간 가용성부터 원자 예약 확정까지의 4단계 직원 예약 흐름 |
+| `app/reservation-detail-panel.tsx` | 예약자/투숙자, 운영 옵션, 일자별 요금·취소정책, 연계·복사와 4종 인라인 로그 |
 | `app/inventory-window.ts` | 장기 선택에서 14/30일 read/render 창과 벌크 영향 셀을 계산하는 순수 함수 |
 | `app/pms-action-context.tsx` | 모든 workspace가 공유하는 command/busy Context; prop drilling 제거 |
 | `app/query-provider.tsx` | TanStack Query client와 읽기 모델 cache lifecycle |
@@ -106,7 +107,7 @@ sequenceDiagram
 | `app/api/pms/action-registry.ts` | 모든 action의 도메인·필요 capability·Zod 입력 스키마 |
 | `app/api/pms/command-gateway.ts` | command 실행, strict idempotency receipt, 감사·Outbox 기록 |
 | `app/api/pms/read-model.ts` | core/full projection과 압축·짧은 읽기 cache |
-| `app/api/pms/frontdesk-read.ts` | 권한 인식 통합 검색, 프런트 페이지, 예약 가용성·요금 projection |
+| `app/api/pms/frontdesk-read.ts` | 권한 인식 통합 검색, 프런트 페이지, 예약 가용성·달력·단건 상세·인라인 로그 projection |
 | `app/api/pms/error-map.ts` | 안정된 DB 오류 코드/패턴을 HTTP 상태와 사용자 메시지로 매핑 |
 | `app/api/booking/service.ts` | 공개 판매 타입, 투숙 제한, 일별 가용재고·요금 재계산, 예약·취소 원자 처리 |
 | `app/api/booking/website-service.ts` | CMS에서 공개 승인된 호텔·객실·미디어만 읽는 서버 projection |
@@ -165,6 +166,8 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | 프런트 페이지 | `GET /api/pms?view=frontdesk` | 업무 큐·복합 필터·정렬·최대 50행 server pagination |
 | 통합 검색 | `GET /api/pms?view=search` | 현재 직원이 열 수 있는 예약·객실·AR 도메인만 각각 8/6/6건 반환; AR 잔액은 청구서의 저장 값이 아니라 원장 debit-credit 합계로 계산 |
 | 예약 가용성 | `GET /api/pms?view=reservation_availability` | 최대 30박의 타입 재고·블록 hold·Rate Plan·MLOS·CTA·CTD·일자 요금 계산 |
+| 예약 달력 | `GET /api/pms?view=reservation_calendar` | 한 상품·한 달의 일자별 타입 가격과 잔여/전체 재고를 고정 배치로 계산 |
+| 예약 상세 | `GET /api/pms?view=reservation_detail` | 단일 예약의 예약자/투숙자, 상품 snapshot, 일자 요금, 연계예약과 200건 이하 분류 로그 |
 | 장기 재고 | `GET /api/pms?view=inventory` | 선택은 730일까지 허용하되 UI가 한 요청당 14/30일만 조회 |
 | 회계 센터 | `GET /api/pms?view=accounting` | 기간별 journal, settlement, account, P/L summary를 별도 조회 |
 | 리포트 | `GET /api/pms?view=report` | 필터·정렬·페이지네이션·마스킹이 적용된 서버 읽기 모델 |
@@ -173,6 +176,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 ### 원자성 단위
 
 - 예약 생성: guest + reservation + folio window + 타입/객실 night + audit + outbox가 하나의 batch입니다.
+- 예약 상세: staying guest + booker/option reservation update + version mutation + audit + outbox + idempotency가 하나의 batch입니다.
 - 그룹 픽업: block pickup night + reservation night + rooming 상태가 같은 트랜잭션에서 이동합니다.
 - AR 이관: invoice debit + folio direct-bill payment + window 상태 전이가 함께 commit됩니다.
 - 회계 수기 전표: journal header + 모든 debit/credit line + audit + idempotency가 함께 commit됩니다.
@@ -199,6 +203,8 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | ADR-014 | 실제 workspace URL + action Context | `useState` 화면 전환은 새로고침과 딥링크가 깨지고 공통 props가 전 컴포넌트로 전파됨 | 13개 App Router 경로와 공용 command context 사용 |
 | ADR-015 | command receipt + TanStack Query invalidation | 객실 1실 변경에도 30개 쿼리 snapshot을 재계산·재렌더하던 God payload 제거 | POST는 변경 참조만 반환하고 UI가 관련 projection cache를 무효화 |
 | ADR-016 | PostgreSQL service 기반 CI behavior gate | 소스 정규식과 테스트 내부 SQLite trigger는 운영 schema drift를 잡지 못함 | PR마다 빈 PostgreSQL 17에 전체 migration을 적용하고 실제 RLS·trigger·경합 실행 |
+| ADR-017 | 예약자와 투숙자를 다른 운영 개념으로 저장 | 여행사·회사·가족 예약에서는 결제/연락 주체와 실제 투숙자가 다름 | booker는 예약 snapshot, guest는 투숙자 profile이며 상세 화면과 감사에 함께 투영 |
+| ADR-018 | 취소정책·일자요금 예약 시점 snapshot | 상품 master 변경이 과거 바우처·취소수수료·정산 근거를 바꾸면 안 됨 | JSONB cancellation terms와 immutable night rates를 상세/바우처가 우선 사용 |
 ## 직원 계정·권한 아키텍처
 
 Supabase Auth는 이메일/비밀번호 검증과 세션만 담당합니다. 권한은 변경 가능한 `user_metadata`가 아니라 tenant table인 `role_assignments`의 `property_id`, `active`, `workspace_permissions`, `can_export`, `must_change_password`에서 해석합니다. Root DB는 인증 직후 닫힌 `findActiveRoleAssignments(authUserId, email)` capability로 Auth user ID와 이메일이 모두 일치하는 배정만 읽습니다. 연결되지 않은 레거시 이메일 행은 권한으로 승격되지 않으며, 이후 직원 목록·변경·업무 데이터는 모두 property-scoped adapter와 RLS를 통과합니다.
@@ -222,6 +228,6 @@ sequenceDiagram
 
 페이지 `WRITE`는 도메인 capability 묶음으로 변환되고, action registry가 매 요청에서 이를 다시 확인합니다. 페이지 `READ`는 해당 GET projection만 허용합니다. 최초 로그인/관리자 PW 재설정 후에는 `must_change_password`가 모든 PMS GET/command를 `428`로 막고 비밀번호 교체 endpoint만 허용합니다.
 
-### ADR-017 · 역할 템플릿 + 사용자별 권한 matrix
+### ADR-019 · 역할 템플릿 + 사용자별 권한 matrix
 
 고정 역할만 사용하면 같은 프런트 직무에서도 폴리오를 입력할 사람과 예약만 조회할 사람을 구분할 수 없습니다. 반대로 capability를 사용자 화면에 직접 노출하면 운영자가 이해하기 어렵습니다. 따라서 직무는 초기 템플릿, 14개 페이지의 없음/조회/입력은 영속 권한, capability는 서버가 계산하는 실행 권한으로 분리했습니다. 이 구조는 사용자 친화성과 서버 강제를 동시에 유지합니다.

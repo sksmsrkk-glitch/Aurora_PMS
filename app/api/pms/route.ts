@@ -31,6 +31,7 @@ import {
   loadPmsSearch,
   loadReservationAvailability,
   loadReservationCalendar,
+  loadReservationDetail,
   PmsReadError,
 } from "./frontdesk-read";
 
@@ -151,6 +152,27 @@ export async function GET(request: Request) {
     try {
       return Response.json(
         await loadReservationCalendar(db, url.searchParams),
+        { headers: { "Cache-Control": "private, no-store" } },
+      );
+    } catch (error) {
+      if (error instanceof PmsReadError)
+        return Response.json({ error: error.message }, { status: error.status });
+      throw error;
+    }
+  }
+  if (view === "reservation_detail") {
+    if (!canViewWorkspace(principal.workspaceAccess, "frontdesk"))
+      return Response.json(
+        { error: "예약 상세 조회 권한이 없습니다." },
+        { status: 403 },
+      );
+    try {
+      return Response.json(
+        await loadReservationDetail(
+          db,
+          url.searchParams.get("reservationId") || "",
+          principal,
+        ),
         { headers: { "Cache-Control": "private, no-store" } },
       );
     } catch (error) {

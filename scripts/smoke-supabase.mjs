@@ -73,7 +73,7 @@ try{
       const runId=crypto.randomUUID();
       for(let index=0;index<=remaining;index+=1){
         const reservationId=`smoke-capacity-${runId}-${index}`;
-        await transaction`INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (${reservationId},${`SMOKE-CAP-${runId}-${index}`},'prop-seoul',${guest.id},${target.room_type_id},NULL,${target.stay_date},${target.departure_date},'DUE_IN',1,0,'SMOKE',${ratePlan.code},0,NULL,'',1,now(),now())`;
+        await transaction`INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,nightly_rate,eta,notes,version,created_at,updated_at,booker_name,channel_product_name,payment_type) VALUES (${reservationId},${`SMOKE-CAP-${runId}-${index}`},'prop-seoul',${guest.id},${target.room_type_id},NULL,${target.stay_date},${target.departure_date},'DUE_IN',1,0,'SMOKE',${ratePlan.code},0,NULL,'',1,now(),now(),'Smoke Test',${ratePlan.code},'HOTEL')`;
         await transaction`INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES ('prop-seoul',${reservationId},${target.room_type_id},${target.stay_date})`;
       }
       // A broken capacity trigger must still roll back every synthetic booking.

@@ -201,6 +201,104 @@ export async function loadFrontdesk(
   };
 }
 
+type ReservationLogCategory = "integration" | "edits" | "rates" | "blocks";
+
+function reservationLogCategory(action: unknown, entityType: unknown): ReservationLogCategory {
+  const value = `${String(action || "")} ${String(entityType || "")}`.toUpperCase();
+  if (/(CHANNEL|INBOUND|OUTBOUND|OUTBOX|ARI|INTEGRATION)/u.test(value)) return "integration";
+  if (/(RATE|PRICE|INVENTORY|FOLIO|PAYMENT|REFUND)/u.test(value)) return "rates";
+  if (/(BLOCK|GROUP|ROOMING|PICKUP)/u.test(value)) return "blocks";
+  return "edits";
+}
+
+/**
+ * Reservation detail is intentionally separate from the list projection. It
+ * loads only one reservation and its bounded history when the operator opens
+ * the drawer, keeping the everyday front-desk queue small.
+ */
+export async function loadReservationDetail(
+  db: PmsDatabase,
+  reservationId: string,
+  principal: Principal,
+) {
+  const id = reservationId.trim().slice(0, 80);
+  if (!id) throw new PmsReadError("예약 식별자가 필요합니다.");
+  const [detailResult, nightResult, logResult, linkResult] = await db.batch([
+    db.prepare(`SELECT r.*,p.name property_name,p.code property_code,p.currency,
+        g.first_name,g.last_name,g.email guest_email,g.phone guest_phone,g.nationality,g.vip_level,
+        rt.code room_type_code,rt.name room_type_name,rm.number room_number,
+        rp.code product_code,rp.name product_name,rp.meal_plan,rp.package_type,
+        COALESCE(r.rate_plan_snapshot->'inclusions','[]'::jsonb) inclusions,
+        COALESCE(r.rate_plan_snapshot->'cancellationTerms',rp.cancellation_terms,'[]'::jsonb) cancellation_terms,
+        COALESCE(r.rate_plan_snapshot->>'cancellationPolicy',rp.cancellation_policy,'정책 없음') cancellation_policy
+      FROM reservations r
+      JOIN properties p ON p.id=r.property_id
+      JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id
+      JOIN room_types rt ON rt.id=r.room_type_id AND rt.property_id=r.property_id
+      LEFT JOIN rooms rm ON rm.id=r.room_id AND rm.property_id=r.property_id
+      LEFT JOIN rate_plans rp ON rp.id=r.rate_plan_id AND rp.property_id=r.property_id
+      WHERE r.property_id=pms_current_property_id() AND r.id=? LIMIT 1`).bind(id),
+    db.prepare(`SELECT stay_date,sell_rate,currency,rate_plan,created_at
+      FROM reservation_rate_nights
+      WHERE property_id=pms_current_property_id() AND reservation_id=?
+      ORDER BY stay_date`).bind(id),
+    db.prepare(`WITH related_entities AS (
+        SELECT id FROM rooming_list_entries
+         WHERE property_id=pms_current_property_id() AND reservation_id=?
+        UNION
+        SELECT block_id FROM rooming_list_entries
+         WHERE property_id=pms_current_property_id() AND reservation_id=?
+      )
+      SELECT id,actor,action,entity_type,entity_id,before_json,after_json,created_at
+      FROM audit_logs
+      WHERE property_id=pms_current_property_id()
+        AND (entity_id=? OR entity_id IN (SELECT id FROM related_entities))
+      ORDER BY created_at DESC LIMIT 200`).bind(id, id, id),
+    db.prepare(`SELECT l.id,l.relation_type,l.notes,l.created_at,
+        other.id reservation_id,other.confirmation_no,other.arrival_date,other.departure_date,other.status,
+        g.first_name,g.last_name
+      FROM reservation_links l
+      JOIN reservations other ON other.property_id=l.property_id
+       AND other.id=CASE WHEN l.reservation_id=? THEN l.linked_reservation_id ELSE l.reservation_id END
+      JOIN guests g ON g.property_id=other.property_id AND g.id=other.guest_id
+      WHERE l.property_id=pms_current_property_id()
+        AND (l.reservation_id=? OR l.linked_reservation_id=?)
+      ORDER BY l.created_at DESC LIMIT 50`).bind(id, id, id),
+  ]);
+  const detail = detailResult.results[0];
+  if (!detail) throw new PmsReadError("예약을 찾지 못했습니다.", 404);
+  const masked = principal.piiMode === "MASKED"
+    ? {
+        ...detail,
+        booker_name: `${String(detail.booker_name || "").slice(0, 1)}**`,
+        booker_phone: "***-****-****",
+        booker_email: "masked@support.invalid",
+        first_name: `${String(detail.first_name || "").slice(0, 1)}**`,
+        last_name: `${String(detail.last_name || "").slice(0, 1)}**`,
+        guest_phone: "***-****-****",
+        guest_email: "masked@support.invalid",
+        guest_request: "지원 조회에서 마스킹됨",
+        guest_request_response: "지원 조회에서 마스킹됨",
+        manager_memo: "지원 조회에서 마스킹됨",
+        hotel_memo: "지원 조회에서 마스킹됨",
+        card_info_ref: null,
+      }
+    : detail;
+  const logs = { integration: [], edits: [], rates: [], blocks: [] } as Record<ReservationLogCategory, Array<Record<string, unknown>>>;
+  for (const row of logResult.results) {
+    const safe = principal.piiMode === "MASKED" ? { ...row, before_json: null, after_json: null } : row;
+    logs[reservationLogCategory(row.action, row.entity_type)].push(safe);
+  }
+  return {
+    reservation: masked,
+    rateNights: nightResult.results,
+    links: principal.piiMode === "MASKED"
+      ? linkResult.results.map((row) => ({ ...row, first_name: `${String(row.first_name || "").slice(0, 1)}**`, last_name: `${String(row.last_name || "").slice(0, 1)}**` }))
+      : linkResult.results,
+    logs,
+  };
+}
+
 function contactHint(row: Record<string, unknown>, principal: Principal) {
   if (principal.piiMode === "MASKED") return "개인정보 마스킹됨";
   const phone = String(row.phone || "").replace(/\D/gu, "");

@@ -5,7 +5,7 @@ import { actionRegistry, registrationFor } from "../app/api/pms/action-registry.
 import { mapPmsError } from "../app/api/pms/error-map.ts";
 
 test("every registered action has one capability, domain, and Zod schema",()=>{
-  assert.equal(actionRegistry.size,56);
+  assert.equal(actionRegistry.size,58);
   for(const [action,registration] of actionRegistry){
     assert.equal(registration.action,action);
     assert.ok(registration.capability);
