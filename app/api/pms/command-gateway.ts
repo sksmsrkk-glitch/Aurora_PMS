@@ -161,7 +161,7 @@ export async function handlePmsPost(request: Request) {
     } catch(error){if(error instanceof ReportRequestError)return Response.json({error:error.message},{status:error.status});throw error;}
   }
   const reservation = body.reservationId ? await db.prepare("SELECT * FROM reservations WHERE id=? AND property_id=pms_current_property_id()").bind(body.reservationId).first<Record<string, unknown>>() : null;
-  const propertyState = await db.prepare("SELECT business_date FROM properties WHERE id=pms_current_property_id()").first<{business_date:string}>(); const businessDate=String(propertyState?.business_date);
+  const propertyState = await db.prepare("SELECT business_date,currency FROM properties WHERE id=pms_current_property_id()").first<{business_date:string;currency:string}>(); const businessDate=String(propertyState?.business_date);
   try {
     if(registration.domain==="users"){
       const handled=await handleStaffAction(db,body,principal,now,idempotencyKey);
@@ -203,22 +203,37 @@ export async function handlePmsPost(request: Request) {
     } else if (body.action === "create_reservation") {
       const arrival = new Date(`${body.arrivalDate}T00:00:00Z`), departure = new Date(`${body.departureDate}T00:00:00Z`);
       if (!body.firstName?.trim() || !body.lastName?.trim() || !Number.isFinite(arrival.valueOf()) || departure <= arrival) return Response.json({error:"고객명과 올바른 숙박 일정을 입력하세요."},{status:400});
+      const stayDates=datesBetween(body.arrivalDate,body.departureDate),adults=Number(body.adults),children=Number(body.children);
+      if(!stayDates.length||stayDates.length>30||!Number.isInteger(adults)||adults<1||adults>20||!Number.isInteger(children)||children<0||children>12)return Response.json({error:"최대 30박, 성인 1~20명, 아동 0~12명 범위로 입력하세요."},{status:400});
       const type = await db.prepare("SELECT * FROM room_types WHERE id=? AND property_id=pms_current_property_id() AND active").bind(body.roomTypeId).first<Record<string,unknown>>();
       if (!type) return Response.json({error:"객실 타입이 올바르지 않습니다."},{status:400});
-      const requestedRatePlan=(body.ratePlan||"BAR").trim().toUpperCase(),ratePlan=await db.prepare("SELECT code FROM rate_plans WHERE property_id=pms_current_property_id() AND code=? AND active").bind(requestedRatePlan).first();
+      if(adults+children>Number(type.capacity))return Response.json({error:"선택한 객실 타입의 최대 투숙 인원을 초과합니다."},{status:409});
+      const requestedRatePlan=(body.ratePlan||"BAR").trim().toUpperCase(),ratePlan=await db.prepare("SELECT * FROM rate_plans WHERE property_id=pms_current_property_id() AND code=? AND active").bind(requestedRatePlan).first<Record<string,unknown>>();
       if(!ratePlan)return Response.json({error:"활성 요금제를 선택하세요."},{status:400});
       const controlError=await stayControlError(db,body.roomTypeId,body.arrivalDate,body.departureDate); if(controlError) return Response.json({error:controlError},{status:409});
       const room = body.roomId ? await db.prepare("SELECT * FROM rooms WHERE id=? AND room_type_id=? AND property_id=pms_current_property_id() AND active").bind(body.roomId,body.roomTypeId).first<Record<string,unknown>>() : null;
       if (body.roomId && !room) return Response.json({error:"선택한 객실과 객실 타입이 일치하지 않습니다."},{status:409});
+      const manualRate=Number(body.nightlyRate),rateOverride=body.rateOverride==="true";
+      if(rateOverride&&(!Number.isFinite(manualRate)||manualRate<0))return Response.json({error:"수기 적용가는 0원 이상이어야 합니다."},{status:400});
+      const roomPlan=await db.prepare("SELECT base_rate FROM rate_plan_room_types WHERE property_id=pms_current_property_id() AND rate_plan_id=? AND room_type_id=? AND active").bind(ratePlan.id,body.roomTypeId).first<{base_rate:number}>();
+      if(!roomPlan)return Response.json({error:"선택한 요금제는 이 객실 타입에 연결되어 있지 않습니다."},{status:409});
+      const calendar=await db.prepare("SELECT stay_date,sell_rate,closed,min_stay,close_to_arrival,close_to_departure FROM rate_plan_calendar WHERE property_id=pms_current_property_id() AND rate_plan_id=? AND room_type_id=? AND stay_date>=? AND stay_date<=?").bind(ratePlan.id,body.roomTypeId,body.arrivalDate,body.departureDate).all<Record<string,unknown>>(),calendarMap=new Map(calendar.results.map(row=>[String(row.stay_date),row]));
+      const base=Number(roomPlan.base_rate),adjustment=Number(ratePlan.adjustment||0),derivedBase=ratePlan.pricing_model==="OFFSET"?Math.max(0,base+adjustment):ratePlan.pricing_model==="PERCENT"?Math.max(0,Math.round(base*(1+adjustment/100))):base;
+      const nightlySnapshots=stayDates.map(stayDate=>{const row=calendarMap.get(stayDate);return {stayDate,rate:rateOverride?manualRate:Number(row?.sell_rate??derivedBase),control:row}});
+      if(nightlySnapshots.some(item=>item.control?.closed)||stayDates.length<Math.max(Number(ratePlan.min_stay||1),...nightlySnapshots.map(item=>Number(item.control?.min_stay||1))))return Response.json({error:"선택한 요금제의 판매 마감 또는 최소 숙박 조건을 확인하세요."},{status:409});
+      if(calendarMap.get(body.arrivalDate)?.close_to_arrival)return Response.json({error:"선택한 요금제는 해당 도착일 체크인(CTA)이 제한됩니다."},{status:409});
+      if(calendarMap.get(body.departureDate)?.close_to_departure)return Response.json({error:"선택한 요금제는 해당 출발일 체크아웃(CTD)이 제한됩니다."},{status:409});
+      const averageRate=Math.round(nightlySnapshots.reduce((sum,item)=>sum+item.rate,0)/nightlySnapshots.length),notes=(body.notes||"").trim().slice(0,1000),source=(body.source||"Direct").trim().slice(0,80);
       const guestId=crypto.randomUUID(), reservationId=crypto.randomUUID(), confirmation=`SEL-${body.arrivalDate.replaceAll("-","").slice(2)}-${Math.floor(1000+Math.random()*9000)}`;
       const statements = [
         db.prepare("INSERT INTO guests VALUES (?, pms_current_property_id(), ?, ?, ?, ?, 'NONE', ?, '[]', ?)").bind(guestId,body.firstName.trim(),body.lastName.trim(),body.email||null,body.phone||null,body.nationality||"KR",now),
-        db.prepare("INSERT INTO reservations VALUES (?, ?, pms_current_property_id(), ?, ?, ?, ?, ?, 'DUE_IN', ?, ?, ?, ?, ?, ?, '', 1, ?, ?)").bind(reservationId,confirmation,guestId,body.roomTypeId,body.roomId||null,body.arrivalDate,body.departureDate,Number(body.adults)||1,Number(body.children)||0,body.source||"Direct",requestedRatePlan,Number(body.nightlyRate)||Number(type.base_rate),body.eta||null,now,now),
+        db.prepare("INSERT INTO reservations VALUES (?, ?, pms_current_property_id(), ?, ?, ?, ?, ?, 'DUE_IN', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)").bind(reservationId,confirmation,guestId,body.roomTypeId,body.roomId||null,body.arrivalDate,body.departureDate,adults,children,source,requestedRatePlan,averageRate,body.eta||null,notes,now,now),
         db.prepare("INSERT INTO folio_windows VALUES (?, pms_current_property_id(), ?, 1, 'Guest Folio', 'GUEST', NULL, 'OPEN', ?, ?, NULL)").bind(`fw-${reservationId}`,reservationId,now,actor),
       ];
-      for (const stayDate of datesBetween(body.arrivalDate,body.departureDate)) {
+      for (const {stayDate,rate} of nightlySnapshots) {
         statements.push(db.prepare("INSERT INTO reservation_type_nights(property_id,reservation_id,room_type_id,stay_date) VALUES (pms_current_property_id(),?,?,?)").bind(reservationId,body.roomTypeId,stayDate));
         if (body.roomId) statements.push(db.prepare("INSERT INTO reservation_nights(property_id,reservation_id,room_id,stay_date) VALUES (pms_current_property_id(),?,?,?)").bind(reservationId,body.roomId,stayDate));
+        statements.push(db.prepare("INSERT INTO reservation_rate_nights(id,property_id,reservation_id,room_type_id,stay_date,sell_rate,currency,rate_plan,created_at) VALUES (?,pms_current_property_id(),?,?,?,?,?,?,?)").bind(crypto.randomUUID(),reservationId,body.roomTypeId,stayDate,rate,propertyState?.currency||"KRW",requestedRatePlan,now));
       }
       statements.push(db.prepare("INSERT INTO audit_logs VALUES (?, pms_current_property_id(), ?, 'CREATE_RESERVATION', 'reservation', ?, NULL, ?, ?)").bind(crypto.randomUUID(),actor,reservationId,jsonb({confirmation,status:"DUE_IN"}),now));
       statements.push(db.prepare("INSERT INTO outbox_events VALUES (?, pms_current_property_id(), 'reservation.created', 'reservation', ?, ?, 'PENDING', 0, ?, NULL)").bind(crypto.randomUUID(),reservationId,jsonb({reservationId,confirmation}),now));
