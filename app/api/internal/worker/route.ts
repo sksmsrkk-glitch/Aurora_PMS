@@ -203,7 +203,7 @@ async function processJob(job: WorkerJob) {
   if (job.job_type === "ARI_DELIVERY") {
     const update = await db
       .prepare(
-        "SELECT a.*,c.provider,c.external_property_id,m.external_room_type_id,m.external_rate_plan_id FROM ari_updates a JOIN channel_connections c ON c.id=a.connection_id JOIN channel_mappings m ON m.id=a.mapping_id WHERE a.id=? AND a.property_id=pms_current_property_id() AND c.status='ACTIVE'",
+        "SELECT a.*,c.provider,c.external_property_id,m.external_room_type_id,m.external_rate_plan_id FROM ari_updates a JOIN channel_connections c ON c.id=a.connection_id JOIN channel_mappings m ON m.id=a.mapping_id JOIN property_channel_settings pcs ON pcs.connection_id=c.id AND pcs.property_id=c.property_id AND pcs.active WHERE a.id=? AND a.property_id=pms_current_property_id() AND c.status='ACTIVE'",
       )
       .bind(job.source_id)
       .first<Record<string, unknown>>();

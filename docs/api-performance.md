@@ -24,6 +24,9 @@
 | `frontdesk` | `queue`, `q`, `dateField`, `from`, `to`, `status`, `source`, `roomTypeId`, `assignment`, `balance`, `sort`, `page`, `pageSize` | 업무 큐 집계, 필터 결과 최대 50건, 객실 타입·채널 option, 페이지 정보 |
 | `reservation_availability` | `arrival`, `departure`(최대 30박), `adults`, `children` | 타입별 물리재고·예약·블록 hold, 활성 Rate Plan, MLOS·CTA·CTD, 일자 요금 |
 | `inventory` | `from`, `to` (`YYYY-MM-DD`, 서버 최대 730일, UI 요청 14/30일) | dates, room types, physical/reserved/held/available, inventory controls, mappings, contracts, channel rate overrides |
+| `channel_catalog` | 없음 | 호텔별 사용 가능/설정 채널, 기술 연결, 순서·서플라이어·상품 마감, 활성 Rate Plan |
+| `rateblock` | `from`, `to`(최대 31일), 선택 `connectionId`, `roomTypeId` | 객실×상품×채널×날짜별 물리/예약/hold/잔여, 할당·판매가·입금가·Closed/MLOS/CTA/CTD |
+| `hotel_catalogs` | 없음 | 성수기, 휴일, 편의시설, 서비스, 홈페이지 이미지 metadata |
 | `accounting` | `from`, `to` (최대 367일) | accounts, journals, lines, settlements, contracts, eligible reservations, P/L summary |
 | `website` | 없음 | 홈페이지 설정, 전체 객실 타입별 CMS 게시 상태·설명·편의시설, 미디어 metadata |
 | `report` | `report`, `from`, `to`, `q`, `status`, `source`, `roomTypeId`, `page`, `pageSize` | catalog, definition, filters, columns, rows, summary, pagination, export policy |
@@ -49,6 +52,7 @@
 | `cancel_reservation` / `mark_no_show` | `reservationId`, `reason` | `DUE_IN`, 타입/객실 nights와 group pickup 복원 |
 | `update_inventory_control` | `roomTypeId`, `stayDate`, sellLimit, closed, `websiteClosed`, minStay, CTA/CTD, priceOverride | 물리 객실·확정 예약 이하 sell limit 금지, 공식 홈페이지 판매 독립 제어 |
 | `bulk_update_inventory_controls` | `from`, `to`, `roomTypeIds`, `weekdays`, 재고 필드, `websiteClosed`, 선택 mapping/channel sell/net | 730일, 5,000셀, 타입 유효, 홈페이지 노출 유지/허용/중지, 입금가≤판매가, 계약 존재 |
+| `bulk_update_rate_blocks` | mapping ID 배열, 최대 31일, 요일, allocation, sell/net, Closed/MLOS/CTA/CTD | 최대 5,000셀, 활성 설정·연결·상품·객실 mapping, 계약 유형, 물리 객실 상한; override·ARI·Outbox·audit·receipt 원자 commit |
 | `update_website_settings` | 버전, 공개 여부, 호텔/브랜드/Hero/섹션/연락처/체크인·아웃, hero media/layout/overlay/height/CTA, accent, navigation JSON | `ADMIN`, 필수 길이·이메일·시간, 고정 섹션 allowlist·유일성·최소 1개 노출, 안전한 CTA target·hex color, optimistic version |
 | `update_room_type_website` | `roomTypeId`, 버전, 공개, 순서, 마케팅명, 짧은/상세 소개, amenities JSON | 활성 타입, 최대 20개 편의시설, optimistic version |
 | `upload_website_media` | 선택적 client UUID, scope, 선택 `roomTypeId`, role, alt, order, filename, image data URL | `ADMIN`, JPEG/PNG/WebP, decode 후 3MB·base64 transport 4.2MB, scope/type 관계, server-only Storage write |
@@ -63,6 +67,9 @@
 | `transfer_to_ar` | folio window, account profile | direct-bill 승인, 양수 잔액, credit limit, invoice+folio 원자 처리 |
 | `post_ar_payment` | `invoiceId`, amount, method | open cashier, invoice 잔액 이하, 완납 상태 전환 |
 | `create_channel_connection` | provider, name, external property ID | provider/property 유일성 |
+| `upsert_channel_catalog` / `configure_property_channel` | 채널 코드·이름·분류·연동방식 / catalog, 연결, 외부 호텔 ID, 공급사 설정, 순서·마감 | 호텔 범위 catalog, optimistic setting version, 외부 연결 lifecycle과 JSON object |
+| `set_property_channel_active` / `reorder_property_channels` | setting ID·버전·상태 / 전체 setting ID 순서 | 설정과 connection 상태 원자 변경, 비활성 ARI 차단, 누락·중복 없는 전체 순서 |
+| `upsert_channel_product_cutoff` | setting, Rate Plan, D-n, native cutoff time | 같은 채널·상품 unique, 0~730일, 활성 호텔 상품 |
 | `create_channel_mapping` | connection, external room/rate IDs, internal type/rate plan | 활성 connection, 외부 mapping 유일성 |
 | `upsert_channel_contract` | connection, `COMMISSION`/`NET_RATE`, percent, cycle, terms, validity | 0~100%, 유효 기간, open settlement 계약 변경 guard |
 | `queue_ari_delta` | `mappingId`, start/end date | 활성 mapping, 날짜별 revision 증가, inventory payload 구성 |
@@ -178,6 +185,7 @@
 - 장기 캘린더를 기본 Snapshot과 분리해 선택한 기간만 지연 조회
 - 날짜 범위·객실 타입·채널 매핑 복합 인덱스
 - ARI queue는 범위 전체의 물리 재고·제어·예약·블록 hold·revision을 5개 집합 조회로 읽고, 날짜 수와 무관하게 ARI/outbox를 2개 multi-row insert로 기록
+- 블럭요금은 물리 객실·예약·그룹 hold·기존 revision을 4개 고정 집합 조회로 읽고, 최대 5,000개 override·ARI·Outbox row를 bounded chunk의 multi-row insert로 기록
 - 금액·숫자·business date·JSONB 배열 표시는 `lib/format.ts`에서 공유해 서버와 화면의 변환 규칙을 일치
 - 500객실 생성은 500 room insert + 감사 + 멱등키, 총 502 statement를 하나의 PostgreSQL transaction으로 실행
 - 장기 재고 5,000셀은 bounded 하위 batch로 처리하며 각 셀은 유일키·검증 trigger로 보호

@@ -11,14 +11,14 @@
 | 신규 예약 달력 | 월 이동, 판매상품 선택, 일자별 가격·잔여/전체 객실 | 상품/인원 가격과 달력 예약 | 완료 — PR 2 |
 | 예약 관리 | 2개 날짜조건, 채널/고객 검색, 상태·결제·페이지 크기, Excel import/export, 상세·바우처 | 검색 가능한 예약 원장과 상세 | 상세 완료 — PR 3; import/export PR 7 |
 | 예약 바우처 | KR/EN, 금액 표시/숨김, 제목·수신자, 다운로드·Excel·인쇄·메일 | 확인서 문서·전송 queue | 완료 — PR 4 |
-| 채널 설정 | 사용 가능/선택 catalog, 통합/수동 구분, 외부 ID, 설정·수정·활성/중지·삭제·순서·로그 | 채널 catalog와 연결 lifecycle | PR 5 |
-| 신규 블록·요금 | 객실 × 상품 × 채널 × 날짜의 대량 stop-sell/재고/요금 | 대량 matrix editor | PR 5 |
+| 채널 설정 | 사용 가능/선택 catalog, 통합/수동 구분, 외부 ID, 설정·수정·활성/중지·삭제·순서·로그 | 채널 catalog와 연결 lifecycle | 완료 — PR 5 |
+| 신규 블록·요금 | 객실 × 상품 × 채널 × 날짜의 대량 stop-sell/재고/요금 | 대량 matrix editor | 완료 — PR 5 |
 | 연회 예약 | 장소 선택, 월 달력, 예약 등록 | banquet master/reservation | PR 7 |
 | 오늘 체크인/체크아웃 | 전용 목록, 완료 제외, 동일 복합필터, Excel | URL 기반 전용 업무 큐 | PR 7 |
 | 오늘 객실점유 | 상품 선택, 18일 점유 timeline | 상품/객실 점유 timeline | PR 7 |
 | 상품·채널 리포트 | 일·객실매출·결제·연간·YoY·채널 입금·후불; 0–6/6–12/12–18/18–24 booking curve, ADR·lead time | 리포트 확장 | PR 6 |
 | 회원 관리 | 이름/전화/ID/회사/코드/가입일 검색, 활성·등급·관리자 유형 | 호텔 고객 회원 master | PR 7 |
-| 숙소 관리 | 숙소·객실·오늘·요금·블록·서비스·이미지·편의시설·성수기·인원요금 탭 | 판매 catalog | PR 1·5 |
+| 숙소 관리 | 숙소·객실·오늘·요금·블록·서비스·이미지·편의시설·성수기·인원요금 탭 | 판매 catalog | 상품·인원·운영 카탈로그 완료 — PR 1·5 |
 
 ## 첨부 지시 A–N 추적
 
@@ -28,11 +28,11 @@
 | B | Calendar/List 신규 예약 | 상품·인원별 가용성과 원자 예약 | List/Calendar 전환, 객실종류·조식·기준/최대·총액 | 마지막 1실 병렬 예약 1건만 성공 |
 | C | 예약 상세 | 예약자와 투숙자 분리, 예약 옵션·상태·금액 | 한 화면 섹션형 detail | 완료 — 권한·낙관적 잠금·감사 로그 |
 | D | 확인서 | KR/EN, 금액 visibility, 문서 payload, worker delivery | PDF/Excel/인쇄/메일 dialog | 같은 요청 중복 발송 방지 |
-| E | 채널 catalog | catalog/connection/mapping lifecycle | 검색·좌우 선택·통합/수동·정렬 | tenant RLS, 외부 ID 유일성 |
-| F | block/rate matrix | 날짜별 객실·상품·채널 restriction/upsert | sticky 4축 matrix, bulk apply | 365일 fixed query/bulk count |
+| E | 채널 catalog | catalog/connection/mapping lifecycle | 검색·좌우 선택·통합/수동·정렬 | 완료 — tenant RLS, 비활성 ARI 차단, 외부 ID 유일성 |
+| F | block/rate matrix | 날짜별 객실·상품·채널 restriction/upsert | sticky 4축 matrix, bulk apply | 완료 — 31일 fixed query, 5,000셀 원자 bulk |
 | G | 연회 | 장소·연회예약·상태·금액 | 월 달력·등록 drawer | 중복 장소 시간 차단 |
 | H | 인원 요금 | 기준/최대 인원, 인원별 numeric supplement | 상품 editor 가격 grid | 유효 인원만 산출·저장 |
-| I | 운영 catalog | 성수기·휴일·편의시설·서비스·이미지 | 숙소 설정 tabs | FK/RLS/native types |
+| I | 운영 catalog | 성수기·휴일·편의시설·서비스·이미지 | 숙소 설정 tabs | 완료 — FK/RLS/native types |
 | J | 리포트 | lead time·booking curve·정산/입금·후불·YoY | catalog/filter/export | 마스킹·export 감사·실계산 |
 | K | 오늘 업무 URL | check-in/out/occupancy projection | 독립 route·filter·deep link | 새로고침 상태 보존 |
 | L | 예약 import/export | dry-run·검증·원자 commit·rollback | template/upload/result | 교차호텔 참조 차단 |
@@ -95,6 +95,21 @@ PostgreSQL 통합 테스트는 예약자와 투숙자 불일치, 요청/응답·
 - delivery table은 FORCE RLS를 사용하고 문서·수신자 같은 증빙 필드는 update trigger로 불변이다. worker가 바꿀 수 있는 필드는 상태, 시도 횟수, provider receipt, 오류와 완료 시각뿐이다.
 
 PostgreSQL 통합 테스트는 동시 멱등 수렴, 교차 호텔 차단, native boolean/JSONB, immutable payload trigger, 금액 숨김과 민감정보 제외를 검증한다. 단위 테스트는 실제 PDF header·임베딩 한글 문서·XLSX workbook과 금액 숨김 결과를 생성해 확인한다.
+
+## PR 5 — 판매채널 설정, 블럭요금과 숙소 운영 카탈로그
+
+`202607210023_channel_rateblock_operational_catalogs.sql`은 HotelStory의 화면 용어를 기술 연결 테이블에 직접 덧씌우지 않고, 호텔 운영자가 다루는 catalog와 외부 adapter 연결을 분리한다.
+
+- 판매채널 설정은 `채널 설정 가능 목록 ↔ 채널 설정 목록` 2열이며 검색, 드래그/버튼 등록, 연동·자체 배지, 수정, 사용/중지, 삭제, 위·아래/드래그 순서와 명시적 순서 저장을 제공한다.
+- 기본 카탈로그는 국내외 OTA, 메타, 직판, 전화·워크인·기업/B2B를 포함하고 호텔은 별도관리 채널을 추가할 수 있다. 외부 호텔 ID, 기존/신규 연결, 서플라이어명·코드·JSON 설정, 별도관리와 D-n 마감을 함께 편집한다.
+- 설정 비활성은 `channel_connections` 상태와 원자 변경되며 수동 ARI 생성, 블럭요금 projection, sandbox dispatch와 실제 worker 전달 모두 즉시 차단한다. 저장 순서는 채널 허브, 대시보드 채널 구성과 채널 정산 리포트의 정렬 키가 된다.
+- 상품마감은 채널 기본 D-n 위에 채널×판매상품별 D-n와 native `time` 마감 시각을 둔다.
+- 블럭요금은 Today/1W/2W/4W/Month와 임의 최대 31일, 채널·객실 필터를 제공한다. 행은 객실>상품, 열은 날짜이며 셀은 할당/실잔여, 판매가/입금가, Closed/MLOS/CTA/CTD를 함께 표시한다.
+- 일괄 편집은 요일을 선택하고 최대 5,000셀을 저장한다. 물리 객실·확정 예약·deduct block·ARI revision은 고정 batch query로 읽고, override·ARI update·Outbox는 chunked multi-row statement와 멱등 영수증을 한 transaction에 저장한다.
+- `talos_channel_rate_block_guard`가 mapping/상품/객실 일치와 실제 운영 객실을 넘는 할당을 DB에서 거부한다. commission 계약은 판매가를, net-rate 계약은 판매가 이하의 호텔 입금가를 요구한다.
+- 숙소 운영 master는 성수기, 휴일, 편의시설, 서비스, 이미지를 탭으로 제공한다. 날짜·시각·불리언·금액·설정은 native `date/time/boolean/numeric/jsonb`이며 7개 신규 table 모두 property FK, FORCE RLS, `aurora_property_isolation`, app grant/revoke를 갖는다.
+
+PostgreSQL 행동 테스트는 API를 통해 카탈로그·연결·상품마감을 만든 뒤 2일 블럭요금을 저장하고, 정확히 2개 override·ARI·Outbox 생성, 같은 idempotency key 재실행 무효, 객실 초과 할당 전체 rollback, 비활성 채널 ARI 차단, 교차 호텔 projection 0건, 운영 카탈로그 CRUD와 7개 FORCE RLS를 검증한다.
 
 ## 공통 완료 판정
 

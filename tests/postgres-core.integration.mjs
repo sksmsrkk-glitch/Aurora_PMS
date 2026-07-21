@@ -6,6 +6,7 @@ import { consumeRateLimit } from "../app/api/rate-limit.ts";
 import { loadPmsSearch, loadReservationAvailability, loadReservationCalendar, loadReservationDetail } from "../app/api/pms/frontdesk-read.ts";
 import { snapshot } from "../app/api/pms/read-model.ts";
 import { handlePmsPost } from "../app/api/pms/command-gateway.ts";
+import { loadChannelCatalog, loadOperationalCatalogs, loadRateBlockMatrix } from "../app/api/pms/hotelstory-catalog-service.ts";
 import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL || "";
@@ -500,6 +501,87 @@ test("voucher queue snapshots KR/EN visibility and deduplicates concurrent email
     if(!deliveryIds.length){const residue=await sql`SELECT id FROM reservation_voucher_deliveries WHERE property_id='prop-seoul' AND idempotency_key=${key}`;deliveryIds=residue.map(row=>row.id);}
     if(deliveryIds.length){await sql`DELETE FROM worker_attempts WHERE property_id='prop-seoul' AND job_id IN (SELECT id FROM worker_jobs WHERE source_id=ANY(${deliveryIds}))`;await sql`DELETE FROM worker_jobs WHERE property_id='prop-seoul' AND source_id=ANY(${deliveryIds})`;await sql`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND entity_id=ANY(${deliveryIds})`;await sql`DELETE FROM reservation_voucher_deliveries WHERE property_id='prop-seoul' AND id=ANY(${deliveryIds})`;}
     await sql`DELETE FROM idempotency_keys WHERE property_id='prop-seoul' AND key=${key}`;await sql`DELETE FROM api_rate_limits WHERE scope='pms-write'`;await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;await closePmsDatabase();for(const [entry,value] of Object.entries(previous)){const envKey={databaseUrl:"DATABASE_URL",allow:"PMS_ALLOW_DEMO_AUTH",token:"PMS_DEMO_AUTH_TOKEN",email:"PMS_DEMO_USER_EMAIL",rate:"PMS_RATE_LIMIT_SECRET",node:"NODE_ENV"}[entry];if(value===undefined)delete process.env[envKey];else process.env[envKey]=value;}await sql.end({timeout:2});
+  }
+});
+
+test("HotelStory channel settings and rate blocks are transactional, bounded, and tenant isolated",{skip},async()=>{
+  const sql=client(3),suffix=crypto.randomUUID().slice(0,8),email=`rate-block-${suffix}@example.com`,assignmentId=`it-rate-block-role-${suffix}`,token=`rate-block-token-${crypto.randomUUID()}`;
+  const providerCode=`IT_${suffix.toUpperCase()}`,catalogId=`it-catalog-${suffix}`,mappingId=`it-mapping-${suffix}`,contractId=`it-contract-${suffix}`;
+  const from="2032-04-01",to="2032-04-02",keys=[];
+  const previous={databaseUrl:process.env.DATABASE_URL,allow:process.env.PMS_ALLOW_DEMO_AUTH,token:process.env.PMS_DEMO_AUTH_TOKEN,email:process.env.PMS_DEMO_USER_EMAIL,rate:process.env.PMS_RATE_LIMIT_SECRET,node:process.env.NODE_ENV};
+  const permissions={overview:"WRITE",frontdesk:"WRITE",inventory:"WRITE",website:"WRITE",groups:"WRITE",finance:"WRITE",accounting:"WRITE",channels:"WRITE",rooms:"WRITE",reports:"WRITE",master:"WRITE",revenue:"WRITE",users:"WRITE",audit:"WRITE"};
+  let settingId="",connectionId="",cutoffId="",planId="",seasonId="",holidayId="",amenityId="",serviceId="",ariIds=[],outboxIds=[];
+  const post=async(body,label)=>{const key=`rate-block-${label}-${suffix}`;keys.push(key);const response=await handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":key},body:JSON.stringify(body)}));return {response,key};};
+  const expectOk=async(body,label)=>{const {response,key}=await post(body,label);assert.equal(response.status,200,`${body.action}: ${await response.text()}`);return {response,key};};
+  try{
+    await sql`INSERT INTO role_assignments(id,property_id,email,role,active,created_at,display_name,workspace_permissions,can_export,updated_at) VALUES (${assignmentId},'prop-seoul',${email},'PROPERTY_ADMIN',true,now(),'Rate Block Command',${sql.json(permissions)},true,now())`;
+    process.env.DATABASE_URL=databaseUrl;process.env.PMS_ALLOW_DEMO_AUTH="true";process.env.PMS_DEMO_AUTH_TOKEN=token;process.env.PMS_DEMO_USER_EMAIL=email;process.env.PMS_RATE_LIMIT_SECRET=`rate-block-limit-${crypto.randomUUID()}`;process.env.NODE_ENV="test";
+
+    await expectOk({action:"upsert_channel_catalog",catalogId,providerCode,displayName:"Integration OTA",channelClass:"OTA",integrationMode:"INTEGRATED",description:"PostgreSQL behavior contract",sortOrder:"1"},"catalog");
+    await expectOk({action:"configure_property_channel",catalogId,active:"true",sortOrder:"1",supplierName:"Integration Supplier",supplierCode:"IT-SUPPLIER",supplierConfig:'{"mode":"test"}',externalPropertyId:`hotel-${suffix}`,separateManagement:"false",salesCutoffDays:"0"},"configure");
+    [{id:settingId,connection_id:connectionId}]=await sql`SELECT id,connection_id FROM property_channel_settings WHERE property_id='prop-seoul' AND catalog_id=${catalogId}`;
+    assert.ok(settingId&&connectionId);
+    [{id:planId}]=await sql`SELECT id FROM rate_plans WHERE property_id='prop-seoul' AND code='BAR'`;
+    await sql`INSERT INTO channel_mappings(id,property_id,connection_id,room_type_id,external_room_type_id,rate_plan,external_rate_plan_id,active,created_at,updated_at) VALUES (${mappingId},'prop-seoul',${connectionId},'rt-dlx',${`room-${suffix}`},'BAR',${`bar-${suffix}`},true,now(),now())`;
+    await sql`INSERT INTO channel_contracts(id,property_id,connection_id,contract_type,commission_percent,settlement_cycle,payment_terms_days,currency,valid_from,valid_to,status,version,created_at,created_by,updated_at,updated_by) VALUES (${contractId},'prop-seoul',${connectionId},'COMMISSION',15,'PER_STAY',30,'KRW','2031-01-01',NULL,'ACTIVE',1,now(),'integration-test',now(),'integration-test')`;
+
+    await expectOk({action:"upsert_channel_product_cutoff",settingId,ratePlanId:planId,cutoffDays:"0",cutoffTime:"23:59",active:"true"},"cutoff");
+    [{id:cutoffId}]=await sql`SELECT id FROM channel_product_cutoffs WHERE property_id='prop-seoul' AND setting_id=${settingId} AND rate_plan_id=${planId}`;
+    const bulkBody={action:"bulk_update_rate_blocks",mappingIds:JSON.stringify([mappingId]),from,to,weekdays:JSON.stringify([0,1,2,3,4,5,6]),allocation:"2",sellRate:"245000",netRate:"",closed:"false",minStay:"2",cta:"true",ctd:"false"};
+    const {key:bulkKey}=await expectOk(bulkBody,"bulk");
+    const replay=await handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":bulkKey},body:JSON.stringify(bulkBody)}));
+    assert.equal(replay.status,200);assert.equal(replay.headers.get("X-Idempotent-Replay"),"true");
+    const overrides=await sql`SELECT stay_date,allocation,sell_rate,net_rate,closed,min_stay,close_to_arrival,close_to_departure FROM channel_rate_overrides WHERE property_id='prop-seoul' AND mapping_id=${mappingId} ORDER BY stay_date`;
+    assert.equal(overrides.length,2);assert.deepEqual(overrides.map(row=>Number(row.allocation)),[2,2]);assert.deepEqual(overrides.map(row=>Number(row.sell_rate)),[245000,245000]);assert.ok(overrides.every(row=>row.net_rate===null&&!row.closed&&row.min_stay===2&&row.close_to_arrival&&!row.close_to_departure));
+    const ari=await sql`SELECT id,stay_date,available,revision,payload_json FROM ari_updates WHERE property_id='prop-seoul' AND mapping_id=${mappingId} ORDER BY stay_date`;ariIds=ari.map(row=>row.id);
+    assert.equal(ari.length,2);assert.ok(ari.every(row=>row.available===2&&row.revision===1&&row.payload_json.rate===245000));
+    const outbox=await sql`SELECT id,aggregate_id,topic FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=ANY(${ariIds}) ORDER BY aggregate_id`;outboxIds=outbox.map(row=>row.id);assert.equal(outbox.length,2);assert.ok(outbox.every(row=>row.topic==="channel.ari_delta"));
+
+    const scoped=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul");
+    const matrix=await loadRateBlockMatrix(scoped,new URLSearchParams({from,to,connectionId}));assert.equal(matrix.rows.length,1);assert.equal(matrix.rows[0].cells.length,2);assert.equal(matrix.rows[0].cells[0].allocation,2);assert.equal(matrix.rows[0].cells[0].poolAvailable,3);
+    const hidden=await loadRateBlockMatrix(scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-busan"),new URLSearchParams({from,to,connectionId}));assert.equal(hidden.rows.length,0);
+
+    const over=await post({...bulkBody,allocation:"4"},"over-allocation");assert.equal(over.response.status,409,await over.response.text());
+    assert.equal((await sql`SELECT COUNT(*)::int count FROM channel_rate_overrides WHERE property_id='prop-seoul' AND mapping_id=${mappingId}`)[0].count,2);
+    const [{version}]=await sql`SELECT version FROM property_channel_settings WHERE id=${settingId}`;
+    await expectOk({action:"set_property_channel_active",settingId,active:"false",expectedVersion:String(version)},"disable");
+    assert.equal((await loadRateBlockMatrix(scoped,new URLSearchParams({from,to,connectionId}))).rows.length,0);
+    const disabledQueue=await post({action:"queue_ari_delta",mappingId,startDate:from,endDate:to},"disabled-ari");assert.equal(disabledQueue.response.status,400,await disabledQueue.response.text());
+    const [{version:disabledVersion}]=await sql`SELECT version FROM property_channel_settings WHERE id=${settingId}`;
+    await expectOk({action:"set_property_channel_active",settingId,active:"true",expectedVersion:String(disabledVersion)},"enable");
+    assert.equal((await loadChannelCatalog(scoped)).catalog.find(row=>row.id===catalogId)?.connection_status,"ACTIVE");
+    const activeAriBody={action:"queue_ari_delta",mappingId,startDate:"2032-04-03",endDate:"2032-04-03"},{key:activeAriKey}=await expectOk(activeAriBody,"active-ari");
+    const activeAriReplay=await handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":activeAriKey},body:JSON.stringify(activeAriBody)}));assert.equal(activeAriReplay.status,200);assert.equal(activeAriReplay.headers.get("X-Idempotent-Replay"),"true");
+    const allAri=await sql`SELECT id FROM ari_updates WHERE property_id='prop-seoul' AND mapping_id=${mappingId}`;ariIds=allAri.map(row=>row.id);assert.equal(ariIds.length,3);
+    const allOutbox=await sql`SELECT id FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=ANY(${ariIds})`;outboxIds=allOutbox.map(row=>row.id);assert.equal(outboxIds.length,3);
+
+    await expectOk({action:"upsert_property_season",name:`Integration Peak ${suffix}`,seasonType:"PEAK",startDate:from,endDate:to,adjustmentType:"PERCENT",adjustment:"12.5",active:"true"},"season");
+    await expectOk({action:"upsert_property_holiday",name:`Integration Day ${suffix}`,stayDate:from,holidayType:"HOTEL",active:"true"},"holiday");
+    await expectOk({action:"upsert_amenity_catalog",code:`AM_${suffix.toUpperCase()}`,name:"Integration Amenity",category:"ROOM",iconName:"sparkles",sortOrder:"1",active:"true"},"amenity");
+    await expectOk({action:"upsert_service_catalog",code:`SV_${suffix.toUpperCase()}`,name:"Integration Service",category:"ROOM",pricingType:"FIXED",price:"33000",currency:"KRW",description:"Behavior contract",sortOrder:"1",active:"true"},"service");
+    [{id:seasonId}]=await sql`SELECT id FROM property_seasons WHERE property_id='prop-seoul' AND name=${`Integration Peak ${suffix}`}`;[{id:holidayId}]=await sql`SELECT id FROM property_holidays WHERE property_id='prop-seoul' AND name=${`Integration Day ${suffix}`}`;[{id:amenityId}]=await sql`SELECT id FROM amenity_catalog WHERE property_id='prop-seoul' AND code=${`AM_${suffix.toUpperCase()}`}`;[{id:serviceId}]=await sql`SELECT id FROM service_catalog WHERE property_id='prop-seoul' AND code=${`SV_${suffix.toUpperCase()}`}`;
+    const catalogs=await loadOperationalCatalogs(scoped);assert.ok(catalogs.seasons.some(row=>row.id===seasonId));assert.ok(catalogs.holidays.some(row=>row.id===holidayId));assert.ok(catalogs.amenities.some(row=>row.id===amenityId));assert.ok(catalogs.services.some(row=>row.id===serviceId));
+    const tenantCatalogs=await loadOperationalCatalogs(scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-busan"));assert.ok(!tenantCatalogs.seasons.some(row=>row.id===seasonId));
+    const [contract]=await sql`SELECT COUNT(*) FILTER (WHERE relrowsecurity AND relforcerowsecurity)::int forced FROM pg_class WHERE oid IN ('public.channel_catalog'::regclass,'public.property_channel_settings'::regclass,'public.channel_product_cutoffs'::regclass,'public.property_seasons'::regclass,'public.property_holidays'::regclass,'public.amenity_catalog'::regclass,'public.service_catalog'::regclass)`;assert.equal(contract.forced,7);
+  }finally{
+    await closePmsDatabase();
+    if(outboxIds.length){await sql`DELETE FROM worker_attempts WHERE property_id='prop-seoul' AND job_id IN (SELECT id FROM worker_jobs WHERE source_id=ANY(${outboxIds}))`;await sql`DELETE FROM worker_jobs WHERE property_id='prop-seoul' AND source_id=ANY(${outboxIds})`;}
+    if(ariIds.length){await sql`DELETE FROM worker_attempts WHERE property_id='prop-seoul' AND job_id IN (SELECT id FROM worker_jobs WHERE source_id=ANY(${ariIds}))`;await sql`DELETE FROM worker_jobs WHERE property_id='prop-seoul' AND source_id=ANY(${ariIds})`;}
+    if(outboxIds.length)await sql`DELETE FROM outbox_events WHERE property_id='prop-seoul' AND id=ANY(${outboxIds})`;
+    if(ariIds.length)await sql`DELETE FROM ari_updates WHERE property_id='prop-seoul' AND id=ANY(${ariIds})`;
+    await sql`DELETE FROM channel_rate_overrides WHERE property_id='prop-seoul' AND mapping_id=${mappingId}`;
+    if(cutoffId)await sql`DELETE FROM channel_product_cutoffs WHERE id=${cutoffId}`;
+    if(mappingId)await sql`DELETE FROM channel_mappings WHERE id=${mappingId}`;
+    if(contractId)await sql`DELETE FROM channel_contracts WHERE id=${contractId}`;
+    if(settingId)await sql`DELETE FROM property_channel_settings WHERE id=${settingId}`;
+    if(connectionId)await sql`DELETE FROM channel_connections WHERE id=${connectionId}`;
+    if(catalogId)await sql`DELETE FROM channel_catalog WHERE id=${catalogId}`;
+    for(const [table,id] of [["property_seasons",seasonId],["property_holidays",holidayId],["amenity_catalog",amenityId],["service_catalog",serviceId]])if(id)await sql.unsafe(`DELETE FROM ${table} WHERE id=$1`,[id]);
+    await sql`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND actor=${email}`;
+    for(const key of keys)await sql`DELETE FROM idempotency_keys WHERE property_id='prop-seoul' AND key=${key}`;
+    await sql`DELETE FROM api_rate_limits WHERE scope='pms-write'`;await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;
+    for(const [entry,value] of Object.entries(previous)){const envKey={databaseUrl:"DATABASE_URL",allow:"PMS_ALLOW_DEMO_AUTH",token:"PMS_DEMO_AUTH_TOKEN",email:"PMS_DEMO_USER_EMAIL",rate:"PMS_RATE_LIMIT_SECRET",node:"NODE_ENV"}[entry];if(value===undefined)delete process.env[envKey];else process.env[envKey]=value;}
+    await sql.end({timeout:2});
   }
 });
 
