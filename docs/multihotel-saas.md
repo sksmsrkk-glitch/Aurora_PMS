@@ -22,7 +22,7 @@ flowchart TD
 - `properties`는 실제 PMS 데이터 격리 단위입니다. 한 조직은 여러 호텔을 가질 수 있습니다.
 - `organization_memberships`는 조직 Owner/Admin/Analyst를 Auth UUID와 이메일의 이중 일치로 연결합니다.
 - `role_assignments`는 호텔별 직무와 14개 workspace의 `NONE/READ/WRITE`, export 권한을 보관합니다.
-- 66개 tenant policy와 `FORCE ROW LEVEL SECURITY`가 앱 실수나 누락 SQL의 교차 호텔 접근을 DB에서 거부합니다.
+- 69개 tenant policy와 `FORCE ROW LEVEL SECURITY`가 앱 실수나 누락 SQL의 교차 호텔 접근을 DB에서 거부합니다.
 - 루트 연결은 자유 SQL을 허용하지 않습니다. 인증 조회, 도메인 해석, 프로비저닝, worker claim처럼 입력 구조가 고정된 capability만 제공합니다.
 
 ## 2. Control Plane과 프로비저닝
@@ -137,13 +137,16 @@ GitHub 저장소에는 production Vercel과 같은 값을 `AURORA_CRON_SECRET` s
 | --- | --- |
 | `OUTBOX_WEBHOOK` | HMAC 서명, event ID, HTTPS 전송 |
 | `ARI_DELIVERY` | provider별 endpoint·secret adapter, idempotency key |
+| `VOUCHER_EMAIL` | immutable 바우처 snapshot을 KR/EN HTML로 렌더링하고 delivery ID 멱등 키로 승인된 메일 adapter에 전달 |
 | `DOMAIN_VERIFY` | DNS TXT 확인 후 domain 활성화 |
 | `BACKUP_VERIFY` | 외부 backup orchestrator 요청과 checksum receipt 확인 |
 | `USAGE_ROLLUP` | 호텔별 객실·사용자·예약·report 사용량 집계 |
 
 실패는 지수 backoff 후 재시도하며 최대 횟수에 도달하면 `DEAD`와 CRITICAL `service_incidents`를 만듭니다. 각 scheduler sweep은 claim 전에 기본 300초가 지난 `RUNNING` lease를 `RETRY` 또는 `DEAD`로 회수합니다. 여기에 모든 `claimWorkerJobs` transaction이 scheduler 호출 여부와 무관하게 10분 지난 RUNNING lease를 다시 검사하는 최종 안전 경계를 두며, 회수 대상 잡의 미완료 attempt는 최신 행뿐 아니라 전부 `LEASE_EXPIRED`로 종결합니다. webhook·ARI DEAD 작업은 기본 15분 cooldown 뒤 `attempt_cycle`을 증가시키고 attempts를 0으로 만든 새 cycle에서 최대 3회만 자동 복구합니다. `worker_attempts(job_id, attempt_cycle, attempt_no)`는 과거 실패를 덮어쓰지 않으며, 최종 성공 시 해당 incident를 자동 종료합니다. 영구 poison job은 복구 상한 뒤 DEAD로 남습니다.
 
-outbox·ARI source가 `FAILED`로 다시 기록되면 enqueue trigger는 현재 worker 상태를 원자적으로 분기합니다. `RUNNING`은 status, attempts, locked_at, locked_by를 그대로 두어 두 번째 worker가 동일 payload를 발송하지 못하게 합니다. `DEAD`는 명시적인 새 전송 요청으로 보고 attempts=0, last_error=NULL, lock·completed 시각 초기화와 함께 `attempt_cycle`을 증가시켜 즉시 claim 가능하게 합니다. 이미 성공한 `SUCCEEDED`는 부활시키지 않습니다.
+outbox·ARI source가 `FAILED`로 다시 기록되면 enqueue trigger는 현재 worker 상태를 원자적으로 분기합니다. `RUNNING`은 status, attempts, locked_at, locked_by를 그대로 두어 두 번째 worker가 동일 payload를 발송하지 못하게 합니다. `DEAD`는 명시적인 새 전송 요청으로 보고 attempts=0, last_error=NULL, lock·completed 시각 초기화와 함께 `attempt_cycle`을 증가시켜 즉시 claim 가능하게 합니다. 이미 성공한 `SUCCEEDED`는 부활시키지 않습니다. 바우처 메일은 source snapshot이 별도 delivery row에 고정되어 있고 provider도 delivery ID를 멱등 키로 처리해야 하므로 Vercel timeout 뒤 재시도에도 같은 문서가 중복 발송되지 않습니다.
+
+바우처 메일 adapter에는 `TALOS_EMAIL_ENDPOINT`, `TALOS_EMAIL_SECRET`, `TALOS_EMAIL_FROM`을 설정합니다. endpoint는 HTTPS만 사용하고 secret은 브라우저·로그·문서 payload에 노출하지 않습니다. adapter는 `Idempotency-Key` 헤더와 JSON의 `deliveryId`, `from`, `to`, `subject`, `html`을 받아 같은 delivery ID에는 같은 provider receipt를 반환해야 합니다.
 
 복구 정책은 `AURORA_WORKER_LEASE_SECONDS`, `AURORA_WORKER_DEAD_COOLDOWN_SECONDS`, `AURORA_WORKER_MAX_RECOVERIES`, `AURORA_WORKER_RECOVERY_BATCH_SIZE`로 조절합니다. 안전 범위는 코드가 각각 90~3,600초, 60~86,400초, 0~10회, 1~250건으로 고정합니다. outbound endpoint는 HTTPS, 선택적 host allowlist, DNS private-address 차단, 10초 timeout, redirect 금지를 적용합니다. 운영에서는 DNS rebinding까지 차단하는 고정 egress proxy를 추가합니다.
 
@@ -196,4 +199,4 @@ npm run db:supabase:smoke
 npm run build
 ```
 
-PostgreSQL integration은 20개 동시 마지막 1실 예약 중 정확히 1건 성공, 분산 rate limit, RLS 교차 호텔 차단, worker 중복 claim·10분 lease 회수·고아 attempt 종결·DEAD trigger 새 cycle·RUNNING lease 보존, 정지 subscription의 도메인·CMS projection 차단, 병렬 객실 한도, JIT revoke, import commit/rollback을 실제 migration에서 검증합니다. 배포는 반드시 migration 0019 적용과 runtime contract 확인을 먼저 완료한 뒤 같은 commit의 애플리케이션 코드를 올립니다.
+PostgreSQL integration은 20개 동시 마지막 1실 예약 중 정확히 1건 성공, 분산 rate limit, RLS 교차 호텔 차단, worker 중복 claim·10분 lease 회수·고아 attempt 종결·DEAD trigger 새 cycle·RUNNING lease 보존, 정지 subscription의 도메인·CMS projection 차단, 바우처 delivery 멱등 수렴·payload 불변성, 병렬 객실 한도, JIT revoke, import commit/rollback을 실제 migration에서 검증합니다. 배포는 반드시 최신 migration `202607210022_reservation_voucher_delivery` 적용과 runtime contract 확인을 먼저 완료한 뒤 같은 commit의 애플리케이션 코드를 올립니다.

@@ -13,6 +13,7 @@ import { buildAriDeltaInserts } from "./ari-delta";
 import { addIsoDays } from "../../../lib/format";
 import { handleStaffAction, StaffAccessError } from "./staff";
 import { StaffAuthError } from "./staff-auth";
+import { loadReservationVoucher } from "./voucher-service";
 
 type D1=PmsDatabase;
 type D1PreparedStatement=PmsPreparedStatement;
@@ -281,6 +282,17 @@ export async function handlePmsPost(request: Request) {
       await db.batch([
         db.prepare("INSERT INTO reservation_links(id,property_id,reservation_id,linked_reservation_id,relation_type,notes,created_at,created_by) VALUES (?,pms_current_property_id(),?,?,?,?,?,?) ON CONFLICT(property_id,reservation_id,linked_reservation_id) DO UPDATE SET relation_type=excluded.relation_type,notes=excluded.notes").bind(linkId,sourceId,linkedId,relationType,notes,now,actor),
         db.prepare("INSERT INTO audit_logs VALUES (?,pms_current_property_id(),?,'LINK_RESERVATION','reservation',?,NULL,?,?)").bind(crypto.randomUUID(),actor,body.reservationId,jsonb({linkedReservationId:target.id,linkedConfirmationNo:target.confirmation_no,relationType,notes}),now),
+        mutationReceipt(),
+      ]);
+    } else if (body.action === "queue_reservation_voucher") {
+      if(!reservation)return Response.json({error:"확인서를 발송할 예약을 찾지 못했습니다."},{status:404});
+      const language=body.language==="EN"?"EN":body.language==="KO"?"KO":null,showAmount=body.showAmount==="true",recipientEmail=(body.recipientEmail||"").trim().toLowerCase(),subject=(body.subject||"").trim();
+      if(!language||!["true","false"].includes(body.showAmount)||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(recipientEmail)||recipientEmail.length>254||subject.length<1||subject.length>200)return Response.json({error:"언어, 금액 표시, 수신 이메일과 200자 이하 제목을 확인하세요."},{status:400});
+      const params=new URLSearchParams({language,showAmount:String(showAmount)}),documentPayload=await loadReservationVoucher(db,body.reservationId,params,principal),deliveryId=crypto.randomUUID();
+      await db.batch([
+        db.prepare("INSERT INTO reservation_voucher_deliveries(id,property_id,reservation_id,language,show_amount,recipient_email,subject,document_payload,status,requested_by,idempotency_key) VALUES (?,pms_current_property_id(),?,?,?,?,?,?,'QUEUED',?,?)").bind(deliveryId,body.reservationId,language,showAmount,recipientEmail,subject,jsonb(documentPayload),actor,idempotencyKey),
+        db.prepare("INSERT INTO worker_jobs(id,property_id,job_type,source_id,payload,status,priority,available_at) VALUES (?,pms_current_property_id(),'VOUCHER_EMAIL',?,?,'PENDING',40,?)").bind(`job-voucher-${deliveryId}`,deliveryId,jsonb({reservationId:body.reservationId,recipientEmail,language,showAmount}),now),
+        db.prepare("INSERT INTO audit_logs VALUES (?,pms_current_property_id(),?,'QUEUE_RESERVATION_VOUCHER','reservation_voucher_delivery',?,NULL,?,?)").bind(crypto.randomUUID(),actor,deliveryId,jsonb({reservationId:body.reservationId,recipientEmail,language,showAmount,subject}),now),
         mutationReceipt(),
       ]);
     } else if (body.action === "edit_reservation" && reservation) {
@@ -632,7 +644,7 @@ export async function handlePmsPost(request: Request) {
     const message=error instanceof Error ? error.message : "처리 중 오류가 발생했습니다.";
     if(error instanceof StaffAccessError||error instanceof StaffAuthError)return Response.json({error:error.message},{status:error.status});
     if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});
-    if (/idempotency_keys_pkey|idempotency_keys\.key/iu.test(message)) return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}), {headers:{"X-Idempotent-Replay":"true"}});
+    if (/idempotency_keys_pkey|idempotency_keys\.key|voucher_delivery_idempotency_uq/iu.test(message)) return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}), {headers:{"X-Idempotent-Replay":"true"}});
     const mapped=mapPmsError(message);
     if(mapped)return Response.json({error:mapped.error},{status:mapped.status});
     const errorId=crypto.randomUUID();

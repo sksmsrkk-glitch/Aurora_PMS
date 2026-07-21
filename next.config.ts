@@ -2,6 +2,13 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // PDF vouchers embed the licensed Noto Sans KR font at request time. Explicit
+  // tracing keeps the binary in Vercel's serverless bundles without adding it
+  // to the common browser payload.
+  outputFileTracingIncludes: {
+    "/api/pms": ["./node_modules/@expo-google-fonts/noto-sans-kr/400Regular/NotoSansKR_400Regular.ttf"],
+    "/api/internal/worker": ["./node_modules/@expo-google-fonts/noto-sans-kr/400Regular/NotoSansKR_400Regular.ttf"],
+  },
   async headers() {
     // React's development diagnostics reconstruct stack traces with eval.
     // Keep production strict while preventing the local error overlay from

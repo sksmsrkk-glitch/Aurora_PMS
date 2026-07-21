@@ -34,6 +34,7 @@ import {
   loadReservationDetail,
   PmsReadError,
 } from "./frontdesk-read";
+import { loadReservationVoucher } from "./voucher-service";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -178,6 +179,26 @@ export async function GET(request: Request) {
     } catch (error) {
       if (error instanceof PmsReadError)
         return Response.json({ error: error.message }, { status: error.status });
+      throw error;
+    }
+  }
+  if (view === "reservation_voucher") {
+    if (!canViewWorkspace(principal.workspaceAccess, "frontdesk"))
+      return Response.json({ error: "예약 확인서 조회 권한이 없습니다." }, { status: 403 });
+    const format=url.searchParams.get("format")||"json";
+    if(!["json","pdf","xlsx","html"].includes(format))return Response.json({error:"지원하지 않는 확인서 형식입니다."},{status:400});
+    if(format!=="json"&&!principal.canExport)return Response.json({error:"파일 출력 권한이 없습니다."},{status:403});
+    try {
+      const voucher=await loadReservationVoucher(db,url.searchParams.get("reservationId")||"",url.searchParams,principal);
+      if(format==="json")return Response.json(voucher,{headers:{"Cache-Control":"private, no-store"}});
+      // PDF/font and ZIP libraries stay out of the common PMS read bundle and
+      // are loaded only after an authorized document request reaches this branch.
+      const documents=await import("./voucher-document");
+      if(format==="html")return new Response(documents.renderVoucherHtml(voucher,true),{headers:{"Content-Type":"text/html; charset=utf-8","Cache-Control":"private, no-store","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}});
+      const bytes=format==="pdf"?await documents.buildVoucherPdf(voucher):documents.buildVoucherWorkbook(voucher),filename=documents.voucherFilename(voucher,format),responseBody=Uint8Array.from(bytes).buffer;
+      return new Response(responseBody,{headers:{"Content-Type":format==="pdf"?"application/pdf":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","Content-Disposition":`attachment; filename="${filename}"`,"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff"}});
+    } catch (error) {
+      if (error instanceof PmsReadError) return Response.json({error:error.message},{status:error.status});
       throw error;
     }
   }

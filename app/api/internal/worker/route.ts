@@ -13,6 +13,7 @@ import {
   type WorkerJob,
 } from "../../../../db/pms-database";
 import { verifyPmsSchemaContract } from "../../../../db/schema-contract";
+import type { VoucherPayload } from "../../pms/voucher-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -252,6 +253,29 @@ async function processJob(job: WorkerJob) {
         )
         .bind(now, now, update.connection_id),
     ]);
+    return;
+  }
+  if (job.job_type === "VOUCHER_EMAIL") {
+    const delivery=await db.prepare("SELECT * FROM reservation_voucher_deliveries WHERE id=? AND property_id=pms_current_property_id()").bind(job.source_id).first<Record<string,unknown>>();
+    if(!delivery)throw new Error("Voucher delivery source is missing");
+    if(delivery.status==="SENT")return;
+    const endpoint=process.env.TALOS_EMAIL_ENDPOINT,secret=process.env.TALOS_EMAIL_SECRET,from=process.env.TALOS_EMAIL_FROM;
+    if(!endpoint||!secret||!from)throw new Error("Voucher email adapter is not configured");
+    const {renderVoucherHtml}=await import("../../pms/voucher-document"),voucher=object(delivery.document_payload);
+    await db.prepare("UPDATE reservation_voucher_deliveries SET status='SENDING',attempts=attempts+1,last_error=NULL WHERE id=? AND property_id=pms_current_property_id() AND status<>'SENT'").bind(job.source_id).run();
+    try {
+      // The provider must honor the delivery id as its idempotency key. If the
+      // provider accepts mail but the DB acknowledgement times out, a retry is
+      // therefore observable without delivering a duplicate message.
+      const response=await postJson(endpoint,{messageId:delivery.id,from,to:delivery.recipient_email,subject:delivery.subject,html:renderVoucherHtml(voucher as unknown as VoucherPayload,false),metadata:{propertyId:job.property_id,reservationId:delivery.reservation_id,language:delivery.language,showAmount:delivery.show_amount}},{Authorization:`Bearer ${secret}`,"Idempotency-Key":String(delivery.id)});
+      if(!response.ok)throw Object.assign(new Error(`Email adapter returned ${response.status}`),{httpStatus:response.status});
+      let receipt:Record<string,unknown>={};try{receipt=object(await response.json());}catch{/* A 2xx adapter may deliberately return no body. */}
+      await db.prepare("UPDATE reservation_voucher_deliveries SET status='SENT',provider_message_id=?,sent_at=?,last_error=NULL WHERE id=? AND property_id=pms_current_property_id()").bind(receipt.messageId?String(receipt.messageId):null,now,job.source_id).run();
+    } catch(error) {
+      const message=error instanceof Error?error.message:String(error);
+      await db.prepare("UPDATE reservation_voucher_deliveries SET status='FAILED',last_error=? WHERE id=? AND property_id=pms_current_property_id() AND status<>'SENT'").bind(message.slice(0,1000),job.source_id).run();
+      throw error;
+    }
     return;
   }
   if (job.job_type === "DOMAIN_VERIFY") {

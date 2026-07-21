@@ -10,7 +10,7 @@
 | 신규 예약 목록 | Calendar/List, 입·퇴실일, 박수, 객실 수, 객실종류·조식·기준/최대인원·총액·예약 | 상품 중심 예약 생성 | 완료 — PR 2 |
 | 신규 예약 달력 | 월 이동, 판매상품 선택, 일자별 가격·잔여/전체 객실 | 상품/인원 가격과 달력 예약 | 완료 — PR 2 |
 | 예약 관리 | 2개 날짜조건, 채널/고객 검색, 상태·결제·페이지 크기, Excel import/export, 상세·바우처 | 검색 가능한 예약 원장과 상세 | 상세 완료 — PR 3; import/export PR 7 |
-| 예약 바우처 | KR/EN, 금액 표시/숨김, 제목·수신자, 다운로드·Excel·인쇄·메일 | 확인서 문서·전송 queue | PR 4 |
+| 예약 바우처 | KR/EN, 금액 표시/숨김, 제목·수신자, 다운로드·Excel·인쇄·메일 | 확인서 문서·전송 queue | 완료 — PR 4 |
 | 채널 설정 | 사용 가능/선택 catalog, 통합/수동 구분, 외부 ID, 설정·수정·활성/중지·삭제·순서·로그 | 채널 catalog와 연결 lifecycle | PR 5 |
 | 신규 블록·요금 | 객실 × 상품 × 채널 × 날짜의 대량 stop-sell/재고/요금 | 대량 matrix editor | PR 5 |
 | 연회 예약 | 장소 선택, 월 달력, 예약 등록 | banquet master/reservation | PR 7 |
@@ -82,6 +82,19 @@
 - 저장은 `expectedVersion`과 `reservation_mutations(property_id,reservation_id,expected_version)` unique guard를 사용한다. 같은 버전을 동시에 저장한 두 요청 중 하나만 commit되며 모든 변경은 감사·Outbox·멱등 영수증과 원자 처리된다.
 
 PostgreSQL 통합 테스트는 예약자와 투숙자 불일치, 요청/응답·시간 옵션, 취소조건 snapshot, 연계예약, before/after 로그, PCI 원문 거부와 RLS를 운영 스키마에서 검증한다.
+
+## PR 4 — 국문·영문 예약 바우처와 전달 queue
+
+`202607210022_reservation_voucher_delivery.sql`은 사용자가 화면에서 본 확인서와 메일로 보낸 확인서가 달라지지 않도록 전송 시점 문서를 JSONB snapshot으로 보존한다.
+
+- 바우처 projection은 호텔 연락처, 예약번호, 예약자·투숙자, 일정, 객실·상품, 인원, 일자별 요금과 취소조건만 bounded query로 읽는다. 원문 Card Info와 관리자/호텔 내부 메모는 구조적으로 선택하지 않는다.
+- 국문/영문 라벨과 금액 표시/숨김은 서버의 한 payload 정책을 HTML·PDF·XLSX가 공유한다. PDF는 Noto Sans KR 글꼴 subset을 임베딩하여 실행 환경에 한글 글꼴이 없어도 문자가 깨지지 않는다.
+- `RESERVATION_WRITE` 사용자는 메일을 queue할 수 있고, 문서 다운로드는 별도 export 권한을 다시 확인한다. preview·인쇄·파일 버튼·메일 입력의 로딩과 오류 상태는 dialog 안에서 구분한다.
+- 메일 mutation은 delivery snapshot, `VOUCHER_EMAIL` worker job, audit, 전역 멱등 영수증을 하나의 transaction으로 저장한다. 같은 `Idempotency-Key`의 동시 요청은 한 delivery와 한 worker job으로 수렴한다.
+- worker는 provider에 delivery ID를 `Idempotency-Key`로 보내며, 성공 전에는 retry 가능한 상태를 유지한다. 설정되지 않은 provider는 성공으로 위장하지 않고 durable retry/DEAD 흐름으로 보낸다.
+- delivery table은 FORCE RLS를 사용하고 문서·수신자 같은 증빙 필드는 update trigger로 불변이다. worker가 바꿀 수 있는 필드는 상태, 시도 횟수, provider receipt, 오류와 완료 시각뿐이다.
+
+PostgreSQL 통합 테스트는 동시 멱등 수렴, 교차 호텔 차단, native boolean/JSONB, immutable payload trigger, 금액 숨김과 민감정보 제외를 검증한다. 단위 테스트는 실제 PDF header·임베딩 한글 문서·XLSX workbook과 금액 숨김 결과를 생성해 확인한다.
 
 ## 공통 완료 판정
 
