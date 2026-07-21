@@ -14,7 +14,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607210020_rate_product_catalog` |
+| 스키마 계약 | `202607210022_reservation_voucher_delivery` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
@@ -24,6 +24,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - 최대 730일 선택·벌크 범위를 유지하면서 14/30일 읽기 창만 렌더링하는 재고 캘린더, 5,000셀 원자적 벌크 저장, MLOS·CTA·CTD·stop-sell
 - HotelStory형 판매 상품 Rate Plan, 부모 상품 요금 상속, 식사·패키지·판매기간·기준/최대 인원·인원별 요금, 예약 시 상품 snapshot, 객실 타입 매핑, 일자별 직판 요금과 홈페이지 실시간 가격·재고
 - HotelStory형 예약 상세: 예약자/투숙자 분리, 고객요청·응답, 관리자/호텔 메모, 예약 확인, 시간 연장, PCI-safe Card Info, 연계·복사, 일자별 요금·취소정책과 4종 인라인 로그
+- HotelStory형 예약 바우처: 국문/영문, 금액 표시/숨김, Noto Sans KR 임베딩 PDF, Excel, 인쇄, 제목·수신자 메일 queue와 중복 전송 방지
 - 폴리오 창·라우팅·분할·반대전표·수납·환불·AR 이관·후불 수납
 - 그룹 블록·rooming list·pickup·cutoff, 채널 연결·계약·ARI·inbound·outbox
 - 복식부기 journal, 채널 수수료/입금가 정산, P/L, 11종 리포트와 CSV/XLSX
@@ -79,6 +80,9 @@ AURORA_PLATFORM_HOSTS=pms.example.com
 AURORA_TENANT_BASE_DOMAIN=hotels.example.com
 PMS_REQUIRE_PLATFORM_MFA=true
 CRON_SECRET=32자_이상_무작위_값
+TALOS_EMAIL_ENDPOINT=https://approved-mail-adapter.example/v1/messages
+TALOS_EMAIL_SECRET=32자_이상_무작위_값
+TALOS_EMAIL_FROM=talos@allmytour.com
 ```
 
 실제 값은 커밋하지 않습니다. 운영과 스테이징은 Supabase 프로젝트, Vercel 프로젝트, 환경 변수를 물리적으로 분리합니다.
@@ -133,6 +137,7 @@ flowchart LR
 | read models·dashboard | `app/api/pms/read-model.ts` |
 | 통합 검색·프런트·예약 가용성 projection | `app/api/pms/frontdesk-read.ts` |
 | 재고·Rate Plan·회계 | `app/api/pms/extended.ts` |
+| 예약 바우처 projection·문서 | `app/api/pms/voucher-service.ts`, `app/api/pms/voucher-document.ts` |
 | 직접 예약 | `app/api/booking/service.ts` |
 | 홈페이지 CMS projection | `app/api/booking/website-service.ts` |
 | PMS shell | `app/(pms)/_components/pms-shell.tsx` |
@@ -201,6 +206,7 @@ flowchart LR
 | enqueue DEAD 새 cycle 초기화·RUNNING lease 보존 | `202607200019_worker_enqueue_revival_guards.sql` |
 | HotelStory 판매 상품·인원별 요금·상품 snapshot | `202607210020_rate_product_catalog.sql` |
 | 예약자/투숙자·운영 옵션·취소정책·연계예약 | `202607210021_reservation_operational_detail.sql` |
+| 예약 바우처 immutable payload·메일 전달 queue | `202607210022_reservation_voucher_delivery.sql` |
 
 배포 순서:
 
@@ -222,6 +228,7 @@ npm run release:build
 - `?view=core`: 첫 화면용 예약, 객실, 재고, 실제 대시보드 비교 지표
 - `?view=groups|finance|channels`: 해당 화면만 위한 bounded projection(각 4/8/8 query)
 - `?view=reservation_availability|reservation_calendar|reservation_detail`: 목록·월 달력·단건 상세 전용 bounded projection
+- `?view=reservation_voucher`: 단건 예약의 권한·tenant 범위 내 KR/EN 확인서 projection; `format=json|html|pdf|xlsx`, 금액 표시 정책과 export 권한 적용
 - `?view=inventory|accounting|website|report`: 기간 또는 도메인 전용 projection
 - 기본 view: 그룹, 재무, 채널을 포함한 전체 read model
 - 응답은 `private, no-store`, gzip representation cache를 사용합니다.

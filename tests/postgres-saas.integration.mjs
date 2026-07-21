@@ -439,14 +439,16 @@ test(
       retryId = `job-reaper-retry-${suffix}`,
       deadId = `job-reaper-dead-${suffix}`,
       resetId = `job-reaper-reset-${suffix}`,
-      exhaustedRetryId = `job-reaper-exhausted-${suffix}`;
+      exhaustedRetryId = `job-reaper-exhausted-${suffix}`,
+      voucherResetId = `job-reaper-voucher-${suffix}`;
     try {
       await sql`INSERT INTO worker_jobs(id,property_id,job_type,source_id,payload,status,priority,attempts,max_attempts,attempt_cycle,available_at,locked_at,locked_by,updated_at)
         VALUES (${retryId},${propertyId},'USAGE_ROLLUP',${`reaper-retry-${suffix}`} ,'{}'::jsonb,'RUNNING',-200,1,3,1,clock_timestamp(),clock_timestamp()-interval '10 minutes','test:lost-a',clock_timestamp()-interval '10 minutes'),
                (${deadId},${propertyId},'USAGE_ROLLUP',${`reaper-dead-${suffix}`} ,'{}'::jsonb,'RUNNING',-190,2,2,1,clock_timestamp(),clock_timestamp()-interval '10 minutes','test:lost-b',clock_timestamp()-interval '10 minutes'),
                (${resetId},${propertyId},'OUTBOX_WEBHOOK',${`reaper-reset-${suffix}`} ,'{}'::jsonb,'DEAD',-300,2,2,1,clock_timestamp(),NULL,NULL,clock_timestamp()-interval '20 minutes'),
-               (${exhaustedRetryId},${propertyId},'ARI_DELIVERY',${`reaper-exhausted-${suffix}`} ,'{}'::jsonb,'RETRY',-290,2,2,1,clock_timestamp(),NULL,NULL,clock_timestamp()-interval '20 minutes')`;
-      await sql`UPDATE worker_jobs SET completed_at=clock_timestamp()-interval '20 minutes' WHERE id=${resetId}`;
+               (${exhaustedRetryId},${propertyId},'ARI_DELIVERY',${`reaper-exhausted-${suffix}`} ,'{}'::jsonb,'RETRY',-290,2,2,1,clock_timestamp(),NULL,NULL,clock_timestamp()-interval '20 minutes'),
+               (${voucherResetId},${propertyId},'VOUCHER_EMAIL',${`reaper-voucher-${suffix}`} ,'{}'::jsonb,'DEAD',-310,2,2,1,clock_timestamp(),NULL,NULL,clock_timestamp()-interval '20 minutes')`;
+      await sql`UPDATE worker_jobs SET completed_at=clock_timestamp()-interval '20 minutes' WHERE id IN (${resetId},${voucherResetId})`;
       await sql`INSERT INTO worker_attempts(property_id,job_id,attempt_cycle,attempt_no,started_at)
         VALUES (${propertyId},${retryId},1,1,clock_timestamp()-interval '10 minutes'),
                (${propertyId},${deadId},1,2,clock_timestamp()-interval '10 minutes'),
@@ -462,8 +464,8 @@ test(
         });
       assert.ok(recovery.staleRetried >= 1);
       assert.ok(recovery.staleDead >= 1);
-      assert.ok(recovery.deadReset >= 2);
-      const rows = await sql`SELECT id,status,attempts,attempt_cycle,recovery_count,locked_at,locked_by FROM worker_jobs WHERE id IN (${retryId},${deadId},${resetId},${exhaustedRetryId}) ORDER BY id`;
+      assert.ok(recovery.deadReset >= 3);
+      const rows = await sql`SELECT id,status,attempts,attempt_cycle,recovery_count,locked_at,locked_by FROM worker_jobs WHERE id IN (${retryId},${deadId},${resetId},${exhaustedRetryId},${voucherResetId}) ORDER BY id`;
       const byId = new Map(rows.map((row) => [row.id, row]));
       assert.equal(byId.get(retryId).status, "RETRY");
       assert.equal(byId.get(deadId).status, "DEAD");
@@ -474,13 +476,16 @@ test(
       assert.equal(byId.get(exhaustedRetryId).status, "RETRY");
       assert.equal(byId.get(exhaustedRetryId).attempts, 0);
       assert.equal(byId.get(exhaustedRetryId).attempt_cycle, 2);
+      assert.equal(byId.get(voucherResetId).status, "RETRY");
+      assert.equal(byId.get(voucherResetId).attempts, 0);
+      assert.equal(byId.get(voucherResetId).attempt_cycle, 2);
       assert.equal(byId.get(retryId).locked_by, null);
       const [expiredAttempt] =
         await sql`SELECT outcome,error_code,completed_at FROM worker_attempts WHERE job_id=${retryId} AND attempt_cycle=1 AND attempt_no=1`;
       assert.equal(expiredAttempt.outcome, "RETRY");
       assert.equal(expiredAttempt.error_code, "LEASE_EXPIRED");
       assert.ok(expiredAttempt.completed_at);
-      const claimed = await db.claimWorkerJobs("test:recovery-cycle", 2),
+      const claimed = await db.claimWorkerJobs("test:recovery-cycle", 3),
         resetClaim = claimed.find((job) => job.id === resetId);
       assert.ok(resetClaim, "the reset delivery must be claimable");
       assert.equal(resetClaim.attempt_cycle, 2);

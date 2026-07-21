@@ -18,6 +18,12 @@ const tables = uniqueMatches(migrationSql, /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXIST
 const triggers = uniqueMatches(migrationSql, /CREATE\s+TRIGGER\s+["']?([a-z_][a-z0-9_]*)["']?/giu);
 const foreignKeys = uniqueMatches(migrationSql, /CONSTRAINT\s+["']?([a-z_][a-z0-9_]*)["']?\s+FOREIGN\s+KEY/giu);
 const rlsTables = uniqueMatches(migrationSql, /ALTER\s+TABLE\s+(?:public\.)?["']?([a-z_][a-z0-9_]*)["']?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/giu);
+// Some early migrations enable RLS through a dynamic policy loop. Count the
+// concrete tenant policy declarations too so the source metric matches the
+// catalog contract without encoding another hand-maintained table list here.
+for(const match of migrationSql.matchAll(/CREATE\s+POLICY\s+aurora_property_isolation\s+ON\s+(?:public\.)?["']?([a-z_][a-z0-9_]*)["']?/giu)){
+  rlsTables.add(match[1].toLowerCase());
+}
 // Tenant tables are declared in versioned policy loops as the schema grows.
 // Aggregate every loop instead of pinning the metric generator to one migration.
 for(const tenantArray of migrationSql.matchAll(/tables\s+text\[\]\s*:=\s*ARRAY\[(.*?)\];/gsu)){

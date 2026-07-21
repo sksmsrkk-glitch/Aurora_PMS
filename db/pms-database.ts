@@ -136,6 +136,7 @@ const tenantTables = [
   "support_access_grants", "support_sessions", "data_import_jobs",
   "data_import_rows", "data_import_entities", "worker_jobs", "worker_attempts",
   "property_webhooks", "backup_runs", "service_incidents", "property_usage_daily",
+  "reservation_links", "reservation_voucher_deliveries",
 ] as const;
 const tenantTablePattern = new RegExp(`\\b(?:${tenantTables.join("|")})\\b`, "iu");
 
@@ -597,7 +598,7 @@ class PostgresDatabase implements PmsDatabase {
       }
       if(maxRecoveries===0)return {staleRetried,staleDead,deadReset:0};
       const recoverable=await this.executeRaw<{id:string}>(
-        `SELECT id FROM worker_jobs WHERE job_type IN ('OUTBOX_WEBHOOK','ARI_DELIVERY')
+        `SELECT id FROM worker_jobs WHERE job_type IN ('OUTBOX_WEBHOOK','ARI_DELIVERY','VOUCHER_EMAIL')
           AND (status='DEAD' OR (status='RETRY' AND attempts>=max_attempts))
           AND COALESCE(completed_at,updated_at)<=clock_timestamp()-(?||' seconds')::interval AND recovery_count<?
           ORDER BY priority,COALESCE(completed_at,updated_at),created_at FOR UPDATE SKIP LOCKED LIMIT ?`,

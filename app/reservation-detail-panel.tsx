@@ -2,6 +2,7 @@
 
 /** HotelStory-style operational reservation detail loaded only for the open row. */
 import { useQuery } from "@tanstack/react-query";
+import dynamic from "next/dynamic";
 import { useState } from "react";
 import { addIsoDays, formatMoney } from "../lib/format";
 import { usePmsActions } from "./pms-action-context";
@@ -27,7 +28,9 @@ type FormState={
   managerMemo:string;hotelMemo:string;reservationChecked:boolean;earlyCheckin:boolean;earlyCheckinTime:string;
   lateCheckout:boolean;lateCheckoutTime:string;cardInfoRef:string;serviceFeeIncluded:boolean;
 };
-type PanelProps={summary:Summary;onEdit:()=>void;onAssign:()=>void;onCancel:()=>void;canEdit:boolean;canAssign:boolean;canCancel:boolean};
+type PanelProps={summary:Summary;onEdit:()=>void;onAssign:()=>void;onCancel:()=>void;canEdit:boolean;canAssign:boolean;canCancel:boolean;canExport:boolean};
+
+const ReservationVoucherDialog=dynamic(()=>import("./reservation-voucher-dialog"));
 
 const mealLabels:Record<string,string>={ROOM_ONLY:"식사 미포함",BREAKFAST:"조식 포함",DINNER:"석식 포함",HALF_BOARD:"조식·석식 포함",FULL_PACKAGE:"24시간 풀패키지"};
 const relationLabels:Record<string,string>={COMPANION:"동반 예약",CONSECUTIVE:"연박 예약",GROUP:"그룹 예약"};
@@ -55,9 +58,9 @@ export default function ReservationDetailPanel(props:PanelProps){
   return <ReservationDetailLoaded key={`${summary.id}:${detailQuery.data.reservation.version}`} {...props} data={detailQuery.data} refresh={async()=>{await detailQuery.refetch();}}/>;
 }
 
-function ReservationDetailLoaded({summary,onEdit,onAssign,onCancel,canEdit,canAssign,canCancel,data,refresh}:PanelProps&{data:Payload;refresh:()=>Promise<void>}){
+function ReservationDetailLoaded({summary,onEdit,onAssign,onCancel,canEdit,canAssign,canCancel,canExport,data,refresh}:PanelProps&{data:Payload;refresh:()=>Promise<void>}){
   const {busy,act}=usePmsActions();
-  const [form,setForm]=useState<FormState>(()=>formFrom(data.reservation)),[logTab,setLogTab]=useState<(typeof logTabs)[number]["key"]>("edits"),[modal,setModal]=useState<"link"|"copy"|null>(null);
+  const [form,setForm]=useState<FormState>(()=>formFrom(data.reservation)),[logTab,setLogTab]=useState<(typeof logTabs)[number]["key"]>("edits"),[modal,setModal]=useState<"link"|"copy"|"voucher"|null>(null);
   const [link,setLink]=useState({linkedConfirmationNo:"",relationType:"COMPANION",notes:""});
   const [copy,setCopy]=useState({arrivalDate:summary.arrival_date,departureDate:summary.departure_date});
   const detail=data.reservation,set=(key:keyof FormState,value:string|boolean)=>setForm(current=>({...current,[key]:value}));
@@ -65,7 +68,7 @@ function ReservationDetailLoaded({summary,onEdit,onAssign,onCancel,canEdit,canAs
   const submitLink=async()=>{if(await act("link_reservation",{reservationId:detail.id,...link})){setModal(null);setLink({linkedConfirmationNo:"",relationType:"COMPANION",notes:""});await refresh();}};
   const submitCopy=async()=>{const ok=await act("create_reservation",{firstName:form.guestFirstName,lastName:form.guestLastName,email:form.guestEmail,phone:form.guestPhone,bookerName:form.bookerName,bookerEmail:form.bookerEmail,bookerPhone:form.bookerPhone,arrivalDate:copy.arrivalDate,departureDate:copy.departureDate,roomTypeId:detail.room_type_id,ratePlan:detail.product_code||detail.rate_plan,nightlyRate:String(detail.nightly_rate),rateOverride:"false",adults:form.adults,children:form.children,source:"Copy",eta:detail.eta||"",notes:`복사 원본 ${detail.confirmation_no}`,guestRequest:form.guestRequest,paymentType:form.paymentType,nationality:String(detail.nationality||"KR")});if(ok)setModal(null);};
   return <div className="reservation-operational-detail">
-    <div className="reservation-detail-toolbar"><div><b>{detail.reservation_checked?"✓ 예약 확인 완료":"! 예약 확인 필요"}</b><span>{detail.property_name} · {detail.source} · {detail.payment_type}</span></div><div>{canEdit&&<button type="button" onClick={onEdit}>예약변경</button>}<button type="button" onClick={()=>setModal("link")}>연계예약</button><button type="button" onClick={()=>{setCopy({arrivalDate:detail.arrival_date,departureDate:detail.departure_date});setModal("copy");}}>예약복사</button></div></div>
+    <div className="reservation-detail-toolbar"><div><b>{detail.reservation_checked?"✓ 예약 확인 완료":"! 예약 확인 필요"}</b><span>{detail.property_name} · {detail.source} · {detail.payment_type}</span></div><div><button type="button" className="voucher-open" onClick={()=>setModal("voucher")}>예약 바우처</button>{canEdit&&<button type="button" onClick={onEdit}>예약변경</button>}<button type="button" onClick={()=>setModal("link")}>연계예약</button><button type="button" onClick={()=>{setCopy({arrivalDate:detail.arrival_date,departureDate:detail.departure_date});setModal("copy");}}>예약복사</button></div></div>
     <div className="reservation-detail-columns">
       <section className="reservation-facts"><header><span>예약 정보</span><b>{detail.product_name||detail.rate_plan}</b></header><dl>
         <div><dt>호텔 / 코드</dt><dd>{detail.property_name} · {detail.property_code}</dd></div><div><dt>채널 상품</dt><dd>{form.channelProductName||"미지정"}</dd></div>
@@ -87,5 +90,6 @@ function ReservationDetailLoaded({summary,onEdit,onAssign,onCancel,canEdit,canAs
     <section className="reservation-inline-logs"><div role="tablist" aria-label="예약 이력">{logTabs.map(tab=><button type="button" role="tab" aria-selected={logTab===tab.key} className={logTab===tab.key?"on":""} key={tab.key} onClick={()=>setLogTab(tab.key)}>{tab.label}<b>{tab.key==="rates"?data.logs.rates.length+data.rateNights.length:data.logs[tab.key].length}</b></button>)}</div>{logTab==="rates"&&data.rateNights.map(row=><article key={`night-${row.stay_date}`}><time>{row.stay_date}</time><div><b>예약 시점 일자 요금</b><p>{row.rate_plan} · {formatMoney(Number(row.sell_rate))}</p></div><span>IMMUTABLE</span></article>)}{data.logs[logTab].map(row=><article key={row.id}><time>{new Date(row.created_at).toLocaleString("ko-KR")}</time><div><b>{row.action}</b><p>{compactAudit(row.after_json||row.before_json)}</p></div><span>{row.actor}</span></article>)}{data.logs[logTab].length===0&&(logTab!=="rates"||data.rateNights.length===0)&&<div className="empty-state"><b>기록이 없습니다.</b><p>이 예약의 해당 업무 이력이 생기면 이곳에 표시됩니다.</p></div>}</section>
     {modal==="link"&&<div className="modal-backdrop"><form className="cashier-modal" onSubmit={event=>{event.preventDefault();void submitLink();}}><div className="drawer-head"><div><p>{detail.confirmation_no}</p><h2>연계 예약 등록</h2></div><button type="button" onClick={()=>setModal(null)}>×</button></div><div className="stack-form"><label><span>연계할 예약번호</span><input required value={link.linkedConfirmationNo} onChange={event=>setLink({...link,linkedConfirmationNo:event.target.value})}/></label><label><span>연계 유형</span><select value={link.relationType} onChange={event=>setLink({...link,relationType:event.target.value})}><option value="COMPANION">동반 예약</option><option value="CONSECUTIVE">연박 예약</option><option value="GROUP">그룹 예약</option></select></label><label><span>메모</span><textarea value={link.notes} onChange={event=>setLink({...link,notes:event.target.value})}/></label></div><div className="modal-actions"><button type="button" className="secondary" onClick={()=>setModal(null)}>닫기</button><button className="primary" disabled={!!busy}>연계 저장</button></div></form></div>}
     {modal==="copy"&&<div className="modal-backdrop"><form className="cashier-modal" onSubmit={event=>{event.preventDefault();void submitCopy();}}><div className="drawer-head"><div><p>{detail.confirmation_no}에서 복사</p><h2>예약 복사</h2></div><button type="button" onClick={()=>setModal(null)}>×</button></div><p className="form-intro">투숙자·예약자·상품을 복사하고 새 일정의 판매 조건과 재고는 서버에서 다시 검증합니다.</p><div className="form-grid"><label><span>새 도착일</span><input type="date" required value={copy.arrivalDate} onChange={event=>setCopy({arrivalDate:event.target.value,departureDate:event.target.value>=copy.departureDate?addIsoDays(event.target.value,1):copy.departureDate})}/></label><label><span>새 출발일</span><input type="date" min={addIsoDays(copy.arrivalDate,1)} required value={copy.departureDate} onChange={event=>setCopy({...copy,departureDate:event.target.value})}/></label></div><div className="modal-actions"><button type="button" className="secondary" onClick={()=>setModal(null)}>닫기</button><button className="primary" disabled={!!busy}>재고 확인 후 복사</button></div></form></div>}
+    {modal==="voucher"&&<ReservationVoucherDialog reservationId={detail.id} confirmationNo={detail.confirmation_no} defaultEmail={form.bookerEmail||form.guestEmail} canExport={canExport} close={()=>setModal(null)}/>}
   </div>;
 }

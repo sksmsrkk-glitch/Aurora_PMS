@@ -46,7 +46,7 @@ flowchart LR
   AUTH --> API["PMS Route Handler\nRBAC · Zod · idempotency"]
   UI --> API
   WEB --> BOOKING["Public Booking API\nrate · restriction · inventory validation"]
-  API --> REGISTRY["58-action registry\ndomain · capability · schema"]
+  API --> REGISTRY["59-action registry\ndomain · capability · schema"]
   REGISTRY --> ADAPTER["Tenant-scoped PmsDatabase"]
   BOOKING --> ADAPTER
   ADAPTER --> PG["Supavisor transaction pooler\nDATABASE_URL · prepared=false"]
@@ -108,6 +108,8 @@ sequenceDiagram
 | `app/api/pms/command-gateway.ts` | command 실행, strict idempotency receipt, 감사·Outbox 기록 |
 | `app/api/pms/read-model.ts` | core/full projection과 압축·짧은 읽기 cache |
 | `app/api/pms/frontdesk-read.ts` | 권한 인식 통합 검색, 프런트 페이지, 예약 가용성·달력·단건 상세·인라인 로그 projection |
+| `app/api/pms/voucher-service.ts` | tenant-scoped 예약·숙박객·상품·일자 요금의 바우처 전용 bounded projection |
+| `app/api/pms/voucher-document.ts` | 국문/영문 HTML·PDF·XLSX 렌더링과 금액 표시 정책; PDF에 Noto Sans KR subset 임베딩 |
 | `app/api/pms/error-map.ts` | 안정된 DB 오류 코드/패턴을 HTTP 상태와 사용자 메시지로 매핑 |
 | `app/api/booking/service.ts` | 공개 판매 타입, 투숙 제한, 일별 가용재고·요금 재계산, 예약·취소 원자 처리 |
 | `app/api/booking/website-service.ts` | CMS에서 공개 승인된 호텔·객실·미디어만 읽는 서버 projection |
@@ -168,6 +170,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | 예약 가용성 | `GET /api/pms?view=reservation_availability` | 최대 30박의 타입 재고·블록 hold·Rate Plan·MLOS·CTA·CTD·일자 요금 계산 |
 | 예약 달력 | `GET /api/pms?view=reservation_calendar` | 한 상품·한 달의 일자별 타입 가격과 잔여/전체 재고를 고정 배치로 계산 |
 | 예약 상세 | `GET /api/pms?view=reservation_detail` | 단일 예약의 예약자/투숙자, 상품 snapshot, 일자 요금, 연계예약과 200건 이하 분류 로그 |
+| 예약 바우처 | `GET /api/pms?view=reservation_voucher` | 단일 예약의 KR/EN 확인서; JSON preview와 export 권한을 적용한 HTML/PDF/XLSX 문서 |
 | 장기 재고 | `GET /api/pms?view=inventory` | 선택은 730일까지 허용하되 UI가 한 요청당 14/30일만 조회 |
 | 회계 센터 | `GET /api/pms?view=accounting` | 기간별 journal, settlement, account, P/L summary를 별도 조회 |
 | 리포트 | `GET /api/pms?view=report` | 필터·정렬·페이지네이션·마스킹이 적용된 서버 읽기 모델 |
@@ -177,6 +180,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 
 - 예약 생성: guest + reservation + folio window + 타입/객실 night + audit + outbox가 하나의 batch입니다.
 - 예약 상세: staying guest + booker/option reservation update + version mutation + audit + outbox + idempotency가 하나의 batch입니다.
+- 예약 바우처 메일: immutable document snapshot + delivery + `VOUCHER_EMAIL` worker job + audit + idempotency가 하나의 batch입니다.
 - 그룹 픽업: block pickup night + reservation night + rooming 상태가 같은 트랜잭션에서 이동합니다.
 - AR 이관: invoice debit + folio direct-bill payment + window 상태 전이가 함께 commit됩니다.
 - 회계 수기 전표: journal header + 모든 debit/credit line + audit + idempotency가 함께 commit됩니다.
@@ -205,6 +209,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | ADR-016 | PostgreSQL service 기반 CI behavior gate | 소스 정규식과 테스트 내부 SQLite trigger는 운영 schema drift를 잡지 못함 | PR마다 빈 PostgreSQL 17에 전체 migration을 적용하고 실제 RLS·trigger·경합 실행 |
 | ADR-017 | 예약자와 투숙자를 다른 운영 개념으로 저장 | 여행사·회사·가족 예약에서는 결제/연락 주체와 실제 투숙자가 다름 | booker는 예약 snapshot, guest는 투숙자 profile이며 상세 화면과 감사에 함께 투영 |
 | ADR-018 | 취소정책·일자요금 예약 시점 snapshot | 상품 master 변경이 과거 바우처·취소수수료·정산 근거를 바꾸면 안 됨 | JSONB cancellation terms와 immutable night rates를 상세/바우처가 우선 사용 |
+| ADR-020 | 바우처 문서 snapshot과 비동기 전달 분리 | 문서 생성 뒤 예약이 바뀌거나 메일 제공자가 느려도 사용자 요청과 전달 증빙이 일관돼야 함 | queue 시점 payload를 JSONB로 고정하고 worker가 provider idempotency key로 전달; PAN·내부 메모는 projection에서 제외 |
 ## 직원 계정·권한 아키텍처
 
 Supabase Auth는 이메일/비밀번호 검증과 세션만 담당합니다. 권한은 변경 가능한 `user_metadata`가 아니라 tenant table인 `role_assignments`의 `property_id`, `active`, `workspace_permissions`, `can_export`, `must_change_password`에서 해석합니다. Root DB는 인증 직후 닫힌 `findActiveRoleAssignments(authUserId, email)` capability로 Auth user ID와 이메일이 모두 일치하는 배정만 읽습니다. 연결되지 않은 레거시 이메일 행은 권한으로 승격되지 않으며, 이후 직원 목록·변경·업무 데이터는 모두 property-scoped adapter와 RLS를 통과합니다.

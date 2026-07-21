@@ -479,6 +479,30 @@ test("reservation detail separates booker and guest with optimistic audit histor
   }
 });
 
+test("voucher queue snapshots KR/EN visibility and deduplicates concurrent email requests",{skip},async()=>{
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),email=`voucher-${suffix}@example.com`,assignmentId=`it-voucher-role-${suffix}`,token=`voucher-token-${crypto.randomUUID()}`,key=`voucher-queue-${suffix}`;
+  const previous={databaseUrl:process.env.DATABASE_URL,allow:process.env.PMS_ALLOW_DEMO_AUTH,token:process.env.PMS_DEMO_AUTH_TOKEN,email:process.env.PMS_DEMO_USER_EMAIL,rate:process.env.PMS_RATE_LIMIT_SECRET,node:process.env.NODE_ENV};
+  const permissions={overview:"WRITE",frontdesk:"WRITE",inventory:"WRITE",website:"WRITE",groups:"WRITE",finance:"WRITE",accounting:"WRITE",channels:"WRITE",rooms:"WRITE",reports:"WRITE",master:"WRITE",revenue:"WRITE",users:"WRITE",audit:"WRITE"};
+  let deliveryIds=[];
+  try{
+    const [reservation]=await sql`SELECT id,confirmation_no FROM reservations WHERE property_id='prop-seoul' ORDER BY created_at LIMIT 1`;assert.ok(reservation);
+    await sql`INSERT INTO role_assignments(id,property_id,email,role,active,created_at,display_name,workspace_permissions,can_export,updated_at) VALUES (${assignmentId},'prop-seoul',${email},'PROPERTY_ADMIN',true,now(),'Voucher Command',${sql.json(permissions)},true,now())`;
+    process.env.DATABASE_URL=databaseUrl;process.env.PMS_ALLOW_DEMO_AUTH="true";process.env.PMS_DEMO_AUTH_TOKEN=token;process.env.PMS_DEMO_USER_EMAIL=email;process.env.PMS_RATE_LIMIT_SECRET=`voucher-rate-${crypto.randomUUID()}`;process.env.NODE_ENV="test";
+    const body={action:"queue_reservation_voucher",reservationId:reservation.id,language:"EN",showAmount:"false",recipientEmail:"guest@example.com",subject:`Booking ${reservation.confirmation_no}`},post=()=>handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":key},body:JSON.stringify(body)}));
+    const responses=await Promise.all([post(),post()]);assert.deepEqual(responses.map(response=>response.status),[200,200]);assert.equal(responses.filter(response=>response.headers.get("X-Idempotent-Replay")==="true").length,1);
+    const deliveries=await sql`SELECT id,language,show_amount,recipient_email,subject,document_payload,status FROM reservation_voucher_deliveries WHERE property_id='prop-seoul' AND idempotency_key=${key}`;deliveryIds=deliveries.map(row=>row.id);assert.equal(deliveries.length,1);assert.equal(deliveries[0].language,"EN");assert.equal(deliveries[0].show_amount,false);assert.equal(deliveries[0].status,"QUEUED");assert.equal(deliveries[0].document_payload.amountVisible,false);assert.equal("cardInfoRef" in deliveries[0].document_payload.reservation,false);
+    const jobs=await sql`SELECT id,job_type,status FROM worker_jobs WHERE property_id='prop-seoul' AND source_id=${deliveries[0].id}`;assert.equal(jobs.length,1);assert.equal(jobs[0].job_type,"VOUCHER_EMAIL");assert.equal(jobs[0].status,"PENDING");
+    const scoped=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-busan"),hidden=await scoped.prepare("SELECT COUNT(*) count FROM reservation_voucher_deliveries WHERE id=? AND property_id=pms_current_property_id()").bind(deliveries[0].id).first();assert.equal(Number(hidden?.count||0),0);
+    const [contract]=await sql`SELECT (SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.reservation_voucher_deliveries'::regclass) forced_rls,(SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='reservation_voucher_deliveries' AND column_name='show_amount') amount_type,(SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='reservation_voucher_deliveries' AND column_name='document_payload') payload_type`;assert.equal(contract.forced_rls,true);assert.equal(contract.amount_type,"boolean");assert.equal(contract.payload_type,"jsonb");
+    await assert.rejects(()=>sql`UPDATE reservation_voucher_deliveries SET subject='tampered' WHERE id=${deliveries[0].id}`,/voucher delivery snapshot is immutable/iu);
+    await sql`UPDATE reservation_voucher_deliveries SET status='SENDING',attempts=attempts+1 WHERE id=${deliveries[0].id}`;
+  }finally{
+    if(!deliveryIds.length){const residue=await sql`SELECT id FROM reservation_voucher_deliveries WHERE property_id='prop-seoul' AND idempotency_key=${key}`;deliveryIds=residue.map(row=>row.id);}
+    if(deliveryIds.length){await sql`DELETE FROM worker_attempts WHERE property_id='prop-seoul' AND job_id IN (SELECT id FROM worker_jobs WHERE source_id=ANY(${deliveryIds}))`;await sql`DELETE FROM worker_jobs WHERE property_id='prop-seoul' AND source_id=ANY(${deliveryIds})`;await sql`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND entity_id=ANY(${deliveryIds})`;await sql`DELETE FROM reservation_voucher_deliveries WHERE property_id='prop-seoul' AND id=ANY(${deliveryIds})`;}
+    await sql`DELETE FROM idempotency_keys WHERE property_id='prop-seoul' AND key=${key}`;await sql`DELETE FROM api_rate_limits WHERE scope='pms-write'`;await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;await closePmsDatabase();for(const [entry,value] of Object.entries(previous)){const envKey={databaseUrl:"DATABASE_URL",allow:"PMS_ALLOW_DEMO_AUTH",token:"PMS_DEMO_AUTH_TOKEN",email:"PMS_DEMO_USER_EMAIL",rate:"PMS_RATE_LIMIT_SECRET",node:"NODE_ENV"}[entry];if(value===undefined)delete process.env[envKey];else process.env[envKey]=value;}await sql.end({timeout:2});
+  }
+});
+
 test("RLS tenant context hides and rejects cross-property access", { skip }, async () => {
   const sql = client(2);
   const suffix = crypto.randomUUID().slice(0, 8);
