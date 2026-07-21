@@ -287,93 +287,141 @@ function stayDates(arrival: string, departure: string) {
   return end > start && output.length <= 30 ? output : [];
 }
 
-function calculatedPlanRate(typeBase: number, plan: Record<string, unknown>, roomBase: unknown) {
-  if (roomBase != null) return Number(roomBase);
-  const adjustment = Number(plan.adjustment || 0);
-  if (plan.pricing_model === "OFFSET") return Math.max(0, typeBase + adjustment);
-  if (plan.pricing_model === "PERCENT") return Math.max(0, Math.round(typeBase * (1 + adjustment / 100)));
-  return typeBase;
-}
+type ReservationFactRow = Record<string, unknown>;
 
-/** Authoritative staff availability projection used before creating a reservation. */
-export async function loadReservationAvailability(db: PmsDatabase, params: URLSearchParams) {
-  const arrival = params.get("arrival") || "";
-  const departure = params.get("departure") || "";
-  const adults = Math.max(1, Math.min(20, Number(params.get("adults")) || 1));
-  const children = Math.max(0, Math.min(12, Number(params.get("children")) || 0));
-  const dates = stayDates(arrival, departure);
-  if (!dates.length) throw new PmsReadError("올바른 체크인·체크아웃 날짜를 입력하세요. 최대 30박까지 조회할 수 있습니다.");
-  const [property, types, controls, sold, held, plans, roomPlans, planCalendar] = await db.batch([
+/** One bounded batch feeds both HotelStory-style List and Calendar booking views. */
+async function loadReservationFacts(db:PmsDatabase,from:string,to:string) {
+  const [property,types,controls,sold,held,plans,roomPlans,planCalendar,occupancy]=await db.batch([
     db.prepare("SELECT name,currency,business_date FROM properties WHERE id=pms_current_property_id() LIMIT 1"),
     db.prepare(`SELECT rt.id,rt.code,rt.name,rt.base_rate,rt.capacity,COUNT(rm.id) physical
       FROM room_types rt LEFT JOIN rooms rm ON rm.room_type_id=rt.id AND rm.property_id=rt.property_id AND rm.active AND rm.housekeeping_status<>'OUT_OF_SERVICE'
       WHERE rt.property_id=pms_current_property_id() AND rt.active
       GROUP BY rt.id ORDER BY rt.code`),
-    db.prepare("SELECT * FROM inventory_controls WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<=?").bind(arrival, departure),
-    db.prepare("SELECT room_type_id,stay_date,COUNT(*) count FROM reservation_type_nights WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<? GROUP BY room_type_id,stay_date").bind(arrival, departure),
+    db.prepare("SELECT * FROM inventory_controls WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<=?").bind(from,to),
+    db.prepare("SELECT room_type_id,stay_date,COUNT(*) count FROM reservation_type_nights WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<=? GROUP BY room_type_id,stay_date").bind(from,to),
     db.prepare(`SELECT bi.room_type_id,bi.stay_date,COALESCE(SUM(bi.current_rooms-bi.picked_up),0) count
       FROM block_inventory bi JOIN business_blocks bb ON bb.id=bi.block_id AND bb.property_id=bi.property_id
-      WHERE bi.property_id=pms_current_property_id() AND bi.stay_date>=? AND bi.stay_date<? AND bb.deduct_inventory AND bb.status IN ('TENTATIVE','DEFINITE')
-      GROUP BY bi.room_type_id,bi.stay_date`).bind(arrival, departure),
-    db.prepare("SELECT * FROM rate_plans WHERE property_id=pms_current_property_id() AND active ORDER BY code"),
+      WHERE bi.property_id=pms_current_property_id() AND bi.stay_date>=? AND bi.stay_date<=? AND bb.deduct_inventory AND bb.status IN ('TENTATIVE','DEFINITE')
+      GROUP BY bi.room_type_id,bi.stay_date`).bind(from,to),
+    db.prepare("SELECT * FROM rate_plans WHERE property_id=pms_current_property_id() AND active ORDER BY sort_order,code"),
     db.prepare("SELECT * FROM rate_plan_room_types WHERE property_id=pms_current_property_id() AND active"),
-    db.prepare("SELECT * FROM rate_plan_calendar WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<=?").bind(arrival, departure),
+    db.prepare("SELECT * FROM rate_plan_calendar WHERE property_id=pms_current_property_id() AND stay_date>=? AND stay_date<=?").bind(from,to),
+    db.prepare("SELECT * FROM rate_plan_occupancy WHERE property_id=pms_current_property_id()"),
   ]);
-  const hotel = property.results[0];
-  if (!hotel) throw new PmsReadError("호텔 영업 정보를 찾을 수 없습니다.", 503);
-  if (arrival < String(hotel.business_date)) throw new PmsReadError("호텔 영업일보다 이전 날짜는 선택할 수 없습니다.");
-  const controlMap = new Map(controls.results.map((row) => [`${row.room_type_id}:${row.stay_date}`, row]));
-  const soldMap = new Map(sold.results.map((row) => [`${row.room_type_id}:${row.stay_date}`, Number(row.count)]));
-  const heldMap = new Map(held.results.map((row) => [`${row.room_type_id}:${row.stay_date}`, Number(row.count)]));
-  const roomPlanMap = new Map(roomPlans.results.map((row) => [`${row.room_type_id}:${row.rate_plan_id}`, row]));
-  const calendarMap = new Map(planCalendar.results.map((row) => [`${row.room_type_id}:${row.rate_plan_id}:${row.stay_date}`, row]));
-  const offers = types.results.flatMap((type) => {
-    if (adults + children > Number(type.capacity) || Number(type.physical) < 1) return [];
-    const availability = dates.map((date) => {
-      const control = controlMap.get(`${type.id}:${date}`);
-      const limit = control?.sell_limit == null ? Number(type.physical) : Math.min(Number(type.physical), Number(control.sell_limit));
-      return Math.max(0, limit - (soldMap.get(`${type.id}:${date}`) || 0) - (heldMap.get(`${type.id}:${date}`) || 0));
-    });
-    const arrivalControl = controlMap.get(`${type.id}:${arrival}`);
-    const departureControl = controlMap.get(`${type.id}:${departure}`);
-    const globallyClosed = dates.some((date) => {
-      const control = controlMap.get(`${type.id}:${date}`);
-      return Boolean(control?.closed) || availability[dates.indexOf(date)] < 1;
-    }) || Boolean(arrivalControl?.close_to_arrival) || Boolean(departureControl?.close_to_departure);
-    if (globallyClosed) return [];
-    const typePlans = plans.results.flatMap((plan) => {
-      if ((plan.valid_from && arrival < String(plan.valid_from)) || (plan.valid_to && departure > String(plan.valid_to))) return [];
-      if (dates.length < Number(plan.min_stay || 1) || dates.length > Number(plan.max_stay || 365)) return [];
-      const relation = roomPlanMap.get(`${type.id}:${plan.id}`);
-      if (!relation || relation.active === false) return [];
-      let closed = Boolean(calendarMap.get(`${type.id}:${plan.id}:${arrival}`)?.close_to_arrival)
-        || Boolean(calendarMap.get(`${type.id}:${plan.id}:${departure}`)?.close_to_departure);
-      const nights = dates.map((date) => {
-        const calendar = calendarMap.get(`${type.id}:${plan.id}:${date}`);
-        if (calendar?.closed || dates.length < Number(calendar?.min_stay || 1)) closed = true;
-        if (date === arrival && calendar?.close_to_arrival) closed = true;
-        const base = calculatedPlanRate(Number(type.base_rate), plan, relation?.base_rate);
-        return { date, rate: Number(calendar?.sell_rate ?? base), available: availability[dates.indexOf(date)] };
-      });
-      if (closed) return [];
-      const total = nights.reduce((sum, night) => sum + night.rate, 0);
-      return [{
-        id: String(plan.id), code: String(plan.code), name: String(plan.name),
-        cancellationPolicy: String(plan.cancellation_policy || "정책 없음"),
-        mealPlan: String(plan.meal_plan || "ROOM_ONLY"),
-        guaranteePolicy: String(plan.guarantee_policy || ""),
-        total, average: Math.round(total / nights.length), nights,
-      }];
-    });
-    if (!typePlans.length) return [];
-    return [{
-      roomTypeId: String(type.id), code: String(type.code), name: String(type.name),
-      capacity: Number(type.capacity), available: Math.min(...availability), plans: typePlans,
-    }];
-  });
+  const hotel=property.results[0];
+  if(!hotel)throw new PmsReadError("호텔 영업 정보를 찾을 수 없습니다.",503);
   return {
-    property: { name: hotel.name, currency: hotel.currency, businessDate: hotel.business_date },
-    search: { arrival, departure, adults, children, nights: dates.length },
-    offers,
+    hotel,types:types.results,plans:plans.results,
+    controlMap:new Map(controls.results.map(row=>[`${row.room_type_id}:${row.stay_date}`,row])),
+    soldMap:new Map(sold.results.map(row=>[`${row.room_type_id}:${row.stay_date}`,Number(row.count)])),
+    heldMap:new Map(held.results.map(row=>[`${row.room_type_id}:${row.stay_date}`,Number(row.count)])),
+    roomPlanMap:new Map(roomPlans.results.map(row=>[`${row.room_type_id}:${row.rate_plan_id}`,row])),
+    calendarMap:new Map(planCalendar.results.map(row=>[`${row.room_type_id}:${row.rate_plan_id}:${row.stay_date}`,row])),
+    occupancyMap:new Map(occupancy.results.map(row=>[`${row.rate_plan_id}:${row.occupancy}`,Number(row.extra_charge)])),
+    planMap:new Map(plans.results.map(row=>[String(row.id),row])),
   };
+}
+
+function availableRooms(facts:Awaited<ReturnType<typeof loadReservationFacts>>,type:ReservationFactRow,date:string) {
+  const control=facts.controlMap.get(`${type.id}:${date}`) as ReservationFactRow|undefined;
+  const physical=Number(type.physical),limit=control?.sell_limit==null?physical:Math.min(physical,Number(control.sell_limit));
+  return Math.max(0,limit-(facts.soldMap.get(`${type.id}:${date}`)||0)-(facts.heldMap.get(`${type.id}:${date}`)||0));
+}
+
+/** Mirrors talos_effective_product_rate without adding one database round trip per cell. */
+function productNightRate(facts:Awaited<ReturnType<typeof loadReservationFacts>>,type:ReservationFactRow,plan:ReservationFactRow,date:string,partySize:number) {
+  if(partySize<1||partySize>Number(plan.max_occupancy||20))return null;
+  const relation=facts.roomPlanMap.get(`${type.id}:${plan.id}`) as ReservationFactRow|undefined;
+  if(!relation||relation.active===false)return null;
+  const calendar=facts.calendarMap.get(`${type.id}:${plan.id}:${date}`) as ReservationFactRow|undefined;
+  let base=calendar?.sell_rate==null?Number(relation.base_rate):Number(calendar.sell_rate);
+  if(calendar?.sell_rate==null&&plan.parent_rate_plan_id&&["OFFSET","PERCENT"].includes(String(plan.pricing_model))){
+    const parent=facts.planMap.get(String(plan.parent_rate_plan_id)) as ReservationFactRow|undefined;
+    const parentRelation=facts.roomPlanMap.get(`${type.id}:${plan.parent_rate_plan_id}`) as ReservationFactRow|undefined;
+    const parentCalendar=facts.calendarMap.get(`${type.id}:${plan.parent_rate_plan_id}:${date}`) as ReservationFactRow|undefined;
+    if(!parent||!parentRelation)return null;
+    const parentBase=Number(parentCalendar?.sell_rate??parentRelation.base_rate),adjustment=Number(plan.adjustment||0);
+    base=plan.pricing_model==="OFFSET"?parentBase+adjustment:parentBase*(1+adjustment/100);
+  }
+  if(!Number.isFinite(base))return null;
+  return Math.round(Math.max(0,base+(facts.occupancyMap.get(`${plan.id}:${partySize}`)||0))*100)/100;
+}
+
+function productAvailableNow(plan:ReservationFactRow,now=Date.now()) {
+  return !(plan.sellable_from&&now<Date.parse(String(plan.sellable_from)))&&!(plan.sellable_to&&now>Date.parse(String(plan.sellable_to)));
+}
+
+function productProjection(plan:ReservationFactRow) {
+  return {
+    id:String(plan.id),code:String(plan.code),name:String(plan.name),description:String(plan.description||""),
+    cancellationPolicy:String(plan.cancellation_policy||"정책 없음"),mealPlan:String(plan.meal_plan||"ROOM_ONLY"),
+    guaranteePolicy:String(plan.guarantee_policy||""),packageType:String(plan.package_type||"NONE"),
+    inclusions:Array.isArray(plan.inclusions)?plan.inclusions.map(String):[],
+    baseOccupancy:Number(plan.base_occupancy||1),maxOccupancy:Number(plan.max_occupancy||20),
+  };
+}
+
+/** Authoritative staff List availability projection used before reservation commit. */
+export async function loadReservationAvailability(db:PmsDatabase,params:URLSearchParams) {
+  const arrival=params.get("arrival")||"",departure=params.get("departure")||"";
+  const adults=Math.max(1,Math.min(20,Number(params.get("adults"))||1)),children=Math.max(0,Math.min(12,Number(params.get("children"))||0)),partySize=adults+children;
+  const dates=stayDates(arrival,departure);
+  if(!dates.length)throw new PmsReadError("올바른 체크인·체크아웃 날짜를 입력하세요. 최대 30박까지 조회할 수 있습니다.");
+  const facts=await loadReservationFacts(db,arrival,departure);
+  if(arrival<String(facts.hotel.business_date))throw new PmsReadError("호텔 영업일보다 이전 날짜는 선택할 수 없습니다.");
+  const offers=facts.types.flatMap(type=>{
+    if(partySize>Number(type.capacity)||Number(type.physical)<1)return [];
+    const availability=dates.map(date=>availableRooms(facts,type,date));
+    const arrivalControl=facts.controlMap.get(`${type.id}:${arrival}`) as ReservationFactRow|undefined;
+    const departureControl=facts.controlMap.get(`${type.id}:${departure}`) as ReservationFactRow|undefined;
+    if(dates.some((date,index)=>Boolean((facts.controlMap.get(`${type.id}:${date}`) as ReservationFactRow|undefined)?.closed)||availability[index]<1)||arrivalControl?.close_to_arrival||departureControl?.close_to_departure)return [];
+    const typePlans=facts.plans.flatMap(plan=>{
+      const lastStay=dates[dates.length-1];
+      if(!productAvailableNow(plan)||(plan.valid_from&&arrival<String(plan.valid_from))||(plan.valid_to&&lastStay>String(plan.valid_to))||partySize>Number(plan.max_occupancy||20))return [];
+      if(dates.length<Number(plan.min_stay||1)||dates.length>Number(plan.max_stay||365))return [];
+      let closed=false;
+      const nights=dates.map((date,index)=>{
+        const calendar=facts.calendarMap.get(`${type.id}:${plan.id}:${date}`) as ReservationFactRow|undefined;
+        if(calendar?.closed||dates.length<Number(calendar?.min_stay||1)||(date===arrival&&calendar?.close_to_arrival))closed=true;
+        const rate=productNightRate(facts,type,plan,date,partySize);
+        if(rate==null)closed=true;
+        return {date,rate:Number(rate||0),available:availability[index]};
+      });
+      if(closed)return [];
+      const total=nights.reduce((sum,night)=>sum+night.rate,0);
+      return [{...productProjection(plan),total,average:Math.round(total/nights.length),nights}];
+    });
+    return typePlans.length?[{roomTypeId:String(type.id),code:String(type.code),name:String(type.name),capacity:Number(type.capacity),available:Math.min(...availability),plans:typePlans}]:[];
+  });
+  return {property:{name:facts.hotel.name,currency:facts.hotel.currency,businessDate:facts.hotel.business_date},search:{arrival,departure,adults,children,nights:dates.length},offers};
+}
+
+function monthDates(month:string) {
+  if(!/^\d{4}-\d{2}$/u.test(month))return [];
+  const start=new Date(`${month}-01T00:00:00Z`);
+  if(!Number.isFinite(start.valueOf())||start.toISOString().slice(0,7)!==month)return [];
+  const output:string[]=[];
+  for(const cursor=new Date(start);cursor.toISOString().slice(0,7)===month&&output.length<31;cursor.setUTCDate(cursor.getUTCDate()+1))output.push(cursor.toISOString().slice(0,10));
+  return output;
+}
+
+/** Month product calendar; one selected product keeps payload and DOM bounded. */
+export async function loadReservationCalendar(db:PmsDatabase,params:URLSearchParams) {
+  const month=params.get("month")||"",dates=monthDates(month);
+  if(!dates.length)throw new PmsReadError("조회할 달을 확인하세요.");
+  const adults=Math.max(1,Math.min(20,Number(params.get("adults"))||1)),children=Math.max(0,Math.min(12,Number(params.get("children"))||0)),partySize=adults+children;
+  const facts=await loadReservationFacts(db,dates[0],dates[dates.length-1]);
+  const products=facts.plans.filter(productAvailableNow).map(productProjection);
+  const requested=params.get("ratePlanId")||"",selected=facts.plans.find(plan=>String(plan.id)===requested&&productAvailableNow(plan))||facts.plans.find(productAvailableNow)||null;
+  const rows=selected?facts.types.map(type=>({
+    roomTypeId:String(type.id),code:String(type.code),name:String(type.name),capacity:Number(type.capacity),physical:Number(type.physical),
+    cells:dates.map(date=>{
+      const control=facts.controlMap.get(`${type.id}:${date}`) as ReservationFactRow|undefined;
+      const calendar=facts.calendarMap.get(`${type.id}:${selected.id}:${date}`) as ReservationFactRow|undefined;
+      const available=availableRooms(facts,type,date),rate=productNightRate(facts,type,selected,date,partySize);
+      const valid=(!selected.valid_from||date>=String(selected.valid_from))&&(!selected.valid_to||date<=String(selected.valid_to));
+      return {date,available,total:Number(type.physical),rate,closed:date<String(facts.hotel.business_date)||partySize>Number(type.capacity)||!valid||Boolean(control?.closed)||Boolean(calendar?.closed)||available<1||rate==null};
+    }),
+  })):[];
+  return {property:{name:facts.hotel.name,currency:facts.hotel.currency,businessDate:facts.hotel.business_date},month,dates,adults,children,products,selectedProduct:selected?productProjection(selected):null,rows};
 }

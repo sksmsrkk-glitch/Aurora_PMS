@@ -5,7 +5,7 @@ import { ROLE_ACCESS_TEMPLATES } from "../app/access-control.ts";
 import { navigationGroupsFor, primaryNavigationFor } from "../app/pms-navigation.ts";
 import { parseFrontdeskQuery, PmsReadError } from "../app/api/pms/frontdesk-read.ts";
 import { boundedCalendarWindow, inclusiveDays, matchingDayCount } from "../app/inventory-window.ts";
-import { reservationOfferWindow } from "../app/reservation-wizard.tsx";
+import { reservationCommandInput, reservationOfferWindow } from "../app/reservation-wizard.tsx";
 
 test("role navigation exposes only authorized workspaces in job-first order", () => {
   const housekeeping = navigationGroupsFor("HOUSEKEEPING", ROLE_ACCESS_TEMPLATES.HOUSEKEEPING.permissions);
@@ -56,4 +56,17 @@ test("reservation availability renders five room types and supports plan-aware f
   assert.deepEqual(reservationOfferWindow(offers, "", 0).visibleOffers.map((item) => item.roomTypeId), ["type-0", "type-1", "type-2", "type-3", "type-4"]);
   assert.equal(reservationOfferWindow(offers, "", 99).safePage, 2);
   assert.deepEqual(reservationOfferWindow(offers, "기업 전용", 0).visibleOffers.map((item) => item.roomTypeId), ["type-9"]);
+});
+
+test("reservation wizard emits the strict date and product command contract",()=>{
+  const payload=reservationCommandInput(
+    {arrival:"2031-11-10",departure:"2031-11-12",adults:"2",children:"1"},
+    {firstName:"Talos",lastName:"Guest",nightlyRate:"280000"},
+    "rt-suite","FULLPKG",280000,
+  );
+  assert.equal(payload.arrivalDate,"2031-11-10");
+  assert.equal(payload.departureDate,"2031-11-12");
+  assert.equal(payload.ratePlan,"FULLPKG");
+  assert.equal(payload.rateOverride,"false");
+  assert.equal("arrival" in payload,false);
 });

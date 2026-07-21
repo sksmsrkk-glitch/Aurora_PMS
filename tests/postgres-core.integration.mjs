@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import postgres from "postgres";
 import { consumeRateLimit } from "../app/api/rate-limit.ts";
-import { loadPmsSearch } from "../app/api/pms/frontdesk-read.ts";
+import { loadPmsSearch, loadReservationAvailability, loadReservationCalendar } from "../app/api/pms/frontdesk-read.ts";
 import { snapshot } from "../app/api/pms/read-model.ts";
 import { handlePmsPost } from "../app/api/pms/command-gateway.ts";
 import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
@@ -250,6 +250,42 @@ test("rate plans are relational and drive direct-booking nightly prices", { skip
     if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previousDatabaseUrl;
     await sql.end({ timeout: 2 });
+  }
+});
+
+test("reservation List and Calendar share product and occupancy pricing", { skip }, async () => {
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),planId=`it-calendar-plan-${suffix}`;
+  const database=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul");
+  try{
+    await sql`
+      INSERT INTO rate_plans(
+        id,property_id,code,name,currency,meal_plan,package_type,inclusions,
+        base_occupancy,max_occupancy,pricing_model,adjustment,sort_order,
+        created_at,updated_at,created_by,updated_by
+      ) VALUES (
+        ${planId},'prop-seoul',${`ITCAL-${suffix.toUpperCase()}`},'Calendar Full Package','KRW','FULL_PACKAGE','HOMESHOPPING',
+        ${sql.json(["breakfast","dinner"])},2,4,'FIXED',0,1,now(),now(),'integration-test','integration-test'
+      )
+    `;
+    await sql`INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by) VALUES ('prop-seoul',${planId},'rt-ste',250000,true,1,now(),'integration-test')`;
+    await sql`INSERT INTO rate_plan_occupancy(property_id,rate_plan_id,occupancy,extra_charge,updated_by) VALUES ('prop-seoul',${planId},3,30000,'integration-test')`;
+    const list=await loadReservationAvailability(database,new URLSearchParams({arrival:"2031-11-10",departure:"2031-11-12",adults:"3",children:"0"}));
+    const suite=list.offers.find(item=>item.roomTypeId==="rt-ste"),product=suite?.plans.find(item=>item.id===planId);
+    assert.equal(product?.mealPlan,"FULL_PACKAGE");
+    assert.equal(product?.baseOccupancy,2);
+    assert.equal(product?.maxOccupancy,4);
+    assert.equal(product?.total,560000);
+    const calendar=await loadReservationCalendar(database,new URLSearchParams({month:"2031-11",ratePlanId:planId,adults:"3",children:"0"}));
+    assert.equal(calendar.dates.length,30);
+    assert.equal(calendar.selectedProduct?.id,planId);
+    const day=calendar.rows.find(item=>item.roomTypeId==="rt-ste")?.cells.find(item=>item.date==="2031-11-10");
+    assert.deepEqual(day,{date:"2031-11-10",available:1,total:1,rate:280000,closed:false});
+  }finally{
+    await closePmsDatabase();
+    await sql`DELETE FROM rate_plan_occupancy WHERE property_id='prop-seoul' AND rate_plan_id=${planId}`;
+    await sql`DELETE FROM rate_plan_room_types WHERE property_id='prop-seoul' AND rate_plan_id=${planId}`;
+    await sql`DELETE FROM rate_plans WHERE property_id='prop-seoul' AND id=${planId}`;
+    await sql.end({timeout:2});
   }
 });
 
