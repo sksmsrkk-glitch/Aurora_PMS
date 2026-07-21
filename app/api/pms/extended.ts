@@ -57,6 +57,17 @@ const parseJsonArray = (value: string | undefined) => {
     return [] as string[];
   }
 };
+const parseJsonRecords = (value: string | undefined) => {
+  if (value === undefined) return [] as Record<string, unknown>[];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.some((item) => !item || typeof item !== "object" || Array.isArray(item)))
+      throw new Error("not a record array");
+    return parsed as Record<string, unknown>[];
+  } catch {
+    throw new PmsExtendedError("인원별 추가 요금 형식을 확인하세요.");
+  }
+};
 
 const storageBindings = () => ({
   url: process.env.SUPABASE_URL?.replace(/\/$/u, ""),
@@ -147,6 +158,7 @@ export async function loadInventoryCalendar(
     mappingResult,
     contractResult,
     ratePlanResult,
+    occupancyResult,
     planCalendarResult,
     rateResult,
   ] = await db.batch([
@@ -182,7 +194,10 @@ export async function loadInventoryCalendar(
       )
       .bind(propertyId),
     db
-      .prepare("SELECT * FROM rate_plans WHERE property_id=? ORDER BY active DESC,code")
+      .prepare("SELECT * FROM rate_plans WHERE property_id=? ORDER BY active DESC,sort_order,code")
+      .bind(propertyId),
+    db
+      .prepare("SELECT * FROM rate_plan_occupancy WHERE property_id=? ORDER BY rate_plan_id,occupancy")
       .bind(propertyId),
     db
       .prepare("SELECT rpc.*,rp.code,rp.name rate_plan_name FROM rate_plan_calendar rpc JOIN rate_plans rp ON rp.id=rpc.rate_plan_id AND rp.property_id=rpc.property_id WHERE rpc.property_id=? AND rpc.stay_date BETWEEN ? AND ? ORDER BY rp.code")
@@ -257,7 +272,10 @@ export async function loadInventoryCalendar(
     types,
     mappings: mappingResult.results,
     contracts: contractResult.results,
-    ratePlans: ratePlanResult.results,
+    ratePlans: ratePlanResult.results.map((plan) => ({
+      ...plan,
+      occupancyRates: occupancyResult.results.filter((row) => row.rate_plan_id === plan.id),
+    })),
   };
 }
 
@@ -645,17 +663,32 @@ export async function handleExtendedAction(
     const pricingModel=["FIXED","OFFSET","PERCENT"].includes(body.pricingModel)?body.pricingModel:"FIXED",adjustment=asNumber(body.adjustment||"0","조정값",pricingModel==="PERCENT"?-100:-100000000),minStay=Math.trunc(asNumber(body.minStay||"1","최소 숙박",1)),maxStay=Math.trunc(asNumber(body.maxStay||"30","최대 숙박",minStay));
     if(maxStay>365||(pricingModel==="PERCENT"&&adjustment>100))throw new PmsExtendedError("요금 조정값과 숙박 범위를 확인하세요.");
     const validFrom=body.validFrom||null,validTo=body.validTo||null;if((validFrom&&!validDate(validFrom))||(validTo&&!validDate(validTo))||(validFrom&&validTo&&validFrom>validTo))throw new PmsExtendedError("요금제 유효 기간을 확인하세요.");
+    const mealPlan=["ROOM_ONLY","BREAKFAST","DINNER","HALF_BOARD","FULL_PACKAGE"].includes(body.mealPlan)?body.mealPlan:"ROOM_ONLY";
+    const packageType=["NONE","HOMESHOPPING","UPGRADE_FCFS"].includes(body.packageType)?body.packageType:"NONE";
+    const inclusions=parseJsonArray(body.inclusions).map((item)=>item.trim()).filter(Boolean).slice(0,20);
+    if(inclusions.some((item)=>item.length>120))throw new PmsExtendedError("상품 포함 항목은 각 120자 이하로 입력하세요.");
+    const baseOccupancy=Math.trunc(asNumber(body.baseOccupancy||"2","기준 인원",1)),maxOccupancy=Math.trunc(asNumber(body.maxOccupancy||String(baseOccupancy),"최대 인원",baseOccupancy));
+    if(maxOccupancy>20)throw new PmsExtendedError("최대 인원은 20명 이하로 입력하세요.");
+    const sortOrder=Math.trunc(asNumber(body.sortOrder||"100","상품 순서"));
+    const sellableFrom=body.sellableFrom||null,sellableTo=body.sellableTo||null;
+    if((sellableFrom&&!Number.isFinite(Date.parse(sellableFrom)))||(sellableTo&&!Number.isFinite(Date.parse(sellableTo)))||(sellableFrom&&sellableTo&&Date.parse(sellableFrom)>Date.parse(sellableTo)))throw new PmsExtendedError("판매 가능 기간을 확인하세요.");
     const current=body.ratePlanId?await db.prepare("SELECT * FROM rate_plans WHERE id=? AND property_id=?").bind(body.ratePlanId,propertyId).first<Record<string,unknown>>():null;
     if(body.ratePlanId&&!current)throw new PmsExtendedError("요금제를 찾지 못했습니다.",404);
     if(current&&Number(body.version)!==Number(current.version))throw new PmsExtendedError("다른 관리자가 요금제를 먼저 수정했습니다.",409);
     if(current&&code!==String(current.code))throw new PmsExtendedError("사용 이력이 있는 요금제 코드는 변경할 수 없습니다.",409);
-    const ratePlanId=String(current?.id||crypto.randomUUID()),active=body.active!=="false",values={code,name,description,currency,pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active};
+    const ratePlanId=String(current?.id||crypto.randomUUID()),parentRatePlanId=body.parentRatePlanId||null,active=body.active!=="false";
+    if(parentRatePlanId===ratePlanId)throw new PmsExtendedError("상품은 자기 자신을 부모 상품으로 선택할 수 없습니다.");
+    if(parentRatePlanId){const parent=await db.prepare("SELECT id FROM rate_plans WHERE id=? AND property_id=? AND active").bind(parentRatePlanId,propertyId).first();if(!parent)throw new PmsExtendedError("승계할 부모 상품을 찾지 못했습니다.");}
+    const occupancyRates=parseJsonRecords(body.occupancyRates).map((item)=>({occupancy:Math.trunc(asNumber(item.occupancy,"인원",1)),extraCharge:asNumber(item.extraCharge,"추가 요금")}));
+    if(occupancyRates.some((item)=>item.occupancy>maxOccupancy)||new Set(occupancyRates.map((item)=>item.occupancy)).size!==occupancyRates.length)throw new PmsExtendedError("인원별 추가 요금의 인원 범위를 확인하세요.");
+    const values={code,name,description,currency,pricingModel,adjustment,minStay,maxStay,validFrom,validTo,mealPlan,packageType,parentRatePlanId,sortOrder,sellableFrom,sellableTo,inclusions,baseOccupancy,maxOccupancy,occupancyRates,active};
     const statements:PmsPreparedStatement[]=current?[
-      db.prepare("UPDATE rate_plans SET name=?,description=?,currency=?,market_segment=?,meal_plan=?,cancellation_policy=?,guarantee_policy=?,pricing_model=?,adjustment=?,min_stay=?,max_stay=?,valid_from=?,valid_to=?,active=?,version=version+1,updated_at=?,updated_by=? WHERE id=? AND property_id=? AND version=?").bind(name,description,currency,body.marketSegment||"TRANSIENT",body.mealPlan||"ROOM_ONLY",body.cancellationPolicy||"FLEXIBLE",body.guaranteePolicy||"CARD_GUARANTEE",pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active,now,actor,ratePlanId,propertyId,current.version),
+      db.prepare("UPDATE rate_plans SET name=?,description=?,currency=?,market_segment=?,meal_plan=?,package_type=?,parent_rate_plan_id=?,sort_order=?,sellable_from=?,sellable_to=?,inclusions=?::jsonb,base_occupancy=?,max_occupancy=?,cancellation_policy=?,guarantee_policy=?,pricing_model=?,adjustment=?,min_stay=?,max_stay=?,valid_from=?,valid_to=?,active=?,version=version+1,updated_at=?,updated_by=? WHERE id=? AND property_id=? AND version=?").bind(name,description,currency,body.marketSegment||"TRANSIENT",mealPlan,packageType,parentRatePlanId,sortOrder,sellableFrom,sellableTo,JSON.stringify(inclusions),baseOccupancy,maxOccupancy,body.cancellationPolicy||"FLEXIBLE",body.guaranteePolicy||"CARD_GUARANTEE",pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active,now,actor,ratePlanId,propertyId,current.version),
     ]:[
-      db.prepare("INSERT INTO rate_plans(id,property_id,code,name,description,currency,market_segment,meal_plan,cancellation_policy,guarantee_policy,pricing_model,adjustment,min_stay,max_stay,valid_from,valid_to,active,version,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)").bind(ratePlanId,propertyId,code,name,description,currency,body.marketSegment||"TRANSIENT",body.mealPlan||"ROOM_ONLY",body.cancellationPolicy||"FLEXIBLE",body.guaranteePolicy||"CARD_GUARANTEE",pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active,now,now,actor,actor),
+      db.prepare("INSERT INTO rate_plans(id,property_id,code,name,description,currency,market_segment,meal_plan,package_type,parent_rate_plan_id,sort_order,sellable_from,sellable_to,inclusions,base_occupancy,max_occupancy,cancellation_policy,guarantee_policy,pricing_model,adjustment,min_stay,max_stay,valid_from,valid_to,active,version,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)").bind(ratePlanId,propertyId,code,name,description,currency,body.marketSegment||"TRANSIENT",mealPlan,packageType,parentRatePlanId,sortOrder,sellableFrom,sellableTo,JSON.stringify(inclusions),baseOccupancy,maxOccupancy,body.cancellationPolicy||"FLEXIBLE",body.guaranteePolicy||"CARD_GUARANTEE",pricingModel,adjustment,minStay,maxStay,validFrom,validTo,active,now,now,actor,actor),
       db.prepare("INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by) SELECT ?,?,id,base_rate,true,1,?,? FROM room_types WHERE property_id=? AND active ON CONFLICT(property_id,rate_plan_id,room_type_id) DO NOTHING").bind(propertyId,ratePlanId,now,actor,propertyId),
     ];
+    if(body.occupancyRates!==undefined){statements.push(db.prepare("DELETE FROM rate_plan_occupancy WHERE property_id=? AND rate_plan_id=?").bind(propertyId,ratePlanId));for(const item of occupancyRates)statements.push(db.prepare("INSERT INTO rate_plan_occupancy(property_id,rate_plan_id,occupancy,extra_charge,updated_at,updated_by) VALUES (?,?,?,?,?,?)").bind(propertyId,ratePlanId,item.occupancy,item.extraCharge,now,actor));}
     statements.push(audit(db,propertyId,actor,current?"UPDATE_RATE_PLAN":"CREATE_RATE_PLAN","rate_plan",ratePlanId,{...values,version:Number(current?.version||0)+1},now));
     const idem=remember(db,propertyId,idempotencyKey||undefined,body.action,actor,now);if(idem)statements.push(idem);await db.batch(statements);return true;
   }

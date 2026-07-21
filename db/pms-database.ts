@@ -131,7 +131,7 @@ const tenantTables = [
   "channel_rate_overrides", "channel_settlements", "accounting_accounts",
   "accounting_journal_entries", "accounting_journal_lines", "website_settings",
   "room_type_website", "website_media", "role_assignments",
-  "rate_plans", "rate_plan_room_types", "rate_plan_calendar",
+  "rate_plans", "rate_plan_room_types", "rate_plan_calendar", "rate_plan_occupancy",
   "property_domains", "property_subscriptions", "property_entitlements",
   "support_access_grants", "support_sessions", "data_import_jobs",
   "data_import_rows", "data_import_entities", "worker_jobs", "worker_attempts",

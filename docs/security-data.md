@@ -48,7 +48,7 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | 도메인 | 테이블 |
 | --- | --- |
 | 프로퍼티·권한 | `properties`, `role_assignments` |
-| 객실·재고·요금제 | `room_types`, `rooms`, `inventory_controls`, `housekeeping_tasks`, `rate_plans`, `rate_plan_room_types`, `rate_plan_calendar` |
+| 객실·재고·판매상품 | `room_types`, `rooms`, `inventory_controls`, `housekeeping_tasks`, `rate_plans`, `rate_plan_room_types`, `rate_plan_calendar`, `rate_plan_occupancy` |
 | 예약·투숙 | `guests`, `reservations`, `reservation_nights`, `reservation_type_nights`, `reservation_transitions`, `reservation_mutations`, `room_moves` |
 | 그룹·세일즈 | `account_profiles`, `business_blocks`, `block_inventory`, `rooming_list_entries`, `block_pickup_nights` |
 | 폴리오 | `folio_windows`, `folio_entries`, `folio_entry_details`, `folio_routing_rules`, `transaction_codes` |

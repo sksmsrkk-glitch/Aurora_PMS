@@ -252,6 +252,85 @@ test("rate plans are relational and drive direct-booking nightly prices", { skip
   }
 });
 
+test("sale products inherit rates, price occupancy, and preserve reservation snapshots", { skip }, async () => {
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8);
+  const organizationId=`org-product-${suffix}`,propertyId=`it-product-${suffix}`;
+  const roomTypeId=`it-product-room-${suffix}`,parentId=`it-parent-${suffix}`,childId=`it-child-${suffix}`;
+  const guestId=`it-product-guest-${suffix}`,reservationId=`it-product-res-${suffix}`;
+  try {
+    await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'Product Organization',${`product-${suffix}`},'ACTIVE')`;
+    await sql`INSERT INTO properties(id,name,code,timezone,currency,business_date,organization_id,slug) VALUES (${propertyId},'Product Hotel',${`P-${suffix}`},'Asia/Seoul','KRW','2031-09-01',${organizationId},${`product-hotel-${suffix}`})`;
+    await sql`INSERT INTO room_types(id,property_id,code,name,base_rate,capacity) VALUES (${roomTypeId},${propertyId},'PKG','Package Room',100000,4)`;
+    await sql`
+      INSERT INTO rate_plans(
+        id,property_id,code,name,currency,meal_plan,package_type,inclusions,
+        base_occupancy,max_occupancy,pricing_model,adjustment,
+        created_at,updated_at,created_by,updated_by
+      ) VALUES
+        (${parentId},${propertyId},'PARENT','Parent BAR','KRW','ROOM_ONLY','NONE','[]'::jsonb,2,4,'FIXED',0,now(),now(),'integration-test','integration-test'),
+        (${childId},${propertyId},'FULLPKG','24-hour Full Package','KRW','FULL_PACKAGE','HOMESHOPPING',${sql.json(["breakfast","dinner","spa"])},2,4,'OFFSET',10000,now(),now(),'integration-test','integration-test')
+    `;
+    await sql`UPDATE rate_plans SET parent_rate_plan_id=${parentId} WHERE id=${childId}`;
+    await sql`
+      INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by)
+      VALUES
+        (${propertyId},${parentId},${roomTypeId},100000,true,1,now(),'integration-test'),
+        (${propertyId},${childId},${roomTypeId},1,true,1,now(),'integration-test')
+    `;
+    await sql`INSERT INTO rate_plan_occupancy(property_id,rate_plan_id,occupancy,extra_charge,updated_by) VALUES (${propertyId},${childId},3,30000,'integration-test')`;
+    const [priced]=await sql`SELECT talos_effective_product_rate(${propertyId},${childId},${roomTypeId},'2031-09-02',3)::numeric rate`;
+    assert.equal(Number(priced.rate),140000);
+    const [invalidParty]=await sql`SELECT talos_effective_product_rate(${propertyId},${childId},${roomTypeId},'2031-09-02',5)::numeric rate`;
+    assert.equal(invalidParty.rate,null);
+    await sql`UPDATE rate_plan_room_types SET base_rate=200000 WHERE property_id=${propertyId} AND rate_plan_id=${parentId} AND room_type_id=${roomTypeId}`;
+    const [repriced]=await sql`SELECT talos_effective_product_rate(${propertyId},${childId},${roomTypeId},'2031-09-02',3)::numeric rate`;
+    assert.equal(Number(repriced.rate),240000);
+
+    await sql`INSERT INTO guests(id,property_id,first_name,last_name,created_at) VALUES (${guestId},${propertyId},'Product','Guest',now())`;
+    await sql`
+      INSERT INTO reservations(
+        id,confirmation_no,property_id,guest_id,room_type_id,arrival_date,departure_date,
+        status,adults,children,source,rate_plan,rate_plan_id,nightly_rate,created_at,updated_at
+      ) VALUES (
+        ${reservationId},${`IT-P-${suffix}`},${propertyId},${guestId},${roomTypeId},'2031-09-02','2031-09-03',
+        'DUE_IN',2,1,'TEST','FULLPKG',${childId},240000,now(),now()
+      )
+    `;
+    const [snapshotBefore]=await sql`SELECT rate_plan_snapshot,occupancy_detail FROM reservations WHERE id=${reservationId}`;
+    assert.equal(snapshotBefore.rate_plan_snapshot.name,"24-hour Full Package");
+    assert.deepEqual(snapshotBefore.rate_plan_snapshot.inclusions,["breakfast","dinner","spa"]);
+    assert.deepEqual(snapshotBefore.occupancy_detail,{adults:2,children:1});
+    await sql`UPDATE rate_plans SET name='Changed Product Name' WHERE id=${childId}`;
+    const [snapshotAfter]=await sql`SELECT rate_plan_snapshot FROM reservations WHERE id=${reservationId}`;
+    assert.equal(snapshotAfter.rate_plan_snapshot.name,"24-hour Full Package");
+
+    const visible=await sql.begin(async(tx)=>{
+      await tx.unsafe("SET LOCAL ROLE aurora_app");
+      await tx`SELECT set_config('app.property_id',${propertyId},true)`;
+      return tx`SELECT rate_plan_id,occupancy,extra_charge FROM rate_plan_occupancy`;
+    });
+    assert.deepEqual(visible.map(row=>row.rate_plan_id),[childId]);
+    const [contract]=await sql`
+      SELECT c.udt_name,
+        (SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.rate_plan_occupancy'::regclass) forced_rls
+      FROM information_schema.columns c
+      WHERE c.table_schema='public' AND c.table_name='rate_plan_occupancy' AND c.column_name='extra_charge'
+    `;
+    assert.equal(contract.udt_name,"numeric");
+    assert.equal(contract.forced_rls,true);
+  } finally {
+    await sql`DELETE FROM reservations WHERE id=${reservationId}`;
+    await sql`DELETE FROM guests WHERE id=${guestId}`;
+    await sql`DELETE FROM rate_plan_occupancy WHERE property_id=${propertyId}`;
+    await sql`DELETE FROM rate_plan_room_types WHERE property_id=${propertyId}`;
+    await sql`DELETE FROM rate_plans WHERE property_id=${propertyId}`;
+    await sql`DELETE FROM room_types WHERE property_id=${propertyId}`;
+    await sql`DELETE FROM properties WHERE id=${propertyId}`;
+    await sql`DELETE FROM organizations WHERE id=${organizationId}`;
+    await sql.end({timeout:2});
+  }
+});
+
 test("RLS tenant context hides and rejects cross-property access", { skip }, async () => {
   const sql = client(2);
   const suffix = crypto.randomUUID().slice(0, 8);
