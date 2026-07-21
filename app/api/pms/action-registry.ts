@@ -14,7 +14,7 @@ const actionCapability = {
   transfer_to_ar:"AR_WRITE",post_ar_payment:"AR_WRITE",housekeeping:"HOUSEKEEPING_WRITE",
   create_channel_connection:"INTEGRATION_WRITE",create_channel_mapping:"INTEGRATION_WRITE",upsert_channel_contract:"INTEGRATION_WRITE",queue_ari_delta:"INTEGRATION_WRITE",dispatch_ari_update:"INTEGRATION_WRITE",ingest_channel_message:"INTEGRATION_WRITE",replay_channel_message:"INTEGRATION_WRITE",dispatch_outbox_event:"INTEGRATION_WRITE",
   upsert_channel_catalog:"INTEGRATION_WRITE",configure_property_channel:"INTEGRATION_WRITE",set_property_channel_active:"INTEGRATION_WRITE",reorder_property_channels:"INTEGRATION_WRITE",delete_property_channel:"INTEGRATION_WRITE",upsert_channel_product_cutoff:"INTEGRATION_WRITE",delete_channel_product_cutoff:"INTEGRATION_WRITE",
-  post_accounting_entry:"ACCOUNTING_WRITE",reverse_accounting_entry:"ACCOUNTING_WRITE",accrue_channel_settlement:"ACCOUNTING_WRITE",mark_channel_settlement_paid:"ACCOUNTING_WRITE",
+  post_accounting_entry:"ACCOUNTING_WRITE",reverse_accounting_entry:"ACCOUNTING_WRITE",accrue_channel_settlement:"ACCOUNTING_WRITE",mark_channel_settlement_paid:"ACCOUNTING_WRITE",restore_channel_settlement_payment:"ACCOUNTING_WRITE",
   open_cashier:"CASHIER_WRITE",close_cashier:"CASHIER_WRITE",run_night_audit:"EOD_RUN",
   create_room_type:"MASTER_WRITE",update_room_type:"MASTER_WRITE",create_room:"MASTER_WRITE",update_room:"MASTER_WRITE",bulk_create_rooms:"MASTER_WRITE",upsert_property_season:"MASTER_WRITE",delete_property_season:"MASTER_WRITE",upsert_property_holiday:"MASTER_WRITE",delete_property_holiday:"MASTER_WRITE",upsert_amenity_catalog:"MASTER_WRITE",delete_amenity_catalog:"MASTER_WRITE",upsert_service_catalog:"MASTER_WRITE",delete_service_catalog:"MASTER_WRITE",
   update_website_settings:"WEBSITE_WRITE",update_room_type_website:"WEBSITE_WRITE",upload_website_media:"WEBSITE_WRITE",delete_website_media:"WEBSITE_WRITE",
@@ -31,7 +31,7 @@ const domainActions: Record<ActionDomain, readonly PmsAction[]> = {
   groups:["create_account_profile","create_business_block","update_block_inventory","add_rooming_entry","cutoff_block","pickup_rooming_entry"],
   finance:["post_payment","post_charge","create_folio_window","create_routing_rule","split_folio_entry","reverse_folio_entry","refund_payment","transfer_to_ar","post_ar_payment"],
   integrations:["create_channel_connection","create_channel_mapping","upsert_channel_contract","queue_ari_delta","dispatch_ari_update","ingest_channel_message","replay_channel_message","dispatch_outbox_event","upsert_channel_catalog","configure_property_channel","set_property_channel_active","reorder_property_channels","delete_property_channel","upsert_channel_product_cutoff","delete_channel_product_cutoff"],
-  accounting:["post_accounting_entry","reverse_accounting_entry","accrue_channel_settlement","mark_channel_settlement_paid"],
+  accounting:["post_accounting_entry","reverse_accounting_entry","accrue_channel_settlement","mark_channel_settlement_paid","restore_channel_settlement_payment"],
   website:["update_website_settings","update_room_type_website","upload_website_media","delete_website_media"],
   operations:["open_cashier","close_cashier","run_night_audit"],
   reports:["export_report"],
@@ -70,7 +70,7 @@ const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
   upsert_channel_product_cutoff:["settingId","ratePlanId","cutoffDays","cutoffTime","active"],delete_channel_product_cutoff:["cutoffId"],
   update_room_type_website:["roomTypeId"],upload_website_media:["dataUrl","filename","scope"],delete_website_media:["mediaId"],
   upsert_channel_contract:["connectionId","contractType","validFrom"],post_accounting_entry:["businessDate","description","debitAccountId","creditAccountId","amount"],
-  reverse_accounting_entry:["entryId","reason"],accrue_channel_settlement:["connectionId","reservationId"],mark_channel_settlement_paid:["settlementId"],
+  reverse_accounting_entry:["entryId","reason"],accrue_channel_settlement:["connectionId","reservationId"],mark_channel_settlement_paid:["settlementId"],restore_channel_settlement_payment:["settlementId","reason"],
   export_report:["report"],
   create_staff_user:["email","displayName","password","role","workspacePermissions","canExport"],
   update_staff_access:["assignmentId","displayName","role","workspacePermissions","canExport","expectedVersion"],
@@ -82,7 +82,7 @@ const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
   upsert_service_catalog:["code","name","category","pricingType","price","currency","sortOrder","active"],delete_service_catalog:["serviceId"],
 };
 
-const dateField=/^(?:arrivalDate|departureDate|stayDate|startDate|endDate|businessDate|dueDate|validFrom|validTo|from|to)$/u;
+const dateField=/^(?:arrivalDate|departureDate|stayDate|startDate|endDate|businessDate|dueDate|depositDate|restoreDate|validFrom|validTo|from|to)$/u;
 const isoDate=z.string().regex(/^\d{4}-\d{2}-\d{2}$/u,"YYYY-MM-DD 형식이 필요합니다.");
 const scalar=z.union([z.string().trim().min(1).max(20_000),z.number().finite(),z.boolean()]);
 function fieldSchema(field:string){

@@ -119,6 +119,7 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `202607210021_reservation_operational_detail.sql` | 예약 운영 상세 | 예약자/투숙자, 요청·메모·시간 옵션, PCI-safe reference, 취소정책 snapshot과 인라인 로그 |
 | `202607210022_reservation_voucher_delivery.sql` | 예약 바우처 | immutable KR/EN 문서 payload와 멱등 `VOUCHER_EMAIL` worker delivery |
 | `202607210023_channel_rateblock_operational_catalogs.sql` | 채널·블럭요금·운영 카탈로그 | 7개 FORCE RLS tenant table, 채널 상품/마감, 4축 요금제약과 객실 초과 할당 trigger |
+| `202607210024_hotelstory_reporting_deposits.sql` | HotelStory 리포트 입금 원장 | 채널 입금 projection, append-only RECEIPT/RESTORE, 회계 FK, 동시 입금 row-lock guard와 FORCE RLS |
 
 ### 핵심 PostgreSQL 함수와 트리거
 
@@ -138,6 +139,7 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `pms_accounting_header_guard` | journal header는 `POSTED → REVERSED` 이외 변경을 거부 |
 | `pms_channel_settlement_contract_snapshot` | 정산 insert 시 계약 유형·수수료율을 복사 |
 | `pms_channel_contract_open_settlement_guard` | `ACCRUED` 정산이 있으면 계약 유형·수수료율 변경 차단 |
+| `pms_channel_deposit_event_guard` | 현재 settlement/payment journal과 입금·복구 사건을 행 잠금 아래 대조해 동시 중복 회계 처리 차단 |
 | `pms_booking_rate_immutable_guard` | 예약 당시 투숙일별 판매가 snapshot의 update/delete 거부 |
 
 ### 마이그레이션 작성 규칙
@@ -165,6 +167,7 @@ GET /api/pms
 GET /api/pms?view=inventory&from=2026-07-16&to=2027-07-15
 GET /api/pms?view=accounting&from=2026-07-01&to=2026-07-31
 GET /api/pms?view=report&report=channel_settlements&from=2026-07-01&to=2026-07-31
+GET /api/pms?view=report&report=channel_deposits&from=2026-07-01&to=2026-07-31&status=ACCRUED&scope=EXCLUDE_ONSITE
 ```
 
 ### Command
@@ -207,7 +210,7 @@ Idempotency-Key: <unique-key>
 | 폴리오 | `post_charge`, `post_payment`, `create_folio_window`, `create_routing_rule`, `split_folio_entry`, `reverse_folio_entry`, `refund_payment` |
 | AR | `transfer_to_ar`, `post_ar_payment` |
 | 채널 | `create_channel_connection`, `create_channel_mapping`, `upsert_channel_contract`, `queue_ari_delta`, `dispatch_ari_update`, `ingest_channel_message`, `replay_channel_message`, `dispatch_outbox_event` |
-| 회계·정산 | `post_accounting_entry`, `reverse_accounting_entry`, `accrue_channel_settlement`, `mark_channel_settlement_paid` |
+| 회계·정산 | `post_accounting_entry`, `reverse_accounting_entry`, `accrue_channel_settlement`, `mark_channel_settlement_paid`, `restore_channel_settlement_payment` |
 | 홈페이지 CMS | `update_website_settings`, `update_room_type_website`, `upload_website_media`, `delete_website_media` |
 | 영업일 | `open_cashier`, `close_cashier`, `run_night_audit` |
 | 리포트 | `export_report` |

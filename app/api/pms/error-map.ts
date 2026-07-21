@@ -31,6 +31,7 @@ const mappings:readonly [RegExp,MappedPmsError][]=[
   [/accounting journal lines are immutable|accounting journal entries are immutable/iu,{status:409,error:"확정 회계 원장은 수정·삭제할 수 없습니다. 반대전표를 생성하세요."}],
   [/accounting_journal_reversal_once_uq/iu,{status:409,error:"다른 작업자가 이미 이 전표의 반대전표를 생성했습니다."}],
   [/accounting_journal_source_once_uq/iu,{status:409,error:"다른 작업자가 이미 이 정산 또는 회계 작업을 완료했습니다."}],
+  [/receipt must match the current paid settlement journal|restore must reverse the current paid settlement receipt|channel_deposit_event_reversal_uq/iu,{status:409,error:"다른 작업자가 이미 이 채널 입금 상태를 변경했습니다. 리포트를 새로 조회하세요."}],
 ];
 
 export function mapPmsError(message:string){

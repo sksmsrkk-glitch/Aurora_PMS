@@ -1,0 +1,21 @@
+/* HotelStory-parity reporting controls: dense enough for reconciliation, while
+   preserving 44px touch targets and a readable decision hierarchy on mobile. */
+.report-deposit-toggles{display:flex;grid-column:1/-1;gap:8px;align-items:center;overflow-x:auto}
+.report-deposit-toggles button{min-height:40px;padding:8px 13px;border:1px solid #dfe4ea;border-radius:999px;background:#fff;color:#4e5968;font-size:12px;font-weight:700;white-space:nowrap;cursor:pointer}
+.report-deposit-toggles button.on{border-color:#3182f6;background:#e8f3ff;color:#1b64da;box-shadow:inset 0 0 0 1px #3182f61f}
+.report-row-action{position:sticky;right:0;background:#fff!important;box-shadow:-8px 0 14px #182f4912;text-align:center!important}
+.report-row-action button{min-height:36px;padding:7px 11px;border:1px solid #90c2ff;border-radius:9px;background:#e8f3ff;color:#1b64da;font-size:12px;font-weight:750;white-space:nowrap;cursor:pointer}
+.report-row-action button.restore{border-color:#ffd591;background:#fff7e6;color:#ad6800}
+.report-settlement-dialog{display:grid;gap:18px;width:min(480px,calc(100vw - 28px));padding:24px}
+.report-settlement-dialog>label{display:grid;gap:7px}
+.report-settlement-dialog>label>span{color:#4e5968;font-size:13px;font-weight:750}
+.report-settlement-dialog input,.report-settlement-dialog textarea{width:100%;min-height:46px;padding:11px 12px;border:1px solid #dfe4ea;border-radius:12px;background:#fff;color:#191f28;font:inherit;font-size:15px;outline:none}
+.report-settlement-dialog textarea{min-height:104px;resize:vertical;line-height:1.55}
+.report-settlement-dialog input:focus,.report-settlement-dialog textarea:focus{border-color:#3182f6;box-shadow:0 0 0 3px #3182f61f}
+.report-settlement-overview{display:grid;grid-template-columns:1fr auto;gap:5px 14px;padding:16px;border:1px solid #d9e8fb;border-radius:15px;background:#f2f7ff}
+.report-settlement-overview span,.report-settlement-overview small{color:#6b7684;font-size:12px}
+.report-settlement-overview b{grid-row:2;color:#333d4b;font-size:14px}
+.report-settlement-overview strong{grid-column:2;grid-row:1/3;align-self:center;color:#191f28;font-size:22px;font-variant-numeric:tabular-nums}
+.report-settlement-overview small{grid-column:1/-1;margin-top:4px}
+.report-settlement-dialog .danger{min-height:44px;padding:10px 16px;border:0;border-radius:11px;background:#f04452;color:#fff;font-weight:750;cursor:pointer}
+@media(max-width:760px){.report-deposit-toggles{order:2}.report-row-action{position:static;box-shadow:none}.report-row-action button{min-height:42px}.report-settlement-dialog{position:fixed;right:0;bottom:0;left:0;width:100%;max-height:92dvh;overflow-y:auto;padding:20px 16px calc(20px + env(safe-area-inset-bottom));border-radius:24px 24px 0 0}.report-settlement-overview strong{font-size:20px}}

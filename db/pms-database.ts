@@ -128,7 +128,7 @@ export const TENANT_TABLES = [
   "ar_ledger_entries", "channel_connections", "channel_mappings", "ari_updates",
   "channel_reservation_links", "inbound_channel_messages",
   "integration_delivery_attempts", "report_exports", "channel_contracts",
-  "channel_rate_overrides", "channel_settlements", "accounting_accounts",
+  "channel_rate_overrides", "channel_settlements", "channel_deposit_events", "accounting_accounts",
   "accounting_journal_entries", "accounting_journal_lines", "website_settings",
   "room_type_website", "website_media", "role_assignments",
   "rate_plans", "rate_plan_room_types", "rate_plan_calendar", "rate_plan_occupancy",

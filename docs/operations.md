@@ -16,7 +16,8 @@
 
 ### 멀티호텔 SaaS 배포 추가 점검
 
-- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607210023_channel_rateblock_operational_catalogs`까지 적용 및 76개 tenant policy 계약 확인
+- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607210024_hotelstory_reporting_deposits`까지 적용 및 77개 tenant policy 계약 확인
+- [ ] 채널 입금 스테이징 표본에서 ACCRUED → PAID → RESTORE → ACCRUED와 원전표 REVERSED·반대전표·불변 사건을 대사
 - [ ] `AURORA_TENANT_BASE_DOMAIN`, `AURORA_PLATFORM_HOSTS`, `PMS_REQUIRE_PLATFORM_MFA=true` 확인
 - [ ] Vercel·GitHub에 동일한 `CRON_SECRET`을 설정하고 즉시 kick, GitHub 5분 sweep, Vercel 일일 fail-safe의 성공·재시도·DEAD incident 확인
 - [ ] `TALOS_EMAIL_ENDPOINT`, `TALOS_EMAIL_SECRET`, `TALOS_EMAIL_FROM`을 production/staging별로 분리하고 승인된 HTTPS 메일 adapter에서 delivery ID 멱등 처리를 확인

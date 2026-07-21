@@ -14,7 +14,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607210023_channel_rateblock_operational_catalogs` |
+| 스키마 계약 | `202607210024_hotelstory_reporting_deposits` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
@@ -30,7 +30,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - 호텔별 성수기·휴일·편의시설·유료 서비스·이미지 운영 카탈로그
 - 폴리오 창·라우팅·분할·반대전표·수납·환불·AR 이관·후불 수납
 - 그룹 블록·rooming list·pickup·cutoff, 채널 연결·계약·ARI·inbound·outbox
-- 복식부기 journal, 채널 수수료/입금가 정산, P/L, 11종 리포트와 CSV/XLSX
+- 복식부기 journal, 채널 수수료/입금가 정산, P/L, 15종 리포트와 CSV/XLSX; 리드타임·4개 시간대 예약곡선·월별 BOOK/REV YoY·후불 정산·입금/복구 원장
 - PMS 비주얼 에디터 기반 히어로·메뉴·호텔 소개·이미지·객실 소개·공개 여부와 직접 예약 엔진
 - 호텔별 canonical/Open Graph, Hotel JSON-LD, sitemap, robots
 - 호텔별 다중 직원 ID, 14개 페이지별 없음/조회/입력 권한, 별도 개인정보 export 권한과 계정 생명주기
@@ -48,7 +48,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 3. 예약 생성 | HotelStory형 목록/달력 전환 → 상품·일정·인원 → 실시간 가용 객실·요금 → 고객·배정 → 최종 검토; 목록의 객실종류·조식·기준/최대인원·총액 비교와 월 달력의 상품별 가격·잔여/전체 객실 | 목록·달력이 하나의 고정 배치 projection을 공유하고, DB가 정원·30박·재고·MLOS·CTA·CTD·판매/숙박기간·인원요금을 재검증한 뒤 매일의 상품 snapshot과 예약을 원자 확정 |
 | 3-1. 예약 상세 | 좌측 예약/상품/일자요금/취소규정, 우측 예약자와 실제 투숙자/요청/응답/메모/확인/시간/Card Info, 하단 연동·수정·요금·블럭 로그 | 예약자≠투숙자 저장, 기대 버전 경쟁 차단, PCI 원문 거부, 취소정책 snapshot 불변, 감사·Outbox·멱등 영수증 원자 반영 |
 | 4. 요금·재고 | 호텔 전체 재고 캘린더의 730일 선택·14/30일 창과 별도로, 채널 블럭요금은 객실×상품×채널×최대 31일 sticky 매트릭스로 제공 | 5,000셀 상한, 실제 객실 초과 할당 trigger, 활성 채널 gate, 같은 transaction의 ARI·Outbox·멱등 영수증으로 검증 |
-| 5. 리포트 | 업무별 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 25/50/100행, export 확인 | 서버 필터·마스킹·export 권한·감사 로그를 우회하지 않고 CSV/XLSX 생성 전 범위를 확인 |
+| 5. 리포트 | 15종 업무 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 채널 미입금/현장결제 제외, 입금·복구, 25/50/100행, export 확인 | 리드타임과 4개 예약 시간대가 property timezone 원자료와 일치하고, 입금·복구는 불변 사건·반대전표·멱등·경쟁 차단을 거치며 CSV/XLSX도 같은 서버 집계를 사용 |
 | 6. 모바일·가독성·성능 | 역할별 4개 핵심 하단 내비게이션, 카드형 예약 큐, 전체폭 하단 시트, 12/14px·44px 하한, reduced motion | 390px에서 수평 root overflow 없이 핵심 업무와 팝업을 조작하고 core는 오늘 업무 예약만 전달 |
 
 운영 배포 화면의 최종 검증도 이 계약에 포함한다. 통합 검색은 예약·객실뿐 아니라 AR 잔액을 원장 합계로 조회하며, 장애 시 무반응 대신 오류 안내를 표시한다. 대시보드의 `오늘 도착`은 전체 도착 건수와 처리 완료·도착 대기를 함께 표시해 도착 플로우의 미처리 건수와 의미가 섞이지 않도록 한다.
@@ -178,6 +178,7 @@ flowchart LR
 - 클라이언트는 모든 mutation에 `Idempotency-Key`를 보냅니다.
 - 중복 키 등록과 금전 side effect는 같은 transaction에서 실행됩니다.
 - 결제, 환불, 분할, 반대전표, AR 이관·수납은 원본 기록을 삭제하지 않습니다.
+- 채널 입금은 `channel_deposit_events`에 RECEIPT/RESTORE 사건을 append-only로 남기고, 현재 상태 projection과 복식 회계 전표를 한 transaction에서 바꿉니다. 복구는 원 전표를 `REVERSED`로 전환하고 반대전표를 추가하며, 행 잠금 trigger가 서로 다른 키의 동시 입금도 한 건만 허용합니다.
 
 ### 공개 호텔 사이트
 
@@ -213,6 +214,7 @@ flowchart LR
 | 예약자/투숙자·운영 옵션·취소정책·연계예약 | `202607210021_reservation_operational_detail.sql` |
 | 예약 바우처 immutable payload·메일 전달 queue | `202607210022_reservation_voucher_delivery.sql` |
 | 채널 카탈로그·블럭요금·호텔 운영 카탈로그 | `202607210023_channel_rateblock_operational_catalogs.sql` |
+| HotelStory 리포트·채널 입금/복구 불변 원장 | `202607210024_hotelstory_reporting_deposits.sql` |
 
 배포 순서:
 
@@ -238,7 +240,8 @@ npm run release:build
 - `?view=channel_catalog`: 사용 가능/설정 채널, 외부 연결, 상품 마감과 Rate Plan을 한 번에 반환
 - `?view=rateblock&from&to&connectionId&roomTypeId`: 최대 31일의 채널×상품×객실 블럭요금과 실제 객실·예약·그룹 hold 잔여량 반환
 - `?view=hotel_catalogs`: 성수기·휴일·편의시설·서비스·홈페이지 이미지 카탈로그 반환
-- `?view=inventory|accounting|website|report`: 기간 또는 도메인 전용 projection
+- `?view=inventory|accounting|website`: 기간 또는 도메인 전용 projection
+- `?view=report&report=...`: 최대 367일·25/50/100행의 15종 서버 리포트. 공통 `q/from/to/status/source/roomTypeId`와 채널 입금의 `scope=EXCLUDE_ONSITE`를 지원하고 lead time·예약곡선·YoY·후불·입금 집계를 반환합니다.
 - 기본 view: 그룹, 재무, 채널을 포함한 전체 read model
 - 응답은 `private, no-store`, gzip representation cache를 사용합니다.
 
@@ -247,6 +250,7 @@ npm run release:build
 - Supabase session, 서버 capability, distributed rate limit, Zod action schema, idempotency를 순서대로 검증합니다.
 - 성공 응답은 전체 snapshot이 아니라 변경 entity와 invalidation key를 담은 mutation receipt입니다.
 - 오류는 안정적인 코드 매핑으로 변환하며 문자열 `includes()` 분기를 사용하지 않습니다.
+- `mark_channel_settlement_paid`는 입금일·메모와 회계 전표를 확정하고, `restore_channel_settlement_payment`는 필수 사유로 반대전표를 생성해 미입금 상태로 복구합니다.
 
 ### `GET /api/booking/availability`
 

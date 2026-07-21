@@ -1269,7 +1269,7 @@ export async function handleExtendedAction(
     const statements: PmsPreparedStatement[] = [
       db
         .prepare(
-          "INSERT INTO channel_settlements(id,property_id,contract_id,connection_id,reservation_id,business_date,gross_sell_amount,channel_cost_amount,hotel_net_amount,currency,due_date,status,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?, 'KRW',?,'ACCRUED',?,?,?,?)",
+          "INSERT INTO channel_settlements(id,property_id,contract_id,connection_id,reservation_id,business_date,contract_type,commission_percent,gross_sell_amount,channel_cost_amount,hotel_net_amount,currency,due_date,status,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'KRW',?,'ACCRUED',?,?,?,?)",
         )
         .bind(
           settlementId,
@@ -1278,6 +1278,8 @@ export async function handleExtendedAction(
           body.connectionId,
           body.reservationId,
           businessDate,
+          contract.contract_type,
+          contract.commission_percent,
           gross,
           cost,
           hotelNet,
@@ -1312,6 +1314,12 @@ export async function handleExtendedAction(
     return true;
   }
   if (body.action === "mark_channel_settlement_paid") {
+    const depositDate = (body.depositDate || businessDate).trim();
+    const depositMemo = (body.memo || "").trim();
+    if (!validDate(depositDate) || depositDate > businessDate)
+      throw new PmsExtendedError("입금일은 영업일 이전의 올바른 날짜여야 합니다.");
+    if (depositMemo.length > 500)
+      throw new PmsExtendedError("입금 메모는 500자 이하로 입력하세요.");
     const settlement = await db
       .prepare(
         "SELECT s.*,cc.contract_type FROM channel_settlements s JOIN channel_contracts cc ON cc.id=s.contract_id WHERE s.id=? AND s.property_id=?",
@@ -1365,12 +1373,16 @@ export async function handleExtendedAction(
         },
       );
     }
+    // A settlement can be paid again after an audited restoration. The immutable
+    // receipt event gives each cycle a stable accounting source while the event
+    // guard permits only one current paid projection under concurrency.
+    const paymentEventId = crypto.randomUUID();
     const journal = await buildJournal(db, {
       propertyId,
-      businessDate,
+      businessDate: depositDate,
       entryType: "CHANNEL_SETTLEMENT",
       sourceType: "CHANNEL_PAYMENT",
-      sourceId: String(settlement.id),
+      sourceId: `${settlement.id}:${paymentEventId}`,
       description: `채널 정산 지급 ${settlement.id}`,
       actor,
       now,
@@ -1380,9 +1392,14 @@ export async function handleExtendedAction(
       ...journal.statements,
       db
         .prepare(
-          "UPDATE channel_settlements SET status='PAID',paid_at=?,updated_at=?,updated_by=? WHERE id=? AND property_id=? AND status='ACCRUED'",
+          "UPDATE channel_settlements SET status='PAID',paid_at=?,deposit_date=?,deposit_memo=?,payment_journal_id=?,updated_at=?,updated_by=? WHERE id=? AND property_id=? AND status='ACCRUED'",
         )
-        .bind(now, now, actor, settlement.id, propertyId),
+        .bind(now, depositDate, depositMemo || null, journal.id, now, actor, settlement.id, propertyId),
+      db
+        .prepare(
+          "INSERT INTO channel_deposit_events(id,property_id,settlement_id,event_type,amount,event_date,memo,accounting_journal_id,reverses_event_id,created_at,created_by) VALUES (?,?,?,'RECEIPT',?,?,?,?,NULL,?,?)",
+        )
+        .bind(paymentEventId, propertyId, settlement.id, settlement.hotel_net_amount, depositDate, depositMemo, journal.id, now, actor),
       audit(
         db,
         propertyId,
@@ -1390,7 +1407,7 @@ export async function handleExtendedAction(
         "PAY_CHANNEL_SETTLEMENT",
         "channel_settlement",
         String(settlement.id),
-        { journalId: journal.id },
+        { journalId: journal.id, depositDate, memo: depositMemo },
         now,
       ),
     ];
@@ -1402,6 +1419,78 @@ export async function handleExtendedAction(
       actor,
       now,
     );
+    if (idem) statements.push(idem);
+    await db.batch(statements);
+    return true;
+  }
+  if (body.action === "restore_channel_settlement_payment") {
+    const reason = (body.reason || "").trim();
+    const restoreDate = (body.restoreDate || businessDate).trim();
+    if (reason.length < 2 || reason.length > 500)
+      throw new PmsExtendedError("입금 복구 사유는 2~500자로 입력하세요.");
+    if (!validDate(restoreDate) || restoreDate > businessDate)
+      throw new PmsExtendedError("복구일은 영업일 이전의 올바른 날짜여야 합니다.");
+    const settlement = await db
+      .prepare("SELECT * FROM channel_settlements WHERE id=? AND property_id=?")
+      .bind(body.settlementId, propertyId)
+      .first<Record<string, unknown>>();
+    if (!settlement) throw new PmsExtendedError("채널 정산 건을 찾지 못했습니다.", 404);
+    if (settlement.status !== "PAID" || !settlement.payment_journal_id)
+      throw new PmsExtendedError("입금 완료 상태의 정산만 복구할 수 있습니다.", 409);
+    const entry = await db
+      .prepare("SELECT * FROM accounting_journal_entries WHERE id=? AND property_id=?")
+      .bind(settlement.payment_journal_id, propertyId)
+      .first<Record<string, unknown>>();
+    if (!entry || entry.status !== "POSTED")
+      throw new PmsExtendedError("복구할 입금 전표가 없거나 이미 반대 처리되었습니다.", 409);
+    const receipt = await db
+      .prepare("SELECT e.* FROM channel_deposit_events e WHERE e.property_id=? AND e.settlement_id=? AND e.event_type='RECEIPT' AND e.accounting_journal_id=? AND NOT EXISTS (SELECT 1 FROM channel_deposit_events x WHERE x.property_id=e.property_id AND x.reverses_event_id=e.id) ORDER BY e.created_at DESC LIMIT 1")
+      .bind(propertyId, settlement.id, settlement.payment_journal_id)
+      .first<Record<string, unknown>>();
+    if (!receipt)
+      throw new PmsExtendedError("복구할 입금 원장 이벤트를 찾지 못했습니다.", 409);
+    const originalLines = (
+      await db
+        .prepare("SELECT * FROM accounting_journal_lines WHERE journal_entry_id=? AND property_id=?")
+        .bind(entry.id, propertyId)
+        .all<Record<string, unknown>>()
+    ).results;
+    if (!originalLines.length)
+      throw new PmsExtendedError("복구할 입금 전표의 분개 라인이 없습니다.", 409);
+    const reversal = await buildJournal(db, {
+      propertyId,
+      businessDate: restoreDate,
+      entryType: "REVERSAL",
+      sourceType: "CHANNEL_PAYMENT_RESTORE",
+      sourceId: String(settlement.id),
+      description: `${entry.entry_no} 입금 복구: ${reason}`,
+      reversalOfId: String(entry.id),
+      actor,
+      now,
+      lines: originalLines.map((line) => ({
+        accountId: String(line.account_id),
+        debit: Number(line.credit),
+        credit: Number(line.debit),
+        department: String(line.department || ""),
+        channelId: String(line.channel_connection_id || ""),
+        reservationId: String(line.reservation_id || ""),
+        memo: reason,
+      })),
+    });
+    const statements: PmsPreparedStatement[] = [
+      ...reversal.statements,
+      db
+        .prepare("INSERT INTO channel_deposit_events(id,property_id,settlement_id,event_type,amount,event_date,memo,accounting_journal_id,reverses_event_id,created_at,created_by) VALUES (?,?,?,'RESTORE',?,?,?,?,?,?,?)")
+        .bind(crypto.randomUUID(), propertyId, settlement.id, settlement.hotel_net_amount, restoreDate, reason, reversal.id, receipt.id, now, actor),
+      db
+        .prepare("UPDATE accounting_journal_entries SET status='REVERSED' WHERE id=? AND property_id=? AND status='POSTED'")
+        .bind(entry.id, propertyId),
+      db
+        .prepare("UPDATE channel_settlements SET status='ACCRUED',paid_at=NULL,deposit_date=NULL,deposit_memo=NULL,payment_journal_id=NULL,updated_at=?,updated_by=? WHERE id=? AND property_id=? AND status='PAID' AND payment_journal_id=?")
+        .bind(now, actor, settlement.id, propertyId, entry.id),
+      audit(db, propertyId, actor, "RESTORE_CHANNEL_SETTLEMENT_PAYMENT", "channel_settlement", String(settlement.id), { journalId: entry.id, reversalId: reversal.id, receiptEventId: receipt.id, restoreDate, reason }, now),
+    ];
+    const idem = remember(db, propertyId, idempotencyKey || undefined, body.action, actor, now);
     if (idem) statements.push(idem);
     await db.batch(statements);
     return true;

@@ -6,6 +6,9 @@ html,body,body *{font-family:var(--aurora-font-product)!important}
 
 /* Talos interaction clarity and mobile operations */
 .dialog-open{overflow:hidden}
+/* Modal work must remain above the fixed mobile task dock (z-index 50), or
+   bottom-sheet submit buttons become visually present but untappable. */
+.modal-backdrop{z-index:80}
 .search{position:relative;display:flex;align-items:center;gap:8px}
 .search input{min-width:0}
 .search-count{flex:0 0 auto;color:var(--brand-strong);font-size:10px;font-weight:750;white-space:nowrap}

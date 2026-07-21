@@ -147,7 +147,7 @@ export async function handlePmsPost(request: Request) {
   if (duplicate && body.action!=="export_report") return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}), {headers:{"X-Idempotent-Replay":"true"}});
   if(body.action==="export_report") {
     try {
-      const params=new URLSearchParams();for(const key of ["report","q","from","to","status","source","roomTypeId"]){if(body[key])params.set(key,body[key]);}
+      const params=new URLSearchParams();for(const key of ["report","q","from","to","status","source","roomTypeId","scope"]){if(body[key])params.set(key,body[key]);}
       const report=await runReport(db,params,principal,{exportMode:true});
       if(duplicate)return Response.json({...report,replayed:true},{headers:{"X-Idempotent-Replay":"true"}});
       if(report.pagination.total>report.export.maxRows)return Response.json({error:`결과가 ${report.export.maxRows.toLocaleString()}행을 초과합니다. 기간 또는 필터를 좁혀 주세요.`},{status:413});

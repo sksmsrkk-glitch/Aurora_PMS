@@ -5,7 +5,7 @@ import { actionRegistry, registrationFor } from "../app/api/pms/action-registry.
 import { mapPmsError } from "../app/api/pms/error-map.ts";
 
 test("every registered action has one capability, domain, and Zod schema",()=>{
-  assert.equal(actionRegistry.size,75);
+  assert.equal(actionRegistry.size,76);
   for(const [action,registration] of actionRegistry){
     assert.equal(registration.action,action);
     assert.ok(registration.capability);
@@ -41,6 +41,15 @@ test("channel settlement accepts the reservation-derived accounting contract",()
   }).success,false);
 });
 
+test("channel deposit receipt and restoration use explicit accounting permissions",()=>{
+  const receipt=registrationFor("mark_channel_settlement_paid"),restore=registrationFor("restore_channel_settlement_payment");
+  assert.equal(receipt.capability,"ACCOUNTING_WRITE");
+  assert.equal(restore.capability,"ACCOUNTING_WRITE");
+  assert.equal(receipt.schema.safeParse({action:"mark_channel_settlement_paid",settlementId:"settlement-1",depositDate:"2031-01-01",memo:"Bank"}).success,true);
+  assert.equal(restore.schema.safeParse({action:"restore_channel_settlement_payment",settlementId:"settlement-1",restoreDate:"2031-01-01",reason:"Mismatch"}).success,true);
+  assert.equal(restore.schema.safeParse({action:"restore_channel_settlement_payment",settlementId:"settlement-1"}).success,false);
+});
+
 test("manual journals and reversals validate the payload used by the accounting UI",()=>{
   assert.equal(registrationFor("post_accounting_entry").schema.safeParse({
     action:"post_accounting_entry",businessDate:"2026-08-01",description:"Linen",
@@ -69,4 +78,5 @@ test("database errors map through a stable table instead of includes branches",(
     status:409,error:"선택한 객실은 해당 일정에 이미 예약되어 있습니다. 다른 객실을 선택하세요.",
   });
   assert.equal(mapPmsError("unexpected driver fault"),null);
+  assert.equal(mapPmsError("receipt must match the current paid settlement journal")?.status,409);
 });
