@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { addIsoDays, formatMoney } from "../lib/format";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
+import { boundedCalendarWindow, inclusiveDays, matchingDayCount } from "./inventory-window";
 
 type ChannelRate = {
   mapping_id: string;
@@ -87,6 +88,7 @@ type InventoryData = {
   ratePlans: RatePlan[];
 };
 type Editor = { mode: "bulk"; type?: RoomType; cell?: Cell } | null;
+type DetailMode = "CORE" | "RATE_PLAN" | "CHANNEL";
 
 const money = formatMoney;
 const addDays = addIsoDays;
@@ -100,26 +102,32 @@ export default function RevenueInventoryCalendar({
   canWrite: boolean;
 }) {
   const { act } = usePmsActions();
-  // Draft dates stay separate from `applied`: changing an input must not trigger a
-  // server projection until the user submits or chooses a preset. This keeps wide
-  // multi-month calendars from refetching on every intermediate edit.
+  // The full selected period is retained for bulk writes, while `cursor` and
+  // `windowDays` bound each read/render to 14 or 30 days. A year-long selection
+  // therefore never produces a 365-column DOM or a giant read response.
   const [from, setFrom] = useState(businessDate),
     [to, setTo] = useState(addDays(businessDate, 29)),
     [applied, setApplied] = useState({
       from: businessDate,
       to: addDays(businessDate, 29),
     }),
+    [cursor, setCursor] = useState(businessDate),
+    [windowDays, setWindowDays] = useState<14 | 30>(14),
+    [detailMode, setDetailMode] = useState<DetailMode>("CORE"),
     [data, setData] = useState<InventoryData | null>(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [typeQuery, setTypeQuery] = useState(""),
+    [typePage, setTypePage] = useState(1),
     [editor, setEditor] = useState<Editor>(null),
     [rateEditor,setRateEditor]=useState<RatePlan|"new"|null>(null);
+  const visibleWindow = useMemo(() => boundedCalendarWindow(cursor, applied.to, windowDays), [applied.to, cursor, windowDays]);
+  const visibleTo = visibleWindow.to;
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ view: "inventory", ...applied }),
+      const params = new URLSearchParams({ view: "inventory", from: cursor, to: visibleTo }),
         response = await fetch(`/api/pms?${params}`, { cache: "no-store" }),
         json = (await response.json()) as InventoryData & { error?: string };
       if (!response.ok)
@@ -134,7 +142,7 @@ export default function RevenueInventoryCalendar({
     } finally {
       setLoading(false);
     }
-  }, [applied]);
+  }, [cursor, visibleTo]);
   // The effect synchronizes the selected server-side calendar range.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -145,6 +153,8 @@ export default function RevenueInventoryCalendar({
     setFrom(businessDate);
     setTo(end);
     setApplied({ from: businessDate, to: end });
+    setCursor(businessDate);
+    setTypePage(1);
   }
   const gridTemplate = useMemo(
     () => `190px repeat(${data?.dates.length || 1}, 132px)`,
@@ -152,10 +162,15 @@ export default function RevenueInventoryCalendar({
   );
   // Filtering only changes rendered room-type rows; date columns and server totals
   // remain untouched, so a keyword can never alter the inventory calculation.
-  const visibleTypes = useMemo(() => {
+  const filteredTypes = useMemo(() => {
     const keyword = typeQuery.trim().toLocaleLowerCase("ko-KR");
     return data?.types.filter((type) => !keyword || `${type.code} ${type.name}`.toLocaleLowerCase("ko-KR").includes(keyword)) || [];
   }, [data, typeQuery]);
+  const typePageSize = 10;
+  const typePages = Math.max(1, Math.ceil(filteredTypes.length / typePageSize));
+  const visibleTypes = filteredTypes.slice((typePage - 1) * typePageSize, typePage * typePageSize);
+  const selectedDays = inclusiveDays(applied.from, applied.to);
+  const bulkData = data ? { ...data, range: { from: applied.from, to: applied.to, days: selectedDays } } : null;
   return (
     <>
       <section className="panel inventory-workspace">
@@ -190,6 +205,8 @@ export default function RevenueInventoryCalendar({
           onSubmit={(event) => {
             event.preventDefault();
             setApplied({ from, to });
+            setCursor(from);
+            setTypePage(1);
           }}
         >
           <label>
@@ -219,13 +236,14 @@ export default function RevenueInventoryCalendar({
               ＋ 기간 벌크 설정
             </button>
           )}
-          {data&&<ListSearch value={typeQuery} onChange={setTypeQuery} label="재고 객실 타입 검색" placeholder="객실 코드·타입명" count={visibleTypes.length} className="inventory-type-search"/>}
+          {data&&<ListSearch value={typeQuery} onChange={(value)=>{setTypeQuery(value);setTypePage(1)}} label="재고 객실 타입 검색" placeholder="객실 코드·타입명" count={filteredTypes.length} className="inventory-type-search"/>}
           <em>
             {data
-              ? `${data.range.days.toLocaleString()}일 · ${visibleTypes.length}/${data.types.length}개 타입`
+              ? `${selectedDays.toLocaleString()}일 선택 · 현재 ${data.range.from}~${data.range.to}`
               : "조회 중"}
           </em>
         </form>
+        {data&&<div className="inventory-view-controls"><div className="inventory-window-nav"><button type="button" className="secondary" disabled={cursor<=applied.from} onClick={()=>setCursor((value)=>{const previous=addDays(value,-windowDays);return previous<applied.from?applied.from:previous})}>← 이전</button><b>{data.range.from} ~ {data.range.to}</b><button type="button" className="secondary" disabled={visibleTo>=applied.to} onClick={()=>setCursor(addDays(cursor,windowDays))}>다음 →</button></div><div className="inventory-segmented" role="group" aria-label="캘린더 표시 범위"><button type="button" className={windowDays===14?"on":""} onClick={()=>{setWindowDays(14);setCursor(applied.from)}}>14일</button><button type="button" className={windowDays===30?"on":""} onClick={()=>{setWindowDays(30);setCursor(applied.from)}}>30일</button></div><div className="inventory-segmented" role="group" aria-label="셀 상세 정보"><button type="button" className={detailMode==="CORE"?"on":""} onClick={()=>setDetailMode("CORE")}>재고</button><button type="button" className={detailMode==="RATE_PLAN"?"on":""} onClick={()=>setDetailMode("RATE_PLAN")}>요금제</button><button type="button" className={detailMode==="CHANNEL"?"on":""} onClick={()=>setDetailMode("CHANNEL")}>채널</button></div></div>}
         {error && (
           <div className="report-error" role="alert">
             {error}
@@ -266,6 +284,7 @@ export default function RevenueInventoryCalendar({
                     type={type}
                     mappings={data.mappings}
                     contracts={data.contracts}
+                    detailMode={detailMode}
                     canWrite={canWrite}
                     edit={(cell) => setEditor({ mode: "bulk", type, cell })}
                   />
@@ -275,6 +294,7 @@ export default function RevenueInventoryCalendar({
             </div>
           )
         )}
+        {filteredTypes.length>typePageSize&&<div className="inventory-type-pagination"><button type="button" className="secondary" disabled={typePage<=1} onClick={()=>setTypePage((page)=>Math.max(1,page-1))}>이전 객실 타입</button><span>{typePage}/{typePages} 페이지 · {filteredTypes.length}개 타입</span><button type="button" className="secondary" disabled={typePage>=typePages} onClick={()=>setTypePage((page)=>Math.min(typePages,page+1))}>다음 객실 타입</button></div>}
         <div className="inventory-footnote">
           <span>
             <i className="available" />
@@ -298,9 +318,9 @@ export default function RevenueInventoryCalendar({
           </p>
         </div>
       </section>
-      {editor && data && (
+      {editor && bulkData && (
         <BulkInventoryModal
-          data={data}
+          data={bulkData}
           editor={editor}
           close={() => setEditor(null)}
           submit={async (payload) => {
@@ -340,12 +360,14 @@ function InventoryRow({
   type,
   mappings,
   contracts,
+  detailMode,
   canWrite,
   edit,
 }: {
   type: RoomType;
   mappings: Mapping[];
   contracts: Contract[];
+  detailMode: DetailMode;
   canWrite: boolean;
   edit: (cell: Cell) => void;
 }) {
@@ -377,8 +399,8 @@ function InventoryRow({
           </small>
           <strong>{money(cell.price)}</strong>
           {cell.websiteClosed&&<mark>WEB OFF</mark>}
-          {cell.ratePlanRates.slice(0,2).map(plan=><em className="plan-rate" key={plan.rate_plan_id}><b>{plan.code}</b> {plan.closed?"마감":money(Number(plan.sell_rate))}<small> / MLOS {plan.min_stay}</small></em>)}
-          {mapped.slice(0, 2).map((mapping) => {
+          {detailMode==="RATE_PLAN"&&cell.ratePlanRates.slice(0,2).map(plan=><em className="plan-rate" key={plan.rate_plan_id}><b>{plan.code}</b> {plan.closed?"마감":money(Number(plan.sell_rate))}<small> / MLOS {plan.min_stay}</small></em>)}
+          {detailMode==="CHANNEL"&&mapped.slice(0, 2).map((mapping) => {
             const rate = cell.channelRates.find(
                 (item) => item.mapping_id === mapping.id,
               ),
@@ -402,7 +424,7 @@ function InventoryRow({
               </em>
             );
           })}
-          {(cell.minStay > 1 || cell.cta || cell.ctd) && (
+          {detailMode==="CORE"&&(cell.minStay > 1 || cell.cta || cell.ctd) && (
             <i>
               {cell.minStay > 1 ? `MLOS ${cell.minStay}` : ""}
               {cell.cta ? " CTA" : ""}
@@ -469,6 +491,10 @@ function BulkInventoryModal({
     }),
     set = (key: string, value: string) =>
       setForm((current) => ({ ...current, [key]: value }));
+  const affectedCells = matchingDayCount(form.from, form.to, days) * typeIds.length;
+  const approvalSignature = `${form.from}:${form.to}:${[...days].sort().join(",")}:${[...typeIds].sort().join(",")}`;
+  const [approvedSignature, setApprovedSignature] = useState("");
+  const needsExplicitApproval = !single && affectedCells > 50;
   return (
     <div
       className="modal-backdrop"
@@ -672,6 +698,7 @@ function BulkInventoryModal({
               />
             </label>
           </div>
+          {!single&&<div className={`bulk-impact ${needsExplicitApproval?"warning":""}`}><span><b>{affectedCells.toLocaleString("ko-KR")}개 셀 변경 예정</b><small>{typeIds.length}개 객실 타입 · 선택 요일만 원자적으로 반영됩니다.</small></span>{needsExplicitApproval?<label><input type="checkbox" checked={approvedSignature===approvalSignature} onChange={(event)=>setApprovedSignature(event.target.checked?approvalSignature:"")}/><span>영향 범위를 확인했으며 적용합니다.</span></label>:<i aria-hidden="true">✓</i>}</div>}
           <label className="channel-rate-toggle">
             <span>
               <b>채널별 판매가·입금가</b>
@@ -763,6 +790,7 @@ function BulkInventoryModal({
               busy ||
               !typeIds.length ||
               !days.length ||
+              (needsExplicitApproval && approvedSignature !== approvalSignature) ||
               (channelEnabled && !contract)
             }
           >

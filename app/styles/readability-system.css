@@ -1931,6 +1931,75 @@ body {
   }
 }
 
+/* Six-stage operator redesign: all newly introduced controls inherit the same
+   legibility floor as the established PMS. Explicit legacy pixel sizes in the
+   component stylesheet are intentionally normalized here, at the final layer. */
+:where(
+  .nav-group,
+  .global-pms-search,
+  .global-search-results,
+  .frontdesk-workbench,
+  .reservation-wizard,
+  .inventory-view-controls,
+  .inventory-type-pagination,
+  .bulk-impact,
+  .report-workspace,
+  .report-export-dialog,
+  .mobile-task-nav
+) :where(button, input, select, textarea, p, span, small, b, strong, em, label, dt, dd, footer, h3) {
+  font-size: var(--aurora-type-body);
+  line-height: var(--aurora-leading-body);
+}
+
+.nav-group > h2,
+.global-search-results > section > h3,
+.report-catalog-group > h3 {
+  font-size: var(--aurora-type-caption);
+}
+
+.wizard-header h2,
+.report-export-dialog h2 {
+  font-size: 1.5rem;
+  line-height: var(--aurora-leading-tight);
+}
+
+.wizard-section-title h3,
+.frontdesk-title h2 {
+  font-size: var(--aurora-type-section);
+  line-height: var(--aurora-leading-tight);
+}
+
+:where(
+  .global-pms-search,
+  .global-search-results,
+  .frontdesk-workbench,
+  .reservation-wizard,
+  .inventory-view-controls,
+  .inventory-type-pagination,
+  .bulk-impact,
+  .report-workspace,
+  .report-export-dialog,
+  .mobile-task-nav
+) button {
+  min-height: var(--aurora-target);
+}
+
+.global-pms-search > span,
+.mobile-task-nav button > i {
+  font-size: 1.25rem;
+}
+
+@media (max-width: 760px) {
+  .mobile-task-nav button {
+    min-height: 3.5rem;
+    font-size: var(--aurora-type-caption);
+  }
+
+  .wizard-header h2 {
+    font-size: 1.375rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-shell *,
   .app-shell *::before,

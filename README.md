@@ -21,7 +21,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 현재 구현 범위:
 
 - 예약 생성·편집·취소·노쇼·배정·체크인·룸 무브·체크아웃
-- 최대 730일 재고 캘린더, 5,000셀 원자적 벌크 저장, MLOS·CTA·CTD·stop-sell
+- 최대 730일 선택·벌크 범위를 유지하면서 14/30일 읽기 창만 렌더링하는 재고 캘린더, 5,000셀 원자적 벌크 저장, MLOS·CTA·CTD·stop-sell
 - 정규화된 Rate Plan, 객실 타입 매핑, 일자별 직판 요금과 홈페이지 실시간 가격·재고
 - 폴리오 창·라우팅·분할·반대전표·수납·환불·AR 이관·후불 수납
 - 그룹 블록·rooming list·pickup·cutoff, 채널 연결·계약·ARI·inbound·outbox
@@ -33,6 +33,19 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - 도메인 기반 호텔별 홈페이지·직접 예약, DNS 검증, JIT MFA 지원 접근과 개인정보 마스킹
 - CSV dry-run·원자적 반영·안전 rollback, durable worker·lease reaper·제한형 DEAD 복구·백업 검증·사용량 집계
 - 12px 보조정보·14px 업무본문·44px 조작영역을 하한으로 하는 전역 가독성 시스템, 모바일 예약 카드·하단 내비게이션·하단 시트
+
+### 현장 운영 UX 6단계 완료 계약
+
+| 단계 | 구현 결과 | 완료 판정 |
+| --- | --- | --- |
+| 1. 업무 정보구조 | 직원 역할별로 `오늘 운영`, `판매·매출`, `정산·회계`, `호텔 설정` 메뉴를 재정렬하고 허용된 페이지만 표시 | 역할 템플릿의 14개 페이지 권한과 실제 메뉴가 행동 테스트에서 일치 |
+| 2. 검색·프런트 | 모든 화면에서 `Cmd/Ctrl+K` 통합 검색, 오늘 업무 큐, 서버 필터·정렬·20건 페이지네이션, 저장 보기를 제공 | 검색 도메인이 페이지 권한을 넘지 않고 URL 입력은 enum·길이·최대 50건으로 제한 |
+| 3. 예약 생성 | 일정·인원 → 실시간 가용 객실·요금제 → 고객·배정 → 최종 검토의 4단계 마법사 | DB가 정원·30박·재고·MLOS·CTA·CTD를 재검증하고 매일의 요금을 snapshot한 뒤 원자 확정 |
+| 4. 요금·재고 | 730일 전체 선택과 벌크 편집은 유지하되 서버 조회와 DOM은 14/30일 창, 객실 타입은 페이지당 10개로 제한 | 365일 선택도 첫 읽기·렌더가 14열이며 50셀 초과 벌크는 영향 범위 재확인 필수 |
+| 5. 리포트 | 업무별 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 25/50/100행, export 확인 | 서버 필터·마스킹·export 권한·감사 로그를 우회하지 않고 CSV/XLSX 생성 전 범위를 확인 |
+| 6. 모바일·가독성·성능 | 역할별 4개 핵심 하단 내비게이션, 카드형 예약 큐, 전체폭 하단 시트, 12/14px·44px 하한, reduced motion | 390px에서 수평 root overflow 없이 핵심 업무와 팝업을 조작하고 core는 오늘 업무 예약만 전달 |
+
+핵심 구현은 `app/pms-navigation.ts`, `app/global-pms-search.tsx`, `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx`, `app/inventory-window.ts`에 분리했습니다. `tests/operations-workbench.test.mjs`가 역할 메뉴, 프런트 입력 경계, 장기 캘린더의 bounded read를 행동으로 검증합니다.
 
 `완료`는 저장소와 자동 QA 범위를 뜻합니다. 실제 영업 전에는 결제대행, 법정 회계, 개인정보 보유 정책, OTA 인증, 백업 복구 목표를 호텔별로 확정해야 합니다.
 
@@ -114,10 +127,13 @@ flowchart LR
 | action registry | `app/api/pms/action-registry.ts` |
 | 명령 gateway | `app/api/pms/command-gateway.ts` |
 | read models·dashboard | `app/api/pms/read-model.ts` |
+| 통합 검색·프런트·예약 가용성 projection | `app/api/pms/frontdesk-read.ts` |
 | 재고·Rate Plan·회계 | `app/api/pms/extended.ts` |
 | 직접 예약 | `app/api/booking/service.ts` |
 | 홈페이지 CMS projection | `app/api/booking/website-service.ts` |
 | PMS shell | `app/(pms)/_components/pms-shell.tsx` |
+| 역할별 메뉴·모바일 핵심 업무 | `app/pms-navigation.ts` |
+| 프런트 업무대기열·예약 마법사 | `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx` |
 | 재고 캘린더 | `app/inventory-calendar.tsx` |
 | 공개 호텔 SEO | `app/hotel/seo.ts` |
 | 멀티호텔 Control Plane | `app/(pms)/platform`, `app/api/platform/route.ts` |

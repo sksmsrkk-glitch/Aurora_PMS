@@ -26,6 +26,12 @@ import { canViewWorkspace } from "../../access-control";
 import { PMS_WORKSPACES, type PmsWorkspace } from "../../pms-workspaces";
 import { loadStaffUsers } from "./staff";
 import { scheduleDurableWorkerKick } from "../../worker-kick";
+import {
+  loadFrontdesk,
+  loadPmsSearch,
+  loadReservationAvailability,
+  PmsReadError,
+} from "./frontdesk-read";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -79,6 +85,54 @@ export async function GET(request: Request) {
   const db = scopePmsDatabase(rootDb, principal.propertyId);
   const url = new URL(request.url);
   const view = url.searchParams.get("view");
+  if (view === "search") {
+    const maySearch =
+      canViewWorkspace(principal.workspaceAccess, "frontdesk") ||
+      canViewWorkspace(principal.workspaceAccess, "rooms") ||
+      canViewWorkspace(principal.workspaceAccess, "finance");
+    if (!maySearch)
+      return Response.json(
+        { error: "통합 검색 권한이 없습니다." },
+        { status: 403 },
+      );
+    return Response.json(await loadPmsSearch(db, url.searchParams, principal), {
+      headers: { "Cache-Control": "private, no-store" },
+    });
+  }
+  if (view === "frontdesk") {
+    if (!canViewWorkspace(principal.workspaceAccess, "frontdesk"))
+      return Response.json(
+        { error: "프런트 데스크 조회 권한이 없습니다." },
+        { status: 403 },
+      );
+    try {
+      return Response.json(
+        await loadFrontdesk(db, url.searchParams, principal),
+        { headers: { "Cache-Control": "private, no-store" } },
+      );
+    } catch (error) {
+      if (error instanceof PmsReadError)
+        return Response.json({ error: error.message }, { status: error.status });
+      throw error;
+    }
+  }
+  if (view === "reservation_availability") {
+    if (!canViewWorkspace(principal.workspaceAccess, "frontdesk"))
+      return Response.json(
+        { error: "예약 가용성 조회 권한이 없습니다." },
+        { status: 403 },
+      );
+    try {
+      return Response.json(
+        await loadReservationAvailability(db, url.searchParams),
+        { headers: { "Cache-Control": "private, no-store" } },
+      );
+    } catch (error) {
+      if (error instanceof PmsReadError)
+        return Response.json({ error: error.message }, { status: error.status });
+      throw error;
+    }
+  }
   if (view === "core")
     return cachedCoreSnapshotResponse(db, principal, request);
   if (view === "groups" || view === "finance" || view === "channels") {

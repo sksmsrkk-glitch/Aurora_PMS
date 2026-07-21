@@ -83,15 +83,20 @@ sequenceDiagram
 | `app/login/page.tsx` | Supabase Auth 로그인, 실패·대기 상태, 세션 진입점 |
 | `app/supabase-session.ts` | access token 검증, refresh, HttpOnly/Secure/SameSite cookie, logout |
 | `app/page.tsx` | `/overview`로 보내는 제품 루트 redirect |
-| `app/(pms)/*/page.tsx` | 13개 실제 업무 URL; 새로고침·북마크·딥링크·라우트 단위 진입 지원 |
+| `app/(pms)/*/page.tsx` | 14개 실제 업무 URL; 새로고침·북마크·딥링크·라우트 단위 진입 지원 |
 | `app/(pms)/_components/pms-shell.tsx` | 공통 shell, 예약 Drawer와 업무 Modal, 상태 기반 CTA |
+| `app/pms-navigation.ts` | 역할 우선순위와 페이지 권한을 결합한 그룹 메뉴·모바일 핵심 업무 |
+| `app/global-pms-search.tsx` | 250ms debounce, 키보드 이동, 권한별 도메인 결과를 제공하는 통합 검색 |
+| `app/frontdesk-workbench.tsx` | 서버 업무 큐·복합 필터·저장 보기·20건 페이지네이션 |
+| `app/reservation-wizard.tsx` | 실시간 가용성부터 원자 예약 확정까지의 4단계 직원 예약 흐름 |
+| `app/inventory-window.ts` | 장기 선택에서 14/30일 read/render 창과 벌크 영향 셀을 계산하는 순수 함수 |
 | `app/pms-action-context.tsx` | 모든 workspace가 공유하는 command/busy Context; prop drilling 제거 |
 | `app/query-provider.tsx` | TanStack Query client와 읽기 모델 cache lifecycle |
 | `app/hotel/page.tsx` | 테넌트 호텔 공개 홈페이지, 객실·경험·위치·예약 검색 진입점 |
 | `app/homepage-manager.tsx` | 반응형 실시간 미리보기, 히어로·메뉴·섹션 visual controls, 객실 콘텐츠·게시, 타입 생성, 이미지 업로드·삭제 Website Studio |
 | `app/website-editor-contract.ts` | 에디터·명령 경계·공개 renderer가 공유하는 메뉴 allowlist, CTA·색상·layout 정규화 |
 | `app/hotel/book/BookingClient.tsx` | 실시간 객실 검색, 예약자 입력, 멱등 예약 확정, 기존 예약 취소 |
-| `app/inventory-calendar.tsx` | 최대 730일 캘린더, 타입·요일 벌크 재고, 호텔·채널 판매가와 입금가 |
+| `app/inventory-calendar.tsx` | 최대 730일 선택·벌크와 14/30일 bounded calendar, 타입·요일 재고, 호텔·채널 판매가와 입금가 |
 | `app/accounting-center.tsx` | 매출·비용·손익, 복식부기 분개, 반대전표, 채널 정산 |
 | `app/channel-contracts.tsx` | 수수료/입금가 채널 계약과 정산 조건 관리 |
 | `app/reports-center.tsx` | 11개 리포트 카탈로그, 복합 필터, 페이지네이션, CSV/XLSX 다운로드 |
@@ -101,6 +106,7 @@ sequenceDiagram
 | `app/api/pms/action-registry.ts` | 모든 action의 도메인·필요 capability·Zod 입력 스키마 |
 | `app/api/pms/command-gateway.ts` | command 실행, strict idempotency receipt, 감사·Outbox 기록 |
 | `app/api/pms/read-model.ts` | core/full projection과 압축·짧은 읽기 cache |
+| `app/api/pms/frontdesk-read.ts` | 권한 인식 통합 검색, 프런트 페이지, 예약 가용성·요금 projection |
 | `app/api/pms/error-map.ts` | 안정된 DB 오류 코드/패턴을 HTTP 상태와 사용자 메시지로 매핑 |
 | `app/api/booking/service.ts` | 공개 판매 타입, 투숙 제한, 일별 가용재고·요금 재계산, 예약·취소 원자 처리 |
 | `app/api/booking/website-service.ts` | CMS에서 공개 승인된 호텔·객실·미디어만 읽는 서버 projection |
@@ -155,8 +161,11 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 
 | 모델 | 진입점 | 특징 |
 | --- | --- | --- |
-| 기본 Snapshot | `GET /api/pms` | 오늘 운영에 필요한 예약·객실·재고·폴리오·채널 요약을 한 응답으로 제공 |
-| 장기 재고 | `GET /api/pms?view=inventory` | 730일까지 선택 기간만 조회; 기본 Snapshot의 14일 경량 보기를 대체하는 전용 화면 |
+| Core Snapshot | `GET /api/pms?view=core` | 오늘 도착·현재 재실·오늘 체크아웃과 객실·14일 재고만 제공; 과거 전체 예약은 제외 |
+| 프런트 페이지 | `GET /api/pms?view=frontdesk` | 업무 큐·복합 필터·정렬·최대 50행 server pagination |
+| 통합 검색 | `GET /api/pms?view=search` | 현재 직원이 열 수 있는 예약·객실·AR 도메인만 각각 8/6/6건 반환 |
+| 예약 가용성 | `GET /api/pms?view=reservation_availability` | 최대 30박의 타입 재고·블록 hold·Rate Plan·MLOS·CTA·CTD·일자 요금 계산 |
+| 장기 재고 | `GET /api/pms?view=inventory` | 선택은 730일까지 허용하되 UI가 한 요청당 14/30일만 조회 |
 | 회계 센터 | `GET /api/pms?view=accounting` | 기간별 journal, settlement, account, P/L summary를 별도 조회 |
 | 리포트 | `GET /api/pms?view=report` | 필터·정렬·페이지네이션·마스킹이 적용된 서버 읽기 모델 |
 | Command | `POST /api/pms` | action별 capability·Zod·상태·멱등 키를 검증하고 원자 batch 실행 후 작은 receipt만 반환 |
