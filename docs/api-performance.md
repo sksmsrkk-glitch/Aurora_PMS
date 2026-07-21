@@ -81,6 +81,7 @@
 | `reverse_accounting_entry` | `entryId`, `reason` | POSTED 원전표, line debit/credit 반전, 원전표 REVERSED |
 | `accrue_channel_settlement` | `connectionId`, `reservationId` | 활성 계약, 예약별 유일성, 투숙일 rate coverage, 정산 공식 |
 | `mark_channel_settlement_paid` | `settlementId` | ACCRUED 상태, 현금·미수금·미지급금 전표 |
+| `restore_channel_settlement_payment` | `settlementId`, `reason` | PAID 상태, 원전표 반대전표·불변 RESTORE 사건·ACCRUED 복구 |
 | `open_cashier` / `close_cashier` | opening amount / counted amount | 사용자별 단일 open session, expected/variance 계산 |
 | `run_night_audit` | 없음 | 미처리 도착·open cashier·failed outbox blocker 0, 일별 중복 전기 차단 |
 | `export_report` | report filters, `CSV`/`XLSX` | `REPORT_EXPORT`, 최대 25,000행, export/audit 기록 |

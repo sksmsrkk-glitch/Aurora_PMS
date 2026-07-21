@@ -16,7 +16,7 @@
 | 연회 예약 | 장소 선택, 월 달력, 예약 등록 | banquet master/reservation | PR 7 |
 | 오늘 체크인/체크아웃 | 전용 목록, 완료 제외, 동일 복합필터, Excel | URL 기반 전용 업무 큐 | PR 7 |
 | 오늘 객실점유 | 상품 선택, 18일 점유 timeline | 상품/객실 점유 timeline | PR 7 |
-| 상품·채널 리포트 | 일·객실매출·결제·연간·YoY·채널 입금·후불; 0–6/6–12/12–18/18–24 booking curve, ADR·lead time | 리포트 확장 | PR 6 |
+| 상품·채널 리포트 | 일·객실매출·결제·연간·YoY·채널 입금·후불; 0–6/6–12/12–18/18–24 booking curve, ADR·lead time | 리포트 확장 | 완료 — PR 6 |
 | 회원 관리 | 이름/전화/ID/회사/코드/가입일 검색, 활성·등급·관리자 유형 | 호텔 고객 회원 master | PR 7 |
 | 숙소 관리 | 숙소·객실·오늘·요금·블록·서비스·이미지·편의시설·성수기·인원요금 탭 | 판매 catalog | 상품·인원·운영 카탈로그 완료 — PR 1·5 |
 
@@ -33,7 +33,7 @@
 | G | 연회 | 장소·연회예약·상태·금액 | 월 달력·등록 drawer | 중복 장소 시간 차단 |
 | H | 인원 요금 | 기준/최대 인원, 인원별 numeric supplement | 상품 editor 가격 grid | 유효 인원만 산출·저장 |
 | I | 운영 catalog | 성수기·휴일·편의시설·서비스·이미지 | 숙소 설정 tabs | 완료 — FK/RLS/native types |
-| J | 리포트 | lead time·booking curve·정산/입금·후불·YoY | catalog/filter/export | 마스킹·export 감사·실계산 |
+| J | 리포트 | lead time·booking curve·정산/입금·후불·YoY | catalog/filter/export | 완료 — DB 대조·마스킹·export 감사·동시 입금 차단 |
 | K | 오늘 업무 URL | check-in/out/occupancy projection | 독립 route·filter·deep link | 새로고침 상태 보존 |
 | L | 예약 import/export | dry-run·검증·원자 commit·rollback | template/upload/result | 교차호텔 참조 차단 |
 | M | 회원 | 고객 profile·등급·회사·승인 | 검색·상태·page size | 개인정보 권한·RLS |
@@ -110,6 +110,20 @@ PostgreSQL 통합 테스트는 동시 멱등 수렴, 교차 호텔 차단, nativ
 - 숙소 운영 master는 성수기, 휴일, 편의시설, 서비스, 이미지를 탭으로 제공한다. 날짜·시각·불리언·금액·설정은 native `date/time/boolean/numeric/jsonb`이며 7개 신규 table 모두 property FK, FORCE RLS, `aurora_property_isolation`, app grant/revoke를 갖는다.
 
 PostgreSQL 행동 테스트는 API를 통해 카탈로그·연결·상품마감을 만든 뒤 2일 블럭요금을 저장하고, 정확히 2개 override·ARI·Outbox 생성, 같은 idempotency key 재실행 무효, 객실 초과 할당 전체 rollback, 비활성 채널 ARI 차단, 교차 호텔 projection 0건, 운영 카탈로그 CRUD와 7개 FORCE RLS를 검증한다.
+
+## PR 6 — 리드타임·예약곡선·입금·후불·YoY 리포트
+
+기존 리포트 센터를 11종에서 15종으로 확장하고 예약 상세 리포트 자체도 보강했다. 모든 집계는 브라우저 행을 더하지 않고 tenant-scoped 서버 SQL에서 계산되며 generic CSV/XLSX projection이 같은 열과 필터를 재사용한다.
+
+- 예약 상세는 예약 생성 `timestamptz`를 property timezone의 현지 예약일·시간으로 변환한다. `입실일 - 예약일` 리드타임과 `00–06 / 06–12 / 12–18 / 18–24` 시간대가 각 예약 행에 표시된다.
+- 시간대별 예약곡선은 예약일별 4개 BOOK bucket, 전체/유효/취소 BOOK, REV, 평균 리드타임을 서버에서 집계한다. 검색·상태·채널·객실 타입 필터를 그대로 적용한다.
+- 전년 대비 예약현황은 선택한 입실 월마다 현재/전년 BOOK·REV와 YoY를 계산한다. 일자별 예약 요금 snapshot이 있으면 그 합계를, 없으면 확정 당시 nightly rate×숙박수를 사용한다.
+- 채널 입금관리는 입금 예정일, 채널·연동 유형·예약·결제 유형, 판매가·비용·호텔 입금가, 상태, 입금일·메모·회계 전표를 제공한다. `미입금만 보기`와 `수기·현장결제 제외`는 서버 필터다.
+- 입금처리는 채널 미수/현금 분개, PAID projection, RECEIPT 사건, 감사 로그와 멱등 영수증을 한 transaction에 저장한다. 입금복구는 원 지급 전표를 REVERSED로 바꾸고 반대전표·RESTORE 사건을 추가한 뒤 ACCRUED로 되돌린다.
+- `pms_channel_deposit_event_guard`가 settlement row를 잠그고 사건과 현재 payment journal이 정확히 일치하는지 확인한다. 같은 멱등키 재시도는 replay되고, 서로 다른 키의 동시 입금은 정확히 한 건만 성공한다.
+- 후불 정산관리는 거래처·청구서·예약, 청구/수납/미수, 상태, 최종 수납일과 조회 종료일 기준 연체일을 제공한다.
+
+`202607210024_hotelstory_reporting_deposits.sql`은 입금 projection 필드와 append-only `channel_deposit_events`를 추가한다. 신규 테이블은 native `date/numeric/timestamptz`, property 복합 FK, FORCE RLS, tenant policy, app 최소 권한, update/delete 거부 trigger를 갖는다. PostgreSQL 통합 테스트는 03:30 KST 예약의 정확한 27일 리드타임과 00–06 bucket, 현재 200,000원/전년 160,000원의 REV YoY 25%, 입금→복구 전표/사건, replay, 교차 호텔 비노출과 동시 요청 단일 성공을 실제 migration에서 대조한다.
 
 ## 공통 완료 판정
 

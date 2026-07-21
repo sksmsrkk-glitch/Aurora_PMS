@@ -125,7 +125,7 @@ async function main() {
     assert.equal(response.response.status, 200, `${report}: ${response.json?.error}`);
     assert.equal(response.json.report.key, report);
   }
-  record("표준 리포트 11종 조회·필터");
+  record("표준 리포트 15종 조회·필터·입금/복구");
 
   for (const format of ["CSV", "XLSX"]) {
     const exported = await action("export_report", { format, report: "reservations", from: businessDate, to: addDays(businessDate, 7), q: `QA${runId}` });

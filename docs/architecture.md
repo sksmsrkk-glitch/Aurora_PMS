@@ -46,7 +46,7 @@ flowchart LR
   AUTH --> API["PMS Route Handler\nRBAC · Zod · idempotency"]
   UI --> API
   WEB --> BOOKING["Public Booking API\nrate · restriction · inventory validation"]
-  API --> REGISTRY["75-action registry\ndomain · capability · schema"]
+  API --> REGISTRY["76-action registry\ndomain · capability · schema"]
   REGISTRY --> ADAPTER["Tenant-scoped PmsDatabase"]
   BOOKING --> ADAPTER
   ADAPTER --> PG["Supavisor transaction pooler\nDATABASE_URL · prepared=false"]
@@ -103,7 +103,7 @@ sequenceDiagram
 | `app/channel-catalog-manager.tsx` | 채널 catalog 2열 이동, 통합/수동 lifecycle, 순서·서플라이어·상품 마감 |
 | `app/channel-contracts.tsx` | 수수료/입금가 채널 계약과 정산 조건 관리 |
 | `app/hotel-catalog-manager.tsx` | 성수기·휴일·편의시설·서비스·이미지 호텔별 운영 master |
-| `app/reports-center.tsx` | 11개 리포트 카탈로그, 복합 필터, 페이지네이션, CSV/XLSX 다운로드 |
+| `app/reports-center.tsx` | 15개 리포트 카탈로그, 복합 필터, 입금·복구, 페이지네이션, CSV/XLSX 다운로드 |
 | `app/room-master.tsx` | 객실 타입과 실물 객실 생성·수정·대량 생성 |
 | `app/api/pms/route.ts` | 47줄 HTTP 경계; GET/POST를 전용 모듈로 위임 |
 | `app/api/pms/auth.ts` | Supabase identity, assignment, property scope, capability principal |

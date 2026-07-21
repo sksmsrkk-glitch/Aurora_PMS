@@ -297,7 +297,7 @@ PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONF
 기존 25개 운영 요구사항은 실행 스크립트에서 관련 업무를 묶어 24개의 checkpoint로 보고하며, 인증·대량 경쟁·보안·직접 예약은 별도 E2E와 invariant test에서 검증합니다.
 
 1. 대시보드와 Snapshot 로딩
-2. 리포트 11종 조회와 필터
+2. 리포트 15종 조회와 필터, 채널 입금/복구
 3. CSV/XLSX export
 4. 객실 타입 생성·수정·멱등 replay
 5. 단일/대량 객실 생성과 수정
