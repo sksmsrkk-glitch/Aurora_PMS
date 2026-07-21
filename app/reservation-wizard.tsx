@@ -12,6 +12,18 @@ type Offer = { roomTypeId: string; code: string; name: string; capacity: number;
 type Availability = { property: { name: string; currency: string; businessDate: string }; search: { arrival: string; departure: string; adults: number; children: number; nights: number }; offers: Offer[]; error?: string };
 
 const steps = ["일정·인원", "객실·요금", "고객·결제", "검토·확정"];
+const offersPerPage = 5;
+
+/** Keeps high-cardinality hotel masters out of the reservation dialog DOM. */
+export function reservationOfferWindow(offers: Offer[], query: string, page: number) {
+  const keyword = query.trim().toLocaleLowerCase("ko-KR");
+  const filteredOffers = keyword
+    ? offers.filter((entry) => `${entry.code} ${entry.name} ${entry.plans.map((rate) => `${rate.code} ${rate.name}`).join(" ")}`.toLocaleLowerCase("ko-KR").includes(keyword))
+    : offers;
+  const pageCount = Math.max(1, Math.ceil(filteredOffers.length / offersPerPage));
+  const safePage = Math.min(Math.max(0, page), pageCount - 1);
+  return { filteredOffers, pageCount, safePage, visibleOffers: filteredOffers.slice(safePage * offersPerPage, (safePage + 1) * offersPerPage) };
+}
 
 export default function ReservationWizard({ rooms, businessDate, close }: { rooms: Room[]; businessDate: string; close: () => void }) {
   const { busy, act } = usePmsActions();
@@ -23,6 +35,9 @@ export default function ReservationWizard({ rooms, businessDate, close }: { room
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [offerQuery, setOfferQuery] = useState("");
+  const [offerPage, setOfferPage] = useState(0);
+  const [expandedOffers, setExpandedOffers] = useState<string[]>([]);
   const [guest, setGuest] = useState({ firstName: "", lastName: "", email: "", phone: "", source: "Direct", eta: "15:00", roomId: "", notes: "", nationality: "KR", nightlyRate: "" });
   const offer = availability?.offers.find((entry) => entry.roomTypeId === offerId) || null;
   const plan = offer?.plans.find((entry) => entry.id === planId) || null;
@@ -32,6 +47,8 @@ export default function ReservationWizard({ rooms, businessDate, close }: { room
       : Number(guest.nightlyRate || 0) * Number(availability?.search.nights || 1)
     : 0;
   const assignableRooms = useMemo(() => rooms.filter((room) => room.active && room.room_type_id === offerId && room.front_desk_status === "VACANT" && ["CLEAN", "INSPECTED"].includes(room.housekeeping_status)), [offerId, rooms]);
+  const offerWindow = useMemo(() => reservationOfferWindow(availability?.offers ?? [], offerQuery, offerPage), [availability, offerQuery, offerPage]);
+  const { filteredOffers, pageCount: offerPageCount, safePage, visibleOffers } = offerWindow;
   const setGuestField = (key: keyof typeof guest, value: string) => setGuest((current) => ({ ...current, [key]: value }));
   async function findAvailability() {
     setSearching(true); setError("");
@@ -40,7 +57,7 @@ export default function ReservationWizard({ rooms, businessDate, close }: { room
       const response = await fetch(`/api/pms?${params}`, { cache: "no-store" });
       const json = (await response.json()) as Availability;
       if (!response.ok) throw new Error(json.error || "가용 객실을 찾지 못했습니다.");
-      setAvailability(json); setOfferId(""); setPlanId(""); setGuestField("roomId", ""); setStep(1);
+      setAvailability(json); setOfferId(""); setPlanId(""); setOfferQuery(""); setOfferPage(0); setExpandedOffers([]); setGuestField("roomId", ""); setStep(1);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "가용 객실을 찾지 못했습니다."); }
     finally { setSearching(false); }
   }
@@ -69,7 +86,14 @@ export default function ReservationWizard({ rooms, businessDate, close }: { room
             <div className="wizard-actions"><button type="button" className="secondary" onClick={close}>취소</button><button className="primary" disabled={searching}>{searching ? "재고·요금 확인 중…" : "가용 객실 조회"}</button></div>
           </form>}
           {step === 1 && <section className="wizard-section"><div className="wizard-section-title"><span>2</span><div><h3>객실과 요금제를 선택하세요</h3><p>{availability?.search.nights}박 · 성인 {availability?.search.adults}명 · 아동 {availability?.search.children}명</p></div></div>
-            <div className="availability-offers">{availability?.offers.map((entry) => <article key={entry.roomTypeId} className={offerId === entry.roomTypeId ? "selected" : ""}><header><div><b>{entry.code}</b><h4>{entry.name}</h4><p>기준 {entry.capacity}명 · 남은 재고 최소 {entry.available}실</p></div></header><div className="offer-plans">{entry.plans.map((rate) => <button type="button" className={planId === rate.id ? "selected" : ""} key={rate.id} onClick={() => selectPlan(entry, rate)}><span><b>{rate.name}</b><small>{rate.code} · {rate.mealPlan}</small><em>{rate.cancellationPolicy}</em></span><strong>{formatMoney(rate.total)}<small>평균 {formatMoney(rate.average)} / 박</small></strong></button>)}</div></article>)}{availability?.offers.length === 0 && <div className="empty-state large"><b>판매 가능한 객실이 없습니다.</b><p>일정이나 인원을 변경해 다시 조회해 주세요.</p></div>}</div>
+            <div className="availability-toolbar"><label><span>객실·요금제 검색</span><input aria-label="객실·요금제 검색" value={offerQuery} onChange={(event) => { setOfferQuery(event.target.value); setOfferPage(0); }} placeholder="객실 타입 또는 요금제 코드" /></label><p><b>{filteredOffers.length}</b>개 객실 타입 · 한 번에 {offersPerPage}개 표시</p></div>
+            <div className="availability-offers">{visibleOffers.map((entry) => {
+              const sortedPlans = [...entry.plans].sort((left, right) => left.total - right.total || left.code.localeCompare(right.code));
+              const expanded = expandedOffers.includes(entry.roomTypeId);
+              const visiblePlans = expanded ? sortedPlans : sortedPlans.slice(0, 3);
+              return <article key={entry.roomTypeId} className={offerId === entry.roomTypeId ? "selected" : ""}><header><div><b>{entry.code}</b><h4>{entry.name}</h4><p>기준 {entry.capacity}명 · 남은 재고 최소 {entry.available}실 · 요금제 {entry.plans.length}개</p></div></header><div className="offer-plans">{visiblePlans.map((rate, index) => <button type="button" className={planId === rate.id ? "selected" : ""} key={rate.id} onClick={() => selectPlan(entry, rate)}><span><b>{rate.name}{index === 0 ? <em className="lowest-rate">최저가</em> : null}</b><small>{rate.code} · {rate.mealPlan}</small><em>{rate.cancellationPolicy}</em></span><strong>{formatMoney(rate.total)}<small>평균 {formatMoney(rate.average)} / 박</small></strong></button>)}</div>{sortedPlans.length > 3 && <button type="button" className="offer-plan-toggle" aria-expanded={expanded} onClick={() => setExpandedOffers((current) => expanded ? current.filter((id) => id !== entry.roomTypeId) : [...current, entry.roomTypeId])}>{expanded ? "요금제 접기" : `나머지 ${sortedPlans.length - 3}개 요금제 보기`}</button>}</article>;
+            })}{availability?.offers.length === 0 && <div className="empty-state large"><b>판매 가능한 객실이 없습니다.</b><p>일정이나 인원을 변경해 다시 조회해 주세요.</p></div>}{availability?.offers.length !== 0 && filteredOffers.length === 0 && <div className="empty-state large"><b>검색 조건에 맞는 객실·요금제가 없습니다.</b><p>객실 타입명이나 요금제 코드를 다시 확인해 주세요.</p></div>}</div>
+            {offerPageCount > 1 && <nav className="availability-pagination" aria-label="가용 객실 페이지"><button type="button" className="secondary" disabled={safePage === 0} onClick={() => setOfferPage((page) => Math.max(0, page - 1))}>← 이전 객실</button><span>{safePage + 1} / {offerPageCount}</span><button type="button" className="secondary" disabled={safePage + 1 >= offerPageCount} onClick={() => setOfferPage((page) => Math.min(offerPageCount - 1, page + 1))}>다음 객실 →</button></nav>}
             <div className="wizard-actions"><button type="button" className="secondary" onClick={() => setStep(0)}>← 일정 변경</button><button type="button" className="primary" disabled={!plan} onClick={() => setStep(2)}>고객 정보 입력 →</button></div>
           </section>}
           {step === 2 && <section className="wizard-section"><div className="wizard-section-title"><span>3</span><div><h3>고객과 예약 정보를 입력하세요</h3><p>필수 항목만 먼저 입력하고 객실 배정과 메모는 선택할 수 있습니다.</p></div></div>
@@ -82,7 +106,7 @@ export default function ReservationWizard({ rooms, businessDate, close }: { room
             <div className="wizard-actions"><button type="button" className="secondary" onClick={() => setStep(2)}>← 정보 수정</button><button type="button" className="primary" disabled={!confirmed || Boolean(busy)} onClick={() => void confirmReservation()}>{busy ? "재고 재검증·확정 중…" : "예약 확정"}</button></div>
           </section>}
         </div>
-        <aside className="wizard-summary"><p>예약 요약</p>{offer && plan ? <><b>{offer.code} · {offer.name}</b><span>{search.arrival} → {search.departure}</span><span>{availability?.search.nights}박 · {plan.code}</span><hr /><strong>{formatMoney(displayedTotal)}</strong><small>{plan.cancellationPolicy}</small></> : <><b>일정을 먼저 조회하세요.</b><span>가용 재고와 판매 가능한 요금이 여기에 표시됩니다.</span></>}</aside>
+        <aside className="wizard-summary"><p>예약 요약</p>{offer && plan ? <><b>{offer.code} · {offer.name}</b><span>{search.arrival} → {search.departure}</span><span>{availability?.search.nights}박 · {plan.code}</span><hr /><strong>{formatMoney(displayedTotal)}</strong><small>{plan.cancellationPolicy}</small></> : availability ? <><b>객실과 요금제를 선택하세요.</b><span>{availability.search.nights}박 · 객실 타입 {availability.offers.length}개를 찾았습니다.</span></> : <><b>일정을 먼저 조회하세요.</b><span>가용 재고와 판매 가능한 요금이 여기에 표시됩니다.</span></>}</aside>
       </div>
     </section>
   </div>;
