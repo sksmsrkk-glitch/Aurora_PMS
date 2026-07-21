@@ -45,6 +45,8 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 5. 리포트 | 업무별 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 25/50/100행, export 확인 | 서버 필터·마스킹·export 권한·감사 로그를 우회하지 않고 CSV/XLSX 생성 전 범위를 확인 |
 | 6. 모바일·가독성·성능 | 역할별 4개 핵심 하단 내비게이션, 카드형 예약 큐, 전체폭 하단 시트, 12/14px·44px 하한, reduced motion | 390px에서 수평 root overflow 없이 핵심 업무와 팝업을 조작하고 core는 오늘 업무 예약만 전달 |
 
+운영 배포 화면의 최종 검증도 이 계약에 포함한다. 통합 검색은 예약·객실뿐 아니라 AR 잔액을 원장 합계로 조회하며, 장애 시 무반응 대신 오류 안내를 표시한다. 대시보드의 `오늘 도착`은 전체 도착 건수와 처리 완료·도착 대기를 함께 표시해 도착 플로우의 미처리 건수와 의미가 섞이지 않도록 한다.
+
 핵심 구현은 `app/pms-navigation.ts`, `app/global-pms-search.tsx`, `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx`, `app/inventory-window.ts`에 분리했습니다. `tests/operations-workbench.test.mjs`가 역할 메뉴, 프런트 입력 경계, 장기 캘린더의 bounded read를 행동으로 검증합니다.
 
 `완료`는 저장소와 자동 QA 범위를 뜻합니다. 실제 영업 전에는 결제대행, 법정 회계, 개인정보 보유 정책, OTA 인증, 백업 복구 목표를 호텔별로 확정해야 합니다.

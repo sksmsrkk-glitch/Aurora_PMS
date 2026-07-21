@@ -11,7 +11,7 @@
 | Tenant RLS 대상 | 65 | RLS enable 선언과 tenant table catalog |
 | 등록 PMS action | 56 | action registry key |
 | Unit/behavior test | 54 | `tests/*.test.mjs`의 test case |
-| PostgreSQL integration test | 21 | `tests/*.integration.mjs`의 test case |
+| PostgreSQL integration test | 22 | `tests/*.integration.mjs`의 test case |
 | PMS CSS source | 184,339 bytes / 10 files | root PMS layout imports |
 | Public hotel CSS source | 21,106 bytes / 1 file | isolated `app/hotel/hotel.css` |
 | 상세 문서 | 8 files | `docs/*.md` (generated 제외) |

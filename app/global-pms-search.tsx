@@ -66,8 +66,13 @@ const GlobalPmsSearch = forwardRef<GlobalSearchHandle, { onNavigate?: () => void
           setActive(0);
           setOpen(true);
         } catch (reason) {
-          if (!(reason instanceof DOMException && reason.name === "AbortError"))
+          if (!(reason instanceof DOMException && reason.name === "AbortError")) {
             setResult({ q: keyword, groups: [], total: 0, error: reason instanceof Error ? reason.message : "검색하지 못했습니다." });
+            // A failed request must still open the result surface; otherwise the
+            // search appears to do nothing and operators cannot distinguish a
+            // backend incident from a genuine zero-result query.
+            setOpen(true);
+          }
         } finally {
           if (!controller.signal.aborted) setLoading(false);
         }

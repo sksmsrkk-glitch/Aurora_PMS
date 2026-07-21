@@ -95,9 +95,17 @@ export async function GET(request: Request) {
         { error: "통합 검색 권한이 없습니다." },
         { status: 403 },
       );
-    return Response.json(await loadPmsSearch(db, url.searchParams, principal), {
-      headers: { "Cache-Control": "private, no-store" },
-    });
+    try {
+      return Response.json(await loadPmsSearch(db, url.searchParams, principal), {
+        headers: { "Cache-Control": "private, no-store" },
+      });
+    } catch (error) {
+      console.error("PMS global search failed", error);
+      return Response.json(
+        { error: "통합 검색을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요." },
+        { status: 500, headers: { "Cache-Control": "private, no-store" } },
+      );
+    }
   }
   if (view === "frontdesk") {
     if (!canViewWorkspace(principal.workspaceAccess, "frontdesk"))

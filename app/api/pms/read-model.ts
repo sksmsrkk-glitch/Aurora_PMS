@@ -26,6 +26,10 @@ WITH context AS (
         AND r.status NOT IN ('CANCELLED','NO_SHOW')) AS arrivals,
     (SELECT COUNT(*) FROM reservations r
       WHERE r.property_id=pms_current_property_id()
+        AND r.arrival_date=d.stay_date
+        AND r.status IN ('IN_HOUSE','CHECKED_OUT')) AS processed_arrivals,
+    (SELECT COUNT(*) FROM reservations r
+      WHERE r.property_id=pms_current_property_id()
         AND r.arrival_date<=d.stay_date AND r.departure_date>d.stay_date
         AND r.status NOT IN ('CANCELLED','NO_SHOW')) AS occupied,
     (SELECT COALESCE(SUM(COALESCE(rr.sell_rate,r.nightly_rate)),0)
@@ -40,9 +44,11 @@ WITH context AS (
 SELECT
   (SELECT COUNT(*) FROM rooms WHERE property_id=pms_current_property_id() AND active) AS rooms,
   COALESCE(MAX(arrivals) FILTER (WHERE period='current'),0) AS current_arrivals,
+  COALESCE(MAX(processed_arrivals) FILTER (WHERE period='current'),0) AS current_processed_arrivals,
   COALESCE(MAX(occupied) FILTER (WHERE period='current'),0) AS current_occupied,
   COALESCE(MAX(revenue) FILTER (WHERE period='current'),0) AS current_revenue,
   COALESCE(MAX(arrivals) FILTER (WHERE period='prior'),0) AS prior_arrivals,
+  COALESCE(MAX(processed_arrivals) FILTER (WHERE period='prior'),0) AS prior_processed_arrivals,
   COALESCE(MAX(occupied) FILTER (WHERE period='prior'),0) AS prior_occupied,
   COALESCE(MAX(revenue) FILTER (WHERE period='prior'),0) AS prior_revenue
 FROM daily`;
@@ -50,8 +56,8 @@ FROM daily`;
 function dashboardMetrics(row: Record<string,unknown> | undefined, activeRooms: Array<Record<string,unknown>>) {
   const numeric=(value:unknown)=>{const parsed=Number(value??0);return Number.isFinite(parsed)?parsed:0;};
   const rooms=numeric(row?.rooms)||activeRooms.length;
-  const current={arrivals:numeric(row?.current_arrivals),occupied:numeric(row?.current_occupied),revenue:numeric(row?.current_revenue)};
-  const prior={arrivals:numeric(row?.prior_arrivals),occupied:numeric(row?.prior_occupied),revenue:numeric(row?.prior_revenue)};
+  const current={arrivals:numeric(row?.current_arrivals),processedArrivals:numeric(row?.current_processed_arrivals),occupied:numeric(row?.current_occupied),revenue:numeric(row?.current_revenue)};
+  const prior={arrivals:numeric(row?.prior_arrivals),processedArrivals:numeric(row?.prior_processed_arrivals),occupied:numeric(row?.prior_occupied),revenue:numeric(row?.prior_revenue)};
   const occupancy=(occupied:number)=>rooms>0?occupied/rooms*100:0;
   const percentChange=(currentValue:number,priorValue:number)=>priorValue>0?(currentValue-priorValue)/priorValue*100:null;
   const currentOccupancy=occupancy(current.occupied),priorOccupancy=occupancy(prior.occupied);

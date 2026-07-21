@@ -241,11 +241,13 @@ export async function loadPmsSearch(
       WHERE rm.property_id=pms_current_property_id() AND ? AND rm.active
         AND LOWER(CONCAT_WS(' ',rm.number,rt.code,rt.name,rm.floor)) LIKE ?
       ORDER BY rm.number LIMIT 6`).bind(maySearchRooms, pattern),
-    db.prepare(`SELECT i.id,i.invoice_no,i.status,i.balance,a.name account_name
+    db.prepare(`SELECT i.id,i.invoice_no,i.status,
+        COALESCE(SUM(l.debit-l.credit),0) balance,a.name account_name
       FROM ar_invoices i JOIN ar_accounts a ON a.id=i.ar_account_id AND a.property_id=i.property_id
+      LEFT JOIN ar_ledger_entries l ON l.invoice_id=i.id AND l.property_id=i.property_id
       WHERE i.property_id=pms_current_property_id() AND ?
         AND LOWER(CONCAT_WS(' ',i.invoice_no,a.account_no,a.name)) LIKE ?
-      ORDER BY i.issued_date DESC LIMIT 6`).bind(maySearchFinance, pattern),
+      GROUP BY i.id,a.id ORDER BY i.issued_date DESC LIMIT 6`).bind(maySearchFinance, pattern),
   ]);
   const reservationItems = reservations.results.map((row) => ({
     id: String(row.id),
