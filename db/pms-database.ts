@@ -139,6 +139,7 @@ export const TENANT_TABLES = [
   "reservation_links", "reservation_voucher_deliveries",
   "channel_catalog", "property_channel_settings", "channel_product_cutoffs",
   "property_seasons", "property_holidays", "amenity_catalog", "service_catalog",
+  "banquet_venues", "banquet_reservations", "hotel_members",
 ] as const;
 const tenantTablePattern = new RegExp(`\\b(?:${TENANT_TABLES.join("|")})\\b`, "iu");
 

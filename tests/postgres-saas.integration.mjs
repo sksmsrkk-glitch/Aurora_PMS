@@ -580,6 +580,9 @@ test(
         ),
         committed = await commitResponse.json();
       assert.equal(committed.committed, 1);
+      const replayResponse=await commit(db,"integration@example.com",dry.job.id),replayed=await replayResponse.json();
+      assert.equal(replayed.replayed,true);
+      assert.equal(replayed.jobId,committed.jobId);
       const [created] =
         await sql`SELECT rt.id,(SELECT COUNT(*)::int FROM room_type_website rw WHERE rw.room_type_id=rt.id) website_rows,(SELECT COUNT(*)::int FROM rate_plan_room_types rr WHERE rr.room_type_id=rt.id) plan_rows FROM room_types rt WHERE rt.property_id='prop-seoul' AND rt.code=${code}`;
       assert.equal(created.website_rows, 1);
@@ -600,3 +603,18 @@ test(
     }
   },
 );
+
+test("reservation CSV can create an embedded guest and retry commit idempotently",{skip},async()=>{
+  const sql=client(),suffix=crypto.randomUUID().slice(0,8).toUpperCase(),confirmation=`CSV-${suffix}`,external=`RES-${suffix}`,guestExternal=`GUEST-${suffix}`;
+  try{
+    const db=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul"),[type]=await sql`SELECT code FROM room_types WHERE property_id='prop-seoul' AND active ORDER BY code LIMIT 1`,[plan]=await sql`SELECT code FROM rate_plans WHERE property_id='prop-seoul' AND active ORDER BY code LIMIT 1`;
+    const csv=`external_id,confirmation_no,guest_external_id,guest_first_name,guest_last_name,guest_email,guest_phone,room_type_code,arrival_date,departure_date,adults,children,source,rate_plan,nightly_rate,eta,notes\n${external},${confirmation},${guestExternal},길동,홍,csv-${suffix.toLowerCase()}@example.com,010-5555-5555,${type.code},2032-05-10,2032-05-12,2,0,HotelStory,${plan.code},188000,15:00,Embedded guest\n`;
+    const dryPayload=await (await dryRun(db,"reservation-import@example.com","RESERVATIONS",`reservations-${suffix}.csv`,csv)).json();assert.equal(dryPayload.job.error_count,0);
+    const commitResponses=await Promise.all([commit(db,"reservation-import@example.com",dryPayload.job.id),commit(db,"reservation-import@example.com",dryPayload.job.id)]),commitPayloads=await Promise.all(commitResponses.map(response=>response.json()));
+    assert.equal(commitPayloads.filter(payload=>payload.replayed===true).length,1);assert.equal(new Set(commitPayloads.map(payload=>payload.jobId)).size,1);
+    const committed=commitPayloads[0],replayed=await (await commit(db,"reservation-import@example.com",dryPayload.job.id)).json();assert.equal(replayed.replayed,true);assert.equal(replayed.jobId,committed.jobId);
+    const [created]=await sql`SELECT r.id,g.id guest_id,g.first_name,g.last_name FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id WHERE r.property_id='prop-seoul' AND r.confirmation_no=${confirmation}`;assert.equal(created.first_name,"길동");assert.equal(created.last_name,"홍");
+    const rolled=await (await rollback(db,"reservation-import@example.com",committed.jobId)).json();assert.equal(rolled.rolledBack,2);
+    const [remaining]=await sql`SELECT COUNT(*)::int count FROM reservations WHERE property_id='prop-seoul' AND confirmation_no=${confirmation}`;assert.equal(remaining.count,0);
+  }finally{await sql`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND actor='reservation-import@example.com'`;await sql.end({timeout:2});await closePmsDatabase();}
+});

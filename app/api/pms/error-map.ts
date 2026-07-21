@@ -32,6 +32,10 @@ const mappings:readonly [RegExp,MappedPmsError][]=[
   [/accounting_journal_reversal_once_uq/iu,{status:409,error:"다른 작업자가 이미 이 전표의 반대전표를 생성했습니다."}],
   [/accounting_journal_source_once_uq/iu,{status:409,error:"다른 작업자가 이미 이 정산 또는 회계 작업을 완료했습니다."}],
   [/receipt must match the current paid settlement journal|restore must reverse the current paid settlement receipt|channel_deposit_event_reversal_uq/iu,{status:409,error:"다른 작업자가 이미 이 채널 입금 상태를 변경했습니다. 리포트를 새로 조회하세요."}],
+  [/banquet venue time slot overlaps|banquet_reservation_overlap_guard/iu,{status:409,error:"선택한 연회장과 시간대에 이미 활성 예약이 있습니다."}],
+  [/banquet_venue_property_code_uq/iu,{status:409,error:"이미 사용 중인 연회장 코드입니다."}],
+  [/hotel_member_property_no_uq/iu,{status:409,error:"이미 사용 중인 회원 코드입니다."}],
+  [/hotel_member_property_login_uq/iu,{status:409,error:"이미 사용 중인 회원 로그인 ID입니다."}],
 ];
 
 export function mapPmsError(message:string){

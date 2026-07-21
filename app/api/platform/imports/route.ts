@@ -230,8 +230,9 @@ export async function dryRun(
       if (kind === "RESERVATIONS") {
         if (confirmations.has(String(normalized.confirmation_no)))
           errors.push("이미 존재하는 예약 확인번호입니다.");
-        if (!guestKeys.has(String(normalized.guest_external_id)))
-          errors.push("먼저 고객 데이터를 이관해야 합니다.");
+        if (!guestKeys.has(String(normalized.guest_external_id)) &&
+            !(normalized.guest_first_name && normalized.guest_last_name))
+          errors.push("기존 고객 외부 ID 또는 고객 이름을 입력해야 합니다.");
         if (!typeCodes.has(String(normalized.room_type_code)))
           errors.push("객실 타입 코드를 찾을 수 없습니다.");
         if (!plans.has(String(normalized.rate_plan)))
@@ -325,6 +326,8 @@ export async function commit(
     .bind(dryRunJobId)
     .first<Record<string, unknown>>();
   if (!job) throw new Error("검증 작업을 찾을 수 없습니다.");
+  const existingCommit=await db.prepare("SELECT id,status,row_count FROM data_import_jobs WHERE property_id=pms_current_property_id() AND kind=? AND content_hash=? AND mode='COMMIT' LIMIT 1").bind(job.kind,job.content_hash).first<Record<string,unknown>>();
+  if(existingCommit)return response({ok:true,replayed:true,jobId:existingCommit.id,kind:job.kind,committed:Number(existingCommit.row_count)},200);
   if (job.status !== "VALIDATED" || Number(job.error_count) > 0)
     throw new Error("오류가 없는 VALIDATED dry-run만 반영할 수 있습니다.");
   const rows = (
@@ -458,8 +461,13 @@ export async function commit(
     } else {
       entityType = "RESERVATION";
       sourceKey = String(row.external_id);
-      const typeId = typeByCode.get(String(row.room_type_code)),
-        guestId = guestBySource.get(String(row.guest_external_id));
+      const typeId = typeByCode.get(String(row.room_type_code));
+      let guestId = guestBySource.get(String(row.guest_external_id));
+      if(!guestId&&row.guest_first_name&&row.guest_last_name){
+        guestId=randomUUID();guestBySource.set(String(row.guest_external_id),guestId);
+        statements.push(db.prepare("INSERT INTO guests(id,property_id,first_name,last_name,email,phone,vip_level,nationality,preferences,created_at) VALUES (?,pms_current_property_id(),?,?,?,?, 'NONE','KR','[]'::jsonb,?)").bind(guestId,row.guest_first_name,row.guest_last_name,row.guest_email,row.guest_phone,now));
+        statements.push(db.prepare("INSERT INTO data_import_entities(job_id,property_id,entity_type,source_key,entity_id,created_at) VALUES (?,pms_current_property_id(),'GUEST',?,?,?)").bind(commitId,String(row.guest_external_id),guestId,now));
+      }
       if (!typeId || !guestId)
         throw new Error("고객 또는 객실 타입 참조가 검증 후 변경되었습니다.");
       statements.push(
@@ -511,6 +519,7 @@ export async function commit(
     );
   }
   statements.push(
+    db.prepare("UPDATE data_import_jobs SET status='COMPLETED',committed_at=? WHERE id=? AND property_id=pms_current_property_id() AND mode='DRY_RUN' AND status='VALIDATED'").bind(now,dryRunJobId),
     db
       .prepare(
         "INSERT INTO audit_logs(id,property_id,actor,action,entity_type,entity_id,before_json,after_json,created_at) VALUES (?,pms_current_property_id(),?,'COMMIT_DATA_IMPORT','data_import',?,NULL,?,?)",
@@ -523,7 +532,18 @@ export async function commit(
         now,
       ),
   );
-  await db.batch(statements);
+  try {
+    await db.batch(statements);
+  } catch(error) {
+    // The unique (property,kind,content_hash,mode) boundary is the final guard
+    // when two serverless instances commit the same validated file together.
+    // After the losing transaction rolls back, return the winner's receipt.
+    if(/import_job_hash_uq|data_import_jobs.*content_hash|duplicate key/iu.test(error instanceof Error?error.message:String(error))){
+      const winner=await db.prepare("SELECT id,row_count FROM data_import_jobs WHERE property_id=pms_current_property_id() AND kind=? AND content_hash=? AND mode='COMMIT' LIMIT 1").bind(kind,job.content_hash).first<Record<string,unknown>>();
+      if(winner)return response({ok:true,replayed:true,jobId:winner.id,kind,committed:Number(winner.row_count)},200);
+    }
+    throw error;
+  }
   return response(
     { ok: true, jobId: commitId, kind, committed: rows.length },
     201,

@@ -14,6 +14,7 @@ import { addIsoDays } from "../../../lib/format";
 import { handleStaffAction, StaffAccessError } from "./staff";
 import { StaffAuthError } from "./staff-auth";
 import { loadReservationVoucher } from "./voucher-service";
+import { FinalOperationsError, handleFinalOperationsAction } from "./final-operations-service";
 
 type D1=PmsDatabase;
 type D1PreparedStatement=PmsPreparedStatement;
@@ -164,7 +165,10 @@ export async function handlePmsPost(request: Request) {
   const reservation = body.reservationId ? await db.prepare("SELECT * FROM reservations WHERE id=? AND property_id=pms_current_property_id()").bind(body.reservationId).first<Record<string, unknown>>() : null;
   const propertyState = await db.prepare("SELECT business_date,currency FROM properties WHERE id=pms_current_property_id()").first<{business_date:string;currency:string}>(); const businessDate=String(propertyState?.business_date);
   try {
-    if(registration.domain==="users"){
+    if(["upsert_banquet_venue","upsert_banquet_reservation","set_banquet_reservation_status","upsert_hotel_member","set_hotel_member_active","reset_hotel_member_password"].includes(body.action)){
+      const handled=await handleFinalOperationsAction(db,body,principal,now,idempotencyKey);
+      if(!handled)return Response.json({error:"등록된 HotelStory 운영 핸들러가 작업을 처리하지 못했습니다."},{status:500});
+    } else if(registration.domain==="users"){
       const handled=await handleStaffAction(db,body,principal,now,idempotencyKey);
       if(!handled)return Response.json({error:"지원하지 않는 직원 권한 작업입니다."},{status:400});
     } else if(registration.domain==="accounting"||registration.domain==="website"||(registration.domain==="inventory"&&["bulk_update_inventory_controls","upsert_rate_plan","bulk_update_rate_blocks"].includes(body.action))||(registration.domain==="integrations"&&["upsert_channel_contract","upsert_channel_catalog","configure_property_channel","set_property_channel_active","reorder_property_channels","delete_property_channel","upsert_channel_product_cutoff","delete_channel_product_cutoff"].includes(body.action))||(registration.domain==="rooms"&&["upsert_property_season","delete_property_season","upsert_property_holiday","delete_property_holiday","upsert_amenity_catalog","delete_amenity_catalog","upsert_service_catalog","delete_service_catalog"].includes(body.action))) {
@@ -643,7 +647,7 @@ export async function handlePmsPost(request: Request) {
     return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body}));
   } catch (error) {
     const message=error instanceof Error ? error.message : "처리 중 오류가 발생했습니다.";
-    if(error instanceof StaffAccessError||error instanceof StaffAuthError)return Response.json({error:error.message},{status:error.status});
+    if(error instanceof StaffAccessError||error instanceof StaffAuthError||error instanceof FinalOperationsError)return Response.json({error:error.message},{status:error.status});
     if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});
     if (/idempotency_keys_pkey|idempotency_keys\.key|voucher_delivery_idempotency_uq/iu.test(message)) return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}), {headers:{"X-Idempotent-Replay":"true"}});
     const mapped=mapPmsError(message);

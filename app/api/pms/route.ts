@@ -36,6 +36,7 @@ import {
 } from "./frontdesk-read";
 import { loadReservationVoucher } from "./voucher-service";
 import { loadChannelCatalog, loadOperationalCatalogs, loadRateBlockMatrix, HotelStoryCatalogError } from "./hotelstory-catalog-service";
+import { loadBanquetCalendar, loadHotelMembers, loadStayOperations } from "./final-operations-service";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -127,6 +128,21 @@ export async function GET(request: Request) {
         return Response.json({ error: error.message }, { status: error.status });
       throw error;
     }
+  }
+  if (view === "stay_operations") {
+    if (!canViewWorkspace(principal.workspaceAccess, "frontdesk"))
+      return Response.json({ error: "당일 운영 조회 권한이 없습니다." }, { status: 403 });
+    return Response.json(await loadStayOperations(db,url.searchParams),{headers:{"Cache-Control":"private, no-store"}});
+  }
+  if (view === "banquet") {
+    if (!canViewWorkspace(principal.workspaceAccess, "groups"))
+      return Response.json({ error: "연회 예약 조회 권한이 없습니다." }, { status: 403 });
+    return Response.json(await loadBanquetCalendar(db,url.searchParams),{headers:{"Cache-Control":"private, no-store"}});
+  }
+  if (view === "hotel_members") {
+    if (!canViewWorkspace(principal.workspaceAccess, "users"))
+      return Response.json({ error: "회원 관리 조회 권한이 없습니다." }, { status: 403 });
+    return Response.json(await loadHotelMembers(db,url.searchParams,principal),{headers:{"Cache-Control":"private, no-store"}});
   }
   if (view === "reservation_availability") {
     if (!canViewWorkspace(principal.workspaceAccess, "frontdesk"))

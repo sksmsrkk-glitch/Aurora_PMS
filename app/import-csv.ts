@@ -140,6 +140,10 @@ export function normalizedImportRow(
     nightly_rate: Number(data.nightly_rate),
     eta: data.eta || null,
     notes: (data.notes || "").slice(0, 1000),
+    guest_first_name: data.guest_first_name || "",
+    guest_last_name: data.guest_last_name || "",
+    guest_email: data.guest_email?.toLowerCase() || null,
+    guest_phone: data.guest_phone || null,
   };
 }
 
@@ -210,6 +214,10 @@ export function validateImportRow(
       errors.push("adults/children: 허용 범위를 확인하세요.");
     if (!Number.isFinite(row.nightly_rate) || Number(row.nightly_rate) < 0)
       errors.push("nightly_rate: 0 이상의 금액이 필요합니다.");
+    if ((row.guest_first_name || row.guest_last_name) && (!row.guest_first_name || !row.guest_last_name))
+      errors.push("guest_first_name/guest_last_name: 두 이름을 함께 입력하세요.");
+    if (row.guest_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(String(row.guest_email)))
+      errors.push("guest_email: 형식이 올바르지 않습니다.");
   }
   return errors;
 }

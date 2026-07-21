@@ -5,6 +5,8 @@ import { readFile } from "node:fs/promises";
 
 const globals = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 const css = await readFile(new URL("../app/styles/readability-system.css", import.meta.url), "utf8");
+const finalOperationsCss = await readFile(new URL("../app/styles/hotelstory-final-operations.css", import.meta.url), "utf8");
+const finalOperationsSource = await readFile(new URL("../app/hotelstory-final-operations.tsx", import.meta.url), "utf8");
 
 test("the readability contract is the final PMS stylesheet", () => {
   const imports = [...globals.matchAll(/@import\s+"([^"]+)"/gu)].map((match) => match[1]);
@@ -42,4 +44,12 @@ test("late-loaded inventory and website editor content inherit the same minimums
   assert.match(css, /\.website-preview-section p/u);
   assert.match(css, /\.website-order-buttons button/u);
   assert.match(css, /\.website-toggle input/u);
+});
+
+test("HotelStory parity workspaces contain wide calendars and tables on mobile", () => {
+  assert.match(finalOperationsSource, /className="hs-calendar-scroll" role="region"/u);
+  assert.match(finalOperationsCss, /\.hs-calendar-scroll\{[^}]*overflow:auto/u);
+  assert.match(finalOperationsCss, /\.hs-table-wrap\{overflow:auto/u);
+  assert.match(finalOperationsCss, /\.hs-timeline-wrap\{overflow:auto/u);
+  assert.match(finalOperationsCss, /@media\(max-width:720px\)/u);
 });

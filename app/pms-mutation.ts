@@ -42,6 +42,9 @@ const entityIdFields = [
   "mediaId",
   "ratePlanId",
   "assignmentId",
+  "venueId",
+  "banquetReservationId",
+  "memberId",
 ] as const;
 
 /**
