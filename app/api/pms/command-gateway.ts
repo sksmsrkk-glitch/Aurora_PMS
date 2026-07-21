@@ -210,6 +210,10 @@ export async function handlePmsPost(request: Request) {
       if(adults+children>Number(type.capacity))return Response.json({error:"선택한 객실 타입의 최대 투숙 인원을 초과합니다."},{status:409});
       const requestedRatePlan=(body.ratePlan||"BAR").trim().toUpperCase(),ratePlan=await db.prepare("SELECT * FROM rate_plans WHERE property_id=pms_current_property_id() AND code=? AND active").bind(requestedRatePlan).first<Record<string,unknown>>();
       if(!ratePlan)return Response.json({error:"활성 요금제를 선택하세요."},{status:400});
+      if(adults+children>Number(ratePlan.max_occupancy||20))return Response.json({error:"선택한 판매 상품의 최대 투숙 인원을 초과합니다."},{status:409});
+      if((ratePlan.valid_from&&body.arrivalDate<String(ratePlan.valid_from))||(ratePlan.valid_to&&body.departureDate>String(ratePlan.valid_to)))return Response.json({error:"선택한 판매 상품의 투숙 가능 기간을 확인하세요."},{status:409});
+      const requestTime=Date.now();
+      if((ratePlan.sellable_from&&requestTime<Date.parse(String(ratePlan.sellable_from)))||(ratePlan.sellable_to&&requestTime>Date.parse(String(ratePlan.sellable_to))))return Response.json({error:"선택한 판매 상품은 현재 판매 기간이 아닙니다."},{status:409});
       const controlError=await stayControlError(db,body.roomTypeId,body.arrivalDate,body.departureDate); if(controlError) return Response.json({error:controlError},{status:409});
       const room = body.roomId ? await db.prepare("SELECT * FROM rooms WHERE id=? AND room_type_id=? AND property_id=pms_current_property_id() AND active").bind(body.roomId,body.roomTypeId).first<Record<string,unknown>>() : null;
       if (body.roomId && !room) return Response.json({error:"선택한 객실과 객실 타입이 일치하지 않습니다."},{status:409});
@@ -218,8 +222,9 @@ export async function handlePmsPost(request: Request) {
       const roomPlan=await db.prepare("SELECT base_rate FROM rate_plan_room_types WHERE property_id=pms_current_property_id() AND rate_plan_id=? AND room_type_id=? AND active").bind(ratePlan.id,body.roomTypeId).first<{base_rate:number}>();
       if(!roomPlan)return Response.json({error:"선택한 요금제는 이 객실 타입에 연결되어 있지 않습니다."},{status:409});
       const calendar=await db.prepare("SELECT stay_date,sell_rate,closed,min_stay,close_to_arrival,close_to_departure FROM rate_plan_calendar WHERE property_id=pms_current_property_id() AND rate_plan_id=? AND room_type_id=? AND stay_date>=? AND stay_date<=?").bind(ratePlan.id,body.roomTypeId,body.arrivalDate,body.departureDate).all<Record<string,unknown>>(),calendarMap=new Map(calendar.results.map(row=>[String(row.stay_date),row]));
-      const base=Number(roomPlan.base_rate),adjustment=Number(ratePlan.adjustment||0),derivedBase=ratePlan.pricing_model==="OFFSET"?Math.max(0,base+adjustment):ratePlan.pricing_model==="PERCENT"?Math.max(0,Math.round(base*(1+adjustment/100))):base;
-      const nightlySnapshots=stayDates.map(stayDate=>{const row=calendarMap.get(stayDate);return {stayDate,rate:rateOverride?manualRate:Number(row?.sell_rate??derivedBase),control:row}});
+      const pricedNights=await db.prepare("SELECT day::date stay_date,talos_effective_product_rate(pms_current_property_id(),?,?,day::date,?) rate FROM generate_series(?::date,?::date-1,interval '1 day') day ORDER BY day").bind(ratePlan.id,body.roomTypeId,adults+children,body.arrivalDate,body.departureDate).all<{stay_date:string;rate:number|null}>(),effectiveRateMap=new Map(pricedNights.results.map(row=>[String(row.stay_date),row.rate]));
+      const nightlySnapshots=stayDates.map(stayDate=>{const row=calendarMap.get(stayDate),effective=effectiveRateMap.get(stayDate);return {stayDate,rate:rateOverride?manualRate:Number(effective),control:row,effective}});
+      if(!rateOverride&&nightlySnapshots.some(item=>item.effective==null||!Number.isFinite(item.rate)))return Response.json({error:"선택한 상품의 일자별 판매가를 계산할 수 없습니다."},{status:409});
       if(nightlySnapshots.some(item=>item.control?.closed)||stayDates.length<Math.max(Number(ratePlan.min_stay||1),...nightlySnapshots.map(item=>Number(item.control?.min_stay||1))))return Response.json({error:"선택한 요금제의 판매 마감 또는 최소 숙박 조건을 확인하세요."},{status:409});
       if(calendarMap.get(body.arrivalDate)?.close_to_arrival)return Response.json({error:"선택한 요금제는 해당 도착일 체크인(CTA)이 제한됩니다."},{status:409});
       if(calendarMap.get(body.departureDate)?.close_to_departure)return Response.json({error:"선택한 요금제는 해당 출발일 체크아웃(CTD)이 제한됩니다."},{status:409});
@@ -227,7 +232,7 @@ export async function handlePmsPost(request: Request) {
       const guestId=crypto.randomUUID(), reservationId=crypto.randomUUID(), confirmation=`SEL-${body.arrivalDate.replaceAll("-","").slice(2)}-${Math.floor(1000+Math.random()*9000)}`;
       const statements = [
         db.prepare("INSERT INTO guests VALUES (?, pms_current_property_id(), ?, ?, ?, ?, 'NONE', ?, '[]', ?)").bind(guestId,body.firstName.trim(),body.lastName.trim(),body.email||null,body.phone||null,body.nationality||"KR",now),
-        db.prepare("INSERT INTO reservations VALUES (?, ?, pms_current_property_id(), ?, ?, ?, ?, ?, 'DUE_IN', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)").bind(reservationId,confirmation,guestId,body.roomTypeId,body.roomId||null,body.arrivalDate,body.departureDate,adults,children,source,requestedRatePlan,averageRate,body.eta||null,notes,now,now),
+        db.prepare("INSERT INTO reservations(id,confirmation_no,property_id,guest_id,room_type_id,room_id,arrival_date,departure_date,status,adults,children,source,rate_plan,rate_plan_id,nightly_rate,eta,notes,version,created_at,updated_at) VALUES (?, ?, pms_current_property_id(), ?, ?, ?, ?, ?, 'DUE_IN', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)").bind(reservationId,confirmation,guestId,body.roomTypeId,body.roomId||null,body.arrivalDate,body.departureDate,adults,children,source,requestedRatePlan,ratePlan.id,averageRate,body.eta||null,notes,now,now),
         db.prepare("INSERT INTO folio_windows VALUES (?, pms_current_property_id(), ?, 1, 'Guest Folio', 'GUEST', NULL, 'OPEN', ?, ?, NULL)").bind(`fw-${reservationId}`,reservationId,now,actor),
       ];
       for (const {stayDate,rate} of nightlySnapshots) {

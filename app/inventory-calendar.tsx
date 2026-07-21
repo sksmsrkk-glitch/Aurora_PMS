@@ -68,6 +68,15 @@ type RatePlan = {
   currency: string;
   market_segment: string;
   meal_plan: string;
+  package_type: string;
+  parent_rate_plan_id: string | null;
+  sort_order: number;
+  sellable_from: string | null;
+  sellable_to: string | null;
+  inclusions: string[];
+  base_occupancy: number;
+  max_occupancy: number;
+  occupancyRates: Array<{ occupancy: number; extra_charge: number }>;
   cancellation_policy: string;
   guarantee_policy: string;
   pricing_model: "FIXED" | "OFFSET" | "PERCENT";
@@ -334,6 +343,7 @@ export default function RevenueInventoryCalendar({
       {rateEditor && data && (
         <RatePlanModal
           plan={rateEditor === "new" ? null : rateEditor}
+          plans={data.ratePlans}
           close={() => setRateEditor(null)}
           submit={async (payload) => {
             if (await act("upsert_rate_plan", payload)) {
@@ -347,13 +357,92 @@ export default function RevenueInventoryCalendar({
   );
 }
 
-function RatePlanBoard({plans,canWrite,edit}:{plans:RatePlan[];canWrite:boolean;edit:(plan:RatePlan|"new")=>void}){
-  return <section className="rate-plan-board"><div className="rate-plan-board-head"><div><b>요금제 포트폴리오</b><span>판매 조건·유효 기간·객실별 일자 요금</span></div>{canWrite&&<button type="button" className="secondary" onClick={()=>edit("new")}>＋ 요금제</button>}</div><div className="rate-plan-cards">{plans.map(plan=><button type="button" key={plan.id} disabled={!canWrite} className={plan.active?"":"inactive"} onClick={()=>edit(plan)}><span><b>{plan.code}</b><i>{plan.active?"판매 중":"중지"}</i></span><strong>{plan.name}</strong><small>{plan.pricing_model} · {plan.min_stay}~{plan.max_stay}박 · {plan.currency}</small></button>)}</div></section>
+function RatePlanBoard({plans,canWrite,edit}:{plans:RatePlan[];canWrite:boolean;edit:(plan:RatePlan|"new")=>void}) {
+  const mealLabel:Record<string,string>={ROOM_ONLY:"객실 전용",BREAKFAST:"조식 포함",DINNER:"석식 포함",HALF_BOARD:"조식·석식",FULL_PACKAGE:"24시간 풀패키지"};
+  return <section className="rate-plan-board" aria-labelledby="rate-product-heading">
+    <div className="rate-plan-board-head"><div><b id="rate-product-heading">판매 상품 · 요금제</b><span>공식 홈페이지와 채널에 판매할 상품 조건, 패키지 구성, 인원별 추가요금을 관리합니다.</span></div>{canWrite&&<button type="button" className="secondary" onClick={()=>edit("new")}>＋ 판매 상품 만들기</button>}</div>
+    <div className="rate-plan-cards">{plans.map(plan=><button type="button" key={plan.id} disabled={!canWrite} className={plan.active?"":"inactive"} onClick={()=>edit(plan)} aria-label={`${plan.name} 편집`}>
+      <span><b>{plan.code}</b><i>{plan.active?"판매 중":"판매 중지"}</i></span>
+      <strong>{plan.name}</strong>
+      <small>{mealLabel[plan.meal_plan]||plan.meal_plan} · {plan.base_occupancy}~{plan.max_occupancy}인 · {plan.min_stay}~{plan.max_stay}박</small>
+      {plan.inclusions?.length>0&&<em>{plan.inclusions.slice(0,3).join(" · ")}</em>}
+    </button>)}</div>
+  </section>;
 }
 
-function RatePlanModal({plan,close,submit}:{plan:RatePlan|null;close:()=>void;submit:(payload:Record<string,string>)=>Promise<void>}){
-  const [busy,setBusy]=useState(false),[form,setForm]=useState({code:plan?.code||"",name:plan?.name||"",description:plan?.description||"",currency:plan?.currency||"KRW",marketSegment:plan?.market_segment||"TRANSIENT",mealPlan:plan?.meal_plan||"ROOM_ONLY",cancellationPolicy:plan?.cancellation_policy||"FLEXIBLE",guaranteePolicy:plan?.guarantee_policy||"CARD_GUARANTEE",pricingModel:plan?.pricing_model||"FIXED",adjustment:String(plan?.adjustment||0),minStay:String(plan?.min_stay||1),maxStay:String(plan?.max_stay||30),validFrom:plan?.valid_from||"",validTo:plan?.valid_to||"",active:String(plan?.active!==false)}),set=(key:string,value:string)=>setForm(current=>({...current,[key]:value}));
-  return <div className="modal-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><form role="dialog" aria-modal="true" aria-label="요금제 편집" className="booking-modal rate-plan-modal" onSubmit={async event=>{event.preventDefault();setBusy(true);try{await submit({...form,...(plan?{ratePlanId:plan.id,version:String(plan.version)}:{})})}finally{setBusy(false)}}}><div className="drawer-head"><div><p>RATE PLAN MASTER</p><h2>{plan?`${plan.code} 요금제 편집`:"새 요금제 만들기"}</h2></div><button type="button" onClick={close}>×</button></div><p className="form-intro">예약·공식 홈페이지·채널 매핑이 참조하는 표준 요금제입니다. 사용된 코드는 변경할 수 없습니다.</p><div className="form-grid"><label><span>요금제 코드</span><input required disabled={Boolean(plan)} maxLength={24} value={form.code} onChange={e=>set("code",e.target.value.toUpperCase())}/></label><label><span>요금제 이름</span><input required maxLength={100} value={form.name} onChange={e=>set("name",e.target.value)}/></label><label><span>통화</span><input required maxLength={3} value={form.currency} onChange={e=>set("currency",e.target.value.toUpperCase())}/></label><label><span>가격 모델</span><select value={form.pricingModel} onChange={e=>set("pricingModel",e.target.value)}><option value="FIXED">고정가</option><option value="OFFSET">기준가 증감액</option><option value="PERCENT">기준가 증감률</option></select></label><label><span>기준 조정값</span><input type="number" value={form.adjustment} onChange={e=>set("adjustment",e.target.value)}/></label><label><span>시장 세그먼트</span><input value={form.marketSegment} onChange={e=>set("marketSegment",e.target.value)}/></label><label><span>최소 숙박</span><input type="number" min="1" max="365" value={form.minStay} onChange={e=>set("minStay",e.target.value)}/></label><label><span>최대 숙박</span><input type="number" min={form.minStay} max="365" value={form.maxStay} onChange={e=>set("maxStay",e.target.value)}/></label><label><span>판매 시작일</span><input type="date" value={form.validFrom} onChange={e=>set("validFrom",e.target.value)}/></label><label><span>판매 종료일</span><input type="date" min={form.validFrom} value={form.validTo} onChange={e=>set("validTo",e.target.value)}/></label><label><span>식사 조건</span><input value={form.mealPlan} onChange={e=>set("mealPlan",e.target.value)}/></label><label><span>취소 정책</span><input value={form.cancellationPolicy} onChange={e=>set("cancellationPolicy",e.target.value)}/></label><label className="span-2"><span>설명</span><textarea maxLength={1000} value={form.description} onChange={e=>set("description",e.target.value)}/></label><label className="toggle"><input type="checkbox" checked={form.active==="true"} onChange={e=>set("active",String(e.target.checked))}/><span>판매 활성화</span></label></div><div className="modal-actions"><button type="button" className="secondary" onClick={close}>닫기</button><button className="primary" disabled={busy}>{busy?"저장 중…":"요금제 저장"}</button></div></form></div>
+function RatePlanModal({plan,plans,close,submit}:{plan:RatePlan|null;plans:RatePlan[];close:()=>void;submit:(payload:Record<string,string>)=>Promise<void>}) {
+  const initialOccupancy=Object.fromEntries((plan?.occupancyRates||[]).map(row=>[String(row.occupancy),String(row.extra_charge)]));
+  const [busy,setBusy]=useState(false);
+  const [form,setForm]=useState({
+    code:plan?.code||"",name:plan?.name||"",description:plan?.description||"",currency:plan?.currency||"KRW",
+    marketSegment:plan?.market_segment||"TRANSIENT",mealPlan:plan?.meal_plan||"ROOM_ONLY",packageType:plan?.package_type||"NONE",
+    parentRatePlanId:plan?.parent_rate_plan_id||"",sortOrder:String(plan?.sort_order||100),sellableFrom:toLocalDateTime(plan?.sellable_from),sellableTo:toLocalDateTime(plan?.sellable_to),
+    inclusions:(plan?.inclusions||[]).join(", "),baseOccupancy:String(plan?.base_occupancy||2),maxOccupancy:String(plan?.max_occupancy||4),
+    cancellationPolicy:plan?.cancellation_policy||"FLEXIBLE",guaranteePolicy:plan?.guarantee_policy||"CARD_GUARANTEE",
+    pricingModel:plan?.pricing_model||"FIXED",adjustment:String(plan?.adjustment||0),minStay:String(plan?.min_stay||1),maxStay:String(plan?.max_stay||30),
+    validFrom:plan?.valid_from||"",validTo:plan?.valid_to||"",active:String(plan?.active!==false),
+  });
+  const [occupancy,setOccupancy]=useState<Record<string,string>>(initialOccupancy);
+  const set=(key:string,value:string)=>setForm(current=>({...current,[key]:value}));
+  const base=Math.max(1,Number(form.baseOccupancy)||1), max=Math.max(base,Number(form.maxOccupancy)||base);
+  const occupancyRows=Array.from({length:max-base},(_,index)=>base+index+1);
+  const payload=()=>({
+    ...form,
+    sellableFrom:toIsoDateTime(form.sellableFrom),sellableTo:toIsoDateTime(form.sellableTo),
+    inclusions:JSON.stringify(form.inclusions.split(",").map(value=>value.trim()).filter(Boolean)),
+    occupancyRates:JSON.stringify(occupancyRows.map(people=>({occupancy:people,extraCharge:Number(occupancy[String(people)]||0)}))),
+    ...(plan?{ratePlanId:plan.id,version:String(plan.version)}:{}),
+  });
+  return <div className="modal-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}>
+    <form role="dialog" aria-modal="true" aria-label="판매 상품 편집" className="booking-modal rate-plan-modal" onSubmit={async event=>{event.preventDefault();setBusy(true);try{await submit(payload())}finally{setBusy(false)}}}>
+      <div className="drawer-head"><div><p>PRODUCT &amp; RATE PLAN</p><h2>{plan?`${plan.name} 편집`:"새 판매 상품 만들기"}</h2></div><button type="button" onClick={close} aria-label="닫기">×</button></div>
+      <p className="form-intro">HotelStory의 상품 단위를 기준으로 식사·패키지·숙박·판매기간·인원별 가격을 한 번에 정의합니다. 예약이 생성되면 당시 상품 조건은 스냅샷으로 보존됩니다.</p>
+      <section className="rate-form-section"><h3>1. 상품 기본 정보</h3><div className="form-grid">
+        <label><span>상품 코드</span><input required disabled={Boolean(plan)} maxLength={24} value={form.code} onChange={e=>set("code",e.target.value.toUpperCase())}/></label>
+        <label><span>상품 이름</span><input required maxLength={100} value={form.name} onChange={e=>set("name",e.target.value)}/></label>
+        <label><span>식사 조건</span><select value={form.mealPlan} onChange={e=>set("mealPlan",e.target.value)}><option value="ROOM_ONLY">객실 전용</option><option value="BREAKFAST">조식 포함</option><option value="DINNER">석식 포함</option><option value="HALF_BOARD">조식·석식 포함</option><option value="FULL_PACKAGE">24시간 풀패키지</option></select></label>
+        <label><span>패키지 유형</span><select value={form.packageType} onChange={e=>set("packageType",e.target.value)}><option value="NONE">일반 상품</option><option value="HOMESHOPPING">홈쇼핑 상품</option><option value="UPGRADE_FCFS">선착순 업그레이드</option></select></label>
+        <label><span>시장 세그먼트</span><input value={form.marketSegment} onChange={e=>set("marketSegment",e.target.value)}/></label>
+        <label><span>노출 순서</span><input type="number" min="0" max="9999" value={form.sortOrder} onChange={e=>set("sortOrder",e.target.value)}/></label>
+        <label className="span-2"><span>포함 사항 (쉼표로 구분)</span><input placeholder="조식 2인, 온천 2인, 레이트 체크아웃" value={form.inclusions} onChange={e=>set("inclusions",e.target.value)}/></label>
+        <label className="span-2"><span>상품 설명</span><textarea maxLength={1000} value={form.description} onChange={e=>set("description",e.target.value)}/></label>
+      </div></section>
+      <section className="rate-form-section"><h3>2. 판매·숙박 조건</h3><div className="form-grid">
+        <label><span>판매 시작 시각</span><input type="datetime-local" value={form.sellableFrom} onChange={e=>set("sellableFrom",e.target.value)}/></label>
+        <label><span>판매 종료 시각</span><input type="datetime-local" min={form.sellableFrom} value={form.sellableTo} onChange={e=>set("sellableTo",e.target.value)}/></label>
+        <label><span>투숙 시작일</span><input type="date" value={form.validFrom} onChange={e=>set("validFrom",e.target.value)}/></label>
+        <label><span>투숙 종료일</span><input type="date" min={form.validFrom} value={form.validTo} onChange={e=>set("validTo",e.target.value)}/></label>
+        <label><span>최소 숙박</span><input type="number" min="1" max="365" value={form.minStay} onChange={e=>set("minStay",e.target.value)}/></label>
+        <label><span>최대 숙박</span><input type="number" min={form.minStay} max="365" value={form.maxStay} onChange={e=>set("maxStay",e.target.value)}/></label>
+        <label><span>취소 정책</span><input value={form.cancellationPolicy} onChange={e=>set("cancellationPolicy",e.target.value)}/></label>
+        <label><span>예약 보증</span><input value={form.guaranteePolicy} onChange={e=>set("guaranteePolicy",e.target.value)}/></label>
+      </div></section>
+      <section className="rate-form-section"><h3>3. 가격 상속 · 인원별 요금</h3><div className="form-grid">
+        <label><span>기준 상품</span><select value={form.parentRatePlanId} onChange={e=>set("parentRatePlanId",e.target.value)}><option value="">상속 안 함</option>{plans.filter(item=>item.id!==plan?.id).map(item=><option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
+        <label><span>가격 계산</span><select value={form.pricingModel} onChange={e=>set("pricingModel",e.target.value)}><option value="FIXED">객실 일자요금 사용</option><option value="OFFSET">기준 상품 + 증감액</option><option value="PERCENT">기준 상품 × 증감률</option></select></label>
+        <label><span>{form.pricingModel==="PERCENT"?"증감률 (%)":"증감 금액"}</span><input type="number" value={form.adjustment} onChange={e=>set("adjustment",e.target.value)}/></label>
+        <label><span>통화</span><input required maxLength={3} value={form.currency} onChange={e=>set("currency",e.target.value.toUpperCase())}/></label>
+        <label><span>기준 인원</span><input type="number" min="1" max="20" value={form.baseOccupancy} onChange={e=>set("baseOccupancy",e.target.value)}/></label>
+        <label><span>최대 인원</span><input type="number" min={form.baseOccupancy} max="20" value={form.maxOccupancy} onChange={e=>set("maxOccupancy",e.target.value)}/></label>
+      </div>
+      {occupancyRows.length>0&&<div className="occupancy-rate-grid" aria-label="인원별 추가요금">{occupancyRows.map(people=><label key={people}><span>{people}인 투숙 추가요금</span><input type="number" min="0" step="100" value={occupancy[String(people)]||"0"} onChange={e=>setOccupancy(current=>({...current,[String(people)]:e.target.value}))}/><b>{formatMoney(Number(occupancy[String(people)]||0))}</b></label>)}</div>}
+      </section>
+      <label className="rate-active-toggle"><input type="checkbox" checked={form.active==="true"} onChange={e=>set("active",String(e.target.checked))}/><span><b>판매 활성화</b><small>끄면 신규 예약과 판매 화면에서 선택할 수 없습니다.</small></span></label>
+      <div className="modal-actions"><button type="button" className="secondary" onClick={close}>취소</button><button className="primary" disabled={busy}>{busy?"저장 중…":"판매 상품 저장"}</button></div>
+    </form>
+  </div>;
+}
+
+function toLocalDateTime(value:string|null|undefined) {
+  if(!value)return "";
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime()))return "";
+  const local=new Date(date.getTime()-date.getTimezoneOffset()*60_000);
+  return local.toISOString().slice(0,16);
+}
+
+function toIsoDateTime(value:string) {
+  return value ? new Date(value).toISOString() : "";
 }
 
 function InventoryRow({

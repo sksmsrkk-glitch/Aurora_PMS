@@ -50,7 +50,7 @@ const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
   create_room_type:["code","name","baseRate","capacity"],update_room_type:["roomTypeId","code","name","baseRate","capacity","expectedVersion"],
   create_room:["roomTypeId","number","floor"],update_room:["roomId","roomTypeId","number","floor","expectedVersion"],bulk_create_rooms:["roomTypeId","startNumber","count","floor"],
   update_inventory_control:["roomTypeId","stayDate"],bulk_update_inventory_controls:["roomTypeIds","from","to"],
-  upsert_rate_plan:["code","name","currency","pricingModel"],
+  upsert_rate_plan:["code","name","currency","pricingModel","mealPlan","packageType","baseOccupancy","maxOccupancy"],
   create_account_profile:["name","type"],create_business_block:["name","arrivalDate","departureDate"],
   update_block_inventory:["blockId","roomTypeId","stayDate"],add_rooming_entry:["blockId","firstName","lastName","arrivalDate","departureDate","roomTypeId"],
   pickup_rooming_entry:["entryId"],cutoff_block:["blockId"],post_payment:["reservationId","amount"],post_charge:["reservationId","amount"],
