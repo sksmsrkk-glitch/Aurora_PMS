@@ -99,9 +99,13 @@ export async function principalFor(request: Request, db: D1): Promise<Principal 
   // Authentication establishes identity; role_assignments establishes the property
   // scope. The requested property is accepted only when that same user has an active
   // assignment, preventing a client-controlled header from crossing tenant bounds.
-  const identity = await authenticateSupabaseRequest(request);
+  // Explicit non-production demo requests do not need the Next.js cookie store.
+  // This also keeps the policy independently behavior-testable; production can
+  // never enter this branch because demoAuthenticationEnabled fails closed.
+  const demoRequest = demoAuthenticationEnabled(request);
+  const identity = demoRequest ? null : await authenticateSupabaseRequest(request);
   let email = identity?.email || null, displayName = identity?.displayName || "";
-  if (!email && demoAuthenticationEnabled(request)) {
+  if (!email && demoRequest) {
     email = process.env.PMS_DEMO_USER_EMAIL?.trim().toLowerCase() || null;
     displayName = email || "";
   }

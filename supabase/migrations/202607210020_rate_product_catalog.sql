@@ -94,6 +94,7 @@ LANGUAGE plpgsql STABLE AS $function$
 DECLARE
   product public.rate_plans%ROWTYPE;
   base_rate numeric;
+  calendar_rate numeric;
   parent_rate numeric;
   occupancy_charge numeric;
 BEGIN
@@ -102,7 +103,7 @@ BEGIN
   IF NOT FOUND THEN RETURN NULL; END IF;
   IF requested_occupancy<1 OR requested_occupancy>product.max_occupancy THEN RETURN NULL; END IF;
 
-  SELECT COALESCE(rpc.sell_rate,rprt.base_rate) INTO base_rate
+  SELECT rpc.sell_rate,rprt.base_rate INTO calendar_rate,base_rate
     FROM public.rate_plan_room_types rprt
     LEFT JOIN public.rate_plan_calendar rpc
       ON rpc.property_id=rprt.property_id
@@ -115,7 +116,11 @@ BEGIN
      AND rprt.room_type_id=requested_room_type_id
      AND rprt.active;
 
-  IF product.parent_rate_plan_id IS NOT NULL AND product.pricing_model IN ('OFFSET','PERCENT') THEN
+  -- An explicit child-product date price wins. Without one, a derived product
+  -- follows its parent date/base price and applies the configured adjustment.
+  IF calendar_rate IS NOT NULL THEN
+    base_rate := calendar_rate;
+  ELSIF product.parent_rate_plan_id IS NOT NULL AND product.pricing_model IN ('OFFSET','PERCENT') THEN
     SELECT COALESCE(rpc.sell_rate,rprt.base_rate) INTO parent_rate
       FROM public.rate_plan_room_types rprt
       LEFT JOIN public.rate_plan_calendar rpc

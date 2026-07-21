@@ -5,6 +5,7 @@ import postgres from "postgres";
 import { consumeRateLimit } from "../app/api/rate-limit.ts";
 import { loadPmsSearch } from "../app/api/pms/frontdesk-read.ts";
 import { snapshot } from "../app/api/pms/read-model.ts";
+import { handlePmsPost } from "../app/api/pms/command-gateway.ts";
 import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL || "";
@@ -285,6 +286,9 @@ test("sale products inherit rates, price occupancy, and preserve reservation sna
     await sql`UPDATE rate_plan_room_types SET base_rate=200000 WHERE property_id=${propertyId} AND rate_plan_id=${parentId} AND room_type_id=${roomTypeId}`;
     const [repriced]=await sql`SELECT talos_effective_product_rate(${propertyId},${childId},${roomTypeId},'2031-09-02',3)::numeric rate`;
     assert.equal(Number(repriced.rate),240000);
+    await sql`INSERT INTO rate_plan_calendar(id,property_id,rate_plan_id,room_type_id,stay_date,sell_rate,updated_at,updated_by) VALUES (${`it-child-date-${suffix}`},${propertyId},${childId},${roomTypeId},'2031-09-02',175000,now(),'integration-test')`;
+    const [overridden]=await sql`SELECT talos_effective_product_rate(${propertyId},${childId},${roomTypeId},'2031-09-02',3)::numeric rate`;
+    assert.equal(Number(overridden.rate),205000);
 
     await sql`INSERT INTO guests(id,property_id,first_name,last_name,created_at) VALUES (${guestId},${propertyId},'Product','Guest',now())`;
     await sql`
@@ -321,12 +325,73 @@ test("sale products inherit rates, price occupancy, and preserve reservation sna
   } finally {
     await sql`DELETE FROM reservations WHERE id=${reservationId}`;
     await sql`DELETE FROM guests WHERE id=${guestId}`;
+    await sql`DELETE FROM rate_plan_calendar WHERE property_id=${propertyId}`;
     await sql`DELETE FROM rate_plan_occupancy WHERE property_id=${propertyId}`;
     await sql`DELETE FROM rate_plan_room_types WHERE property_id=${propertyId}`;
     await sql`DELETE FROM rate_plans WHERE property_id=${propertyId}`;
     await sql`DELETE FROM room_types WHERE property_id=${propertyId}`;
     await sql`DELETE FROM properties WHERE id=${propertyId}`;
     await sql`DELETE FROM organizations WHERE id=${organizationId}`;
+    await sql.end({timeout:2});
+  }
+});
+
+test("authenticated reservation command writes product snapshots on the upgraded schema", { skip }, async () => {
+  const sql=client(2),suffix=crypto.randomUUID().slice(0,8),email=`product-command-${suffix}@example.com`;
+  const assignmentId=`it-product-command-role-${suffix}`,firstName=`Command${suffix}`;
+  const token=`integration-demo-token-${crypto.randomUUID()}`;
+  const previous={databaseUrl:process.env.DATABASE_URL,allow:process.env.PMS_ALLOW_DEMO_AUTH,token:process.env.PMS_DEMO_AUTH_TOKEN,email:process.env.PMS_DEMO_USER_EMAIL,rate:process.env.PMS_RATE_LIMIT_SECRET,node:process.env.NODE_ENV};
+  const permissions={overview:"WRITE",frontdesk:"WRITE",inventory:"WRITE",website:"WRITE",groups:"WRITE",finance:"WRITE",accounting:"WRITE",channels:"WRITE",rooms:"WRITE",reports:"WRITE",master:"WRITE",revenue:"WRITE",users:"WRITE",audit:"WRITE"};
+  try {
+    await sql`INSERT INTO role_assignments(id,property_id,email,role,active,created_at,display_name,workspace_permissions,can_export,updated_at) VALUES (${assignmentId},'prop-seoul',${email},'PROPERTY_ADMIN',true,now(),'Product Command',${sql.json(permissions)},true,now())`;
+    process.env.DATABASE_URL=databaseUrl;
+    process.env.PMS_ALLOW_DEMO_AUTH="true";
+    process.env.PMS_DEMO_AUTH_TOKEN=token;
+    process.env.PMS_DEMO_USER_EMAIL=email;
+    process.env.PMS_RATE_LIMIT_SECRET=`integration-rate-${crypto.randomUUID()}`;
+    process.env.NODE_ENV="test";
+    const response=await handlePmsPost(new Request("http://localhost/api/pms",{
+      method:"POST",
+      headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":`product-command-${suffix}`},
+      body:JSON.stringify({action:"create_reservation",firstName,lastName:"Snapshot",arrivalDate:"2031-10-01",departureDate:"2031-10-02",roomTypeId:"rt-dlx",adults:"2",children:"0",ratePlan:"BAR",source:"Integration",nightlyRate:"180000",rateOverride:"false"}),
+    }));
+    assert.equal(response.status,200,await response.text());
+    const [created]=await sql`
+      SELECT r.id,r.guest_id,r.rate_plan_id,r.rate_plan_snapshot,r.occupancy_detail
+      FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id
+      WHERE r.property_id='prop-seoul' AND g.first_name=${firstName}
+    `;
+    assert.ok(created?.id);
+    assert.equal(created.rate_plan_snapshot.code,"BAR");
+    assert.deepEqual(created.occupancy_detail,{adults:2,children:0});
+  } finally {
+    // The production rate ledger is deliberately immutable. Ephemeral CI cleanup
+    // runs as PostgreSQL superuser with triggers disabled only inside this local
+    // transaction; application connections can never use this escape hatch.
+    await sql.begin(async(tx)=>{
+      await tx.unsafe("SET LOCAL session_replication_role='replica'");
+      const rows=await tx`SELECT r.id,r.guest_id FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id WHERE r.property_id='prop-seoul' AND g.first_name=${firstName}`;
+      for(const row of rows){
+        await tx`DELETE FROM worker_attempts WHERE property_id='prop-seoul' AND job_id IN (SELECT id FROM worker_jobs WHERE source_id IN (SELECT id FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=${row.id}))`;
+        await tx`DELETE FROM worker_jobs WHERE property_id='prop-seoul' AND source_id IN (SELECT id FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=${row.id})`;
+        await tx`DELETE FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=${row.id}`;
+        await tx`DELETE FROM reservation_rate_nights WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;
+        await tx`DELETE FROM reservation_nights WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;
+        await tx`DELETE FROM reservation_type_nights WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;
+        await tx`DELETE FROM folio_windows WHERE property_id='prop-seoul' AND reservation_id=${row.id}`;
+        await tx`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND entity_id=${row.id}`;
+        await tx`DELETE FROM reservations WHERE id=${row.id}`;
+        await tx`DELETE FROM guests WHERE id=${row.guest_id}`;
+      }
+    });
+    await sql`DELETE FROM idempotency_keys WHERE property_id='prop-seoul' AND key=${`product-command-${suffix}`}`;
+    await sql`DELETE FROM api_rate_limits WHERE scope='pms-write'`;
+    await sql`DELETE FROM role_assignments WHERE id=${assignmentId}`;
+    await closePmsDatabase();
+    for(const [key,value] of Object.entries(previous)){
+      const envKey={databaseUrl:"DATABASE_URL",allow:"PMS_ALLOW_DEMO_AUTH",token:"PMS_DEMO_AUTH_TOKEN",email:"PMS_DEMO_USER_EMAIL",rate:"PMS_RATE_LIMIT_SECRET",node:"NODE_ENV"}[key];
+      if(value===undefined)delete process.env[envKey];else process.env[envKey]=value;
+    }
     await sql.end({timeout:2});
   }
 });
