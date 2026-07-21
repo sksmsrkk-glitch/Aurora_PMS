@@ -11,6 +11,7 @@ import {
   normalizeHeroLayout,
   validateWebsiteNavigation,
 } from "../../website-editor-contract";
+import { handleHotelStoryCatalogAction, HotelStoryCatalogError } from "./hotelstory-catalog-service";
 
 type Principal = { email: string; capabilities: string[]; propertyId: string };
 type Body = Record<string, string>;
@@ -533,6 +534,12 @@ export async function handleExtendedAction(
   // mutations. Authorization is resolved by the parent PMS route before entry.
   const actor = principal.email;
   const propertyId = principal.propertyId;
+  try {
+    if(await handleHotelStoryCatalogAction(db,body,principal,now,idempotencyKey||undefined))return true;
+  } catch(error) {
+    if(error instanceof HotelStoryCatalogError)throw new PmsExtendedError(error.message,error.status);
+    throw error;
+  }
   if (body.action === "update_website_settings") {
     const current = await db.prepare("SELECT * FROM website_settings WHERE property_id=?").bind(propertyId).first<Record<string, unknown>>();
     if (!current) throw new PmsExtendedError("홈페이지 설정이 초기화되지 않았습니다.", 409);

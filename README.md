@@ -14,7 +14,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607210022_reservation_voucher_delivery` |
+| 스키마 계약 | `202607210023_channel_rateblock_operational_catalogs` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
@@ -25,6 +25,9 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - HotelStory형 판매 상품 Rate Plan, 부모 상품 요금 상속, 식사·패키지·판매기간·기준/최대 인원·인원별 요금, 예약 시 상품 snapshot, 객실 타입 매핑, 일자별 직판 요금과 홈페이지 실시간 가격·재고
 - HotelStory형 예약 상세: 예약자/투숙자 분리, 고객요청·응답, 관리자/호텔 메모, 예약 확인, 시간 연장, PCI-safe Card Info, 연계·복사, 일자별 요금·취소정책과 4종 인라인 로그
 - HotelStory형 예약 바우처: 국문/영문, 금액 표시/숨김, Noto Sans KR 임베딩 PDF, Excel, 인쇄, 제목·수신자 메일 queue와 중복 전송 방지
+- HotelStory형 판매채널 카탈로그: 사용 가능/설정 목록, 연동·자체 배지, 드래그 등록·정렬, 활성/중지, 외부 호텔 ID·서플라이어·별도관리와 상품별 D-n 마감
+- 객실×판매상품×채널×날짜 블럭요금 매트릭스: Today/1W/2W/4W/Month, 31일 조회, 최대 5,000셀 할당·판매가·입금가·MLOS·CTA·CTD 원자 저장과 ARI/Outbox 생성
+- 호텔별 성수기·휴일·편의시설·유료 서비스·이미지 운영 카탈로그
 - 폴리오 창·라우팅·분할·반대전표·수납·환불·AR 이관·후불 수납
 - 그룹 블록·rooming list·pickup·cutoff, 채널 연결·계약·ARI·inbound·outbox
 - 복식부기 journal, 채널 수수료/입금가 정산, P/L, 11종 리포트와 CSV/XLSX
@@ -44,7 +47,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 2. 검색·프런트 | 모든 화면에서 `Cmd/Ctrl+K` 통합 검색, 오늘 업무 큐, 서버 필터·정렬·20건 페이지네이션, 저장 보기를 제공 | 검색 도메인이 페이지 권한을 넘지 않고 URL 입력은 enum·길이·최대 50건으로 제한 |
 | 3. 예약 생성 | HotelStory형 목록/달력 전환 → 상품·일정·인원 → 실시간 가용 객실·요금 → 고객·배정 → 최종 검토; 목록의 객실종류·조식·기준/최대인원·총액 비교와 월 달력의 상품별 가격·잔여/전체 객실 | 목록·달력이 하나의 고정 배치 projection을 공유하고, DB가 정원·30박·재고·MLOS·CTA·CTD·판매/숙박기간·인원요금을 재검증한 뒤 매일의 상품 snapshot과 예약을 원자 확정 |
 | 3-1. 예약 상세 | 좌측 예약/상품/일자요금/취소규정, 우측 예약자와 실제 투숙자/요청/응답/메모/확인/시간/Card Info, 하단 연동·수정·요금·블럭 로그 | 예약자≠투숙자 저장, 기대 버전 경쟁 차단, PCI 원문 거부, 취소정책 snapshot 불변, 감사·Outbox·멱등 영수증 원자 반영 |
-| 4. 요금·재고 | 730일 전체 선택과 벌크 편집은 유지하되 서버 조회와 DOM은 14/30일 창, 객실 타입은 페이지당 10개로 제한 | 365일 선택도 첫 읽기·렌더가 14열이며 50셀 초과 벌크는 영향 범위 재확인 필수 |
+| 4. 요금·재고 | 호텔 전체 재고 캘린더의 730일 선택·14/30일 창과 별도로, 채널 블럭요금은 객실×상품×채널×최대 31일 sticky 매트릭스로 제공 | 5,000셀 상한, 실제 객실 초과 할당 trigger, 활성 채널 gate, 같은 transaction의 ARI·Outbox·멱등 영수증으로 검증 |
 | 5. 리포트 | 업무별 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 25/50/100행, export 확인 | 서버 필터·마스킹·export 권한·감사 로그를 우회하지 않고 CSV/XLSX 생성 전 범위를 확인 |
 | 6. 모바일·가독성·성능 | 역할별 4개 핵심 하단 내비게이션, 카드형 예약 큐, 전체폭 하단 시트, 12/14px·44px 하한, reduced motion | 390px에서 수평 root overflow 없이 핵심 업무와 팝업을 조작하고 core는 오늘 업무 예약만 전달 |
 
@@ -159,6 +162,8 @@ flowchart LR
 - `rate_plans`가 BAR, WEB-DIRECT, OTA, CORP 같은 상품 정책을 보관합니다.
 - `rate_plan_room_types`가 판매 가능한 객실 타입을 연결합니다.
 - `rate_plan_calendar`가 객실 타입·날짜별 판매가와 제한을 보관합니다.
+- `channel_rate_overrides`가 채널 매핑·상품·객실·날짜별 할당, 판매가/입금가, Closed/MLOS/CTA/CTD를 보관합니다.
+- 채널 블럭요금 저장은 일자별 왕복 대신 bounded fact query와 chunked multi-row upsert를 사용하고, ARI update와 Outbox를 같은 transaction에 생성합니다.
 - 공식 홈페이지는 WEB-DIRECT 일자 요금을 우선 사용하고, 같은 inventory capacity를 소비합니다.
 - 벌크 변경은 단일 DB transaction으로 커밋되므로 중간 배치 실패가 일부 날짜만 남기지 않습니다.
 
@@ -207,6 +212,7 @@ flowchart LR
 | HotelStory 판매 상품·인원별 요금·상품 snapshot | `202607210020_rate_product_catalog.sql` |
 | 예약자/투숙자·운영 옵션·취소정책·연계예약 | `202607210021_reservation_operational_detail.sql` |
 | 예약 바우처 immutable payload·메일 전달 queue | `202607210022_reservation_voucher_delivery.sql` |
+| 채널 카탈로그·블럭요금·호텔 운영 카탈로그 | `202607210023_channel_rateblock_operational_catalogs.sql` |
 
 배포 순서:
 
@@ -229,6 +235,9 @@ npm run release:build
 - `?view=groups|finance|channels`: 해당 화면만 위한 bounded projection(각 4/8/8 query)
 - `?view=reservation_availability|reservation_calendar|reservation_detail`: 목록·월 달력·단건 상세 전용 bounded projection
 - `?view=reservation_voucher`: 단건 예약의 권한·tenant 범위 내 KR/EN 확인서 projection; `format=json|html|pdf|xlsx`, 금액 표시 정책과 export 권한 적용
+- `?view=channel_catalog`: 사용 가능/설정 채널, 외부 연결, 상품 마감과 Rate Plan을 한 번에 반환
+- `?view=rateblock&from&to&connectionId&roomTypeId`: 최대 31일의 채널×상품×객실 블럭요금과 실제 객실·예약·그룹 hold 잔여량 반환
+- `?view=hotel_catalogs`: 성수기·휴일·편의시설·서비스·홈페이지 이미지 카탈로그 반환
 - `?view=inventory|accounting|website|report`: 기간 또는 도메인 전용 projection
 - 기본 view: 그룹, 재무, 채널을 포함한 전체 read model
 - 응답은 `private, no-store`, gzip representation cache를 사용합니다.
@@ -283,6 +292,7 @@ CSS는 cascade 순서를 보존한 다음 모듈로 나뉩니다.
 | `app/styles/revenue-accounting.css` | 재고, Rate Plan, 채널 계약, 회계 |
 | `app/styles/interaction-mobile.css` | 폰트, focus, dialog, 모바일 운용 |
 | `app/styles/website-overlays.css` | 홈페이지 CMS, 검색, overlay 보정 |
+| `app/styles/hotelstory-workspaces.css` | 채널 2열 설정, 블럭요금 sticky matrix, 운영 카탈로그와 모바일 sheet |
 
 변경 원칙:
 

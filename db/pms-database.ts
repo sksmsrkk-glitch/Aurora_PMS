@@ -116,7 +116,7 @@ export type PmsRuntimeBindings = {
 
 type PostgresExecutor = postgres.Sql | postgres.TransactionSql;
 
-const tenantTables = [
+export const TENANT_TABLES = [
   "properties", "room_types", "rooms", "guests", "reservations",
   "reservation_nights", "reservation_type_nights", "reservation_rate_nights",
   "booking_requests", "folio_entries", "folio_entry_details", "folio_windows",
@@ -137,8 +137,10 @@ const tenantTables = [
   "data_import_rows", "data_import_entities", "worker_jobs", "worker_attempts",
   "property_webhooks", "backup_runs", "service_incidents", "property_usage_daily",
   "reservation_links", "reservation_voucher_deliveries",
+  "channel_catalog", "property_channel_settings", "channel_product_cutoffs",
+  "property_seasons", "property_holidays", "amenity_catalog", "service_catalog",
 ] as const;
-const tenantTablePattern = new RegExp(`\\b(?:${tenantTables.join("|")})\\b`, "iu");
+const tenantTablePattern = new RegExp(`\\b(?:${TENANT_TABLES.join("|")})\\b`, "iu");
 
 export function assertSystemOnlyRootQuery(query: string) {
   if (tenantTablePattern.test(query)) {

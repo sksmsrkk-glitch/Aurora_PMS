@@ -115,6 +115,10 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `202607200017_worker_delivery_recovery.sql` | 외부 전달 복구 | worker attempt cycle, 자동 복구 상한·회수 시각, stale/dead partial index와 불변 시도 원장 unique key |
 | `202607200018_exhausted_worker_retry_recovery.sql` | 고갈 RETRY 복구 | DEAD 소스 재큐잉으로 생긴 `RETRY + attempts=max`를 동일한 제한형 복구 scan에 포함 |
 | `202607200019_worker_enqueue_revival_guards.sql` | enqueue 상태 전이 보호 | DEAD 재큐잉은 attempts·last_error를 초기화하고 attempt cycle을 증가, RUNNING 재큐잉은 lease·상태·시도 횟수를 보존 |
+| `202607210020_rate_product_catalog.sql` | HotelStory 판매 상품 | 부모 상품 상속, 식사·패키지·판매기간, 인원별 추가요금과 예약 상품 snapshot |
+| `202607210021_reservation_operational_detail.sql` | 예약 운영 상세 | 예약자/투숙자, 요청·메모·시간 옵션, PCI-safe reference, 취소정책 snapshot과 인라인 로그 |
+| `202607210022_reservation_voucher_delivery.sql` | 예약 바우처 | immutable KR/EN 문서 payload와 멱등 `VOUCHER_EMAIL` worker delivery |
+| `202607210023_channel_rateblock_operational_catalogs.sql` | 채널·블럭요금·운영 카탈로그 | 7개 FORCE RLS tenant table, 채널 상품/마감, 4축 요금제약과 객실 초과 할당 trigger |
 
 ### 핵심 PostgreSQL 함수와 트리거
 

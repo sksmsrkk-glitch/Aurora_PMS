@@ -28,21 +28,23 @@ import CompanyFooter from "../../company-footer";
 const workspaceLoading = () => <section className="panel module-loading" aria-live="polite"><b>화면을 준비하고 있습니다</b><p>선택한 업무 모듈만 빠르게 불러오고 있어요.</p></section>;
 const ReportsCenter = dynamic(() => import("../../reports-center"), { loading: workspaceLoading });
 const RoomMaster = dynamic(() => import("../../room-master"), { loading: workspaceLoading });
-const RevenueInventoryCalendar = dynamic(() => import("../../inventory-calendar"), { loading: workspaceLoading });
+const InventoryWorkspace = dynamic(() => import("../../inventory-workspace"), { loading: workspaceLoading });
 const AccountingCenter = dynamic(() => import("../../accounting-center"), { loading: workspaceLoading });
 const ChannelContracts = dynamic(() => import("../../channel-contracts"), { loading: workspaceLoading });
 const HomepageManager = dynamic(() => import("../../homepage-manager"), { loading: workspaceLoading });
 const StaffAccessManager = dynamic(() => import("../../staff-access-manager"), { loading: workspaceLoading });
 const ReservationDetailPanel = dynamic(() => import("../../reservation-detail-panel"), { loading: workspaceLoading });
+const ChannelCatalogManager = dynamic(() => import("../../channel-catalog-manager"), { loading: workspaceLoading });
+const HotelCatalogManager = dynamic(() => import("../../hotel-catalog-manager"), { loading: workspaceLoading });
 
 /** Warms only the code chunk associated with a user's navigation intent. */
 function prefetchWorkspaceModule(workspace: PmsWorkspace) {
-  if (workspace === "inventory") void import("../../inventory-calendar");
+  if (workspace === "inventory") void import("../../inventory-workspace");
   if (workspace === "website") void import("../../homepage-manager");
   if (workspace === "accounting") void import("../../accounting-center");
-  if (workspace === "channels") void import("../../channel-contracts");
+  if (workspace === "channels") { void import("../../channel-contracts"); void import("../../channel-catalog-manager"); }
   if (workspace === "reports") void import("../../reports-center");
-  if (workspace === "master") void import("../../room-master");
+  if (workspace === "master") { void import("../../room-master"); void import("../../hotel-catalog-manager"); }
   if (workspace === "users") void import("../../staff-access-manager");
 }
 
@@ -203,7 +205,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
         <section className="insight-strip"><span>✦</span><div><b>Talos 인사이트</b><p>{insight?.message}</p></div><button onClick={()=>navigateSection(insight?.workspace||'frontdesk')}>{insight?.actionLabel||'운영 현황 보기'}</button></section>
       </>}
       {section==='frontdesk'&&<FrontdeskWorkbench key={data.principal.propertyId} propertyId={data.principal.propertyId} businessDate={data.property.business_date} onOpen={(reservation:FrontdeskReservation)=>setSelected(reservation)}/>}
-      {section==='inventory'&&<RevenueInventoryCalendar businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INVENTORY_WRITE')}/>}
+      {section==='inventory'&&<InventoryWorkspace businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INVENTORY_WRITE')}/>}
       {section==='website'&&<HomepageManager canAdmin={data.principal.capabilities.includes('WEBSITE_WRITE')}/>}
       {section==='accounting'&&<AccountingCenter businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('ACCOUNTING_WRITE')}/>}
       {section==='users'&&<StaffAccessManager canAdmin={data.principal.capabilities.includes('USER_ADMIN')}/>}
@@ -211,9 +213,9 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
       {activeDomain&&domainStatus[activeDomain]==='error'&&<section className="panel module-loading" role="alert"><b>업무 데이터를 불러오지 못했습니다</b><p>연결을 확인한 뒤 이 모듈만 다시 시도해 주세요.</p><button type="button" className="secondary" onClick={()=>void loadDomain(activeDomain)}>다시 시도</button></section>}
       {section==='groups'&&domainStatus.groups==='ready'&&<GroupSales data={data}/>}
       {section==='finance'&&domainStatus.finance==='ready'&&<Finance data={data}/>}
-      {section==='channels'&&domainStatus.channels==='ready'&&<><ChannelContracts connections={data.integrations.connections} contracts={data.integrations.contracts} businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INTEGRATION_WRITE')}/><ChannelHub data={data}/></>}
+      {section==='channels'&&domainStatus.channels==='ready'&&<><ChannelCatalogManager canWrite={data.principal.capabilities.includes('INTEGRATION_WRITE')}/><ChannelContracts connections={data.integrations.connections} contracts={data.integrations.contracts} businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('INTEGRATION_WRITE')}/><ChannelHub data={data}/></>}
       {section==='rooms'&&<section className="panel full"><div className="panel-title"><div><h2>라이브 룸 랙</h2><p>객실 상태 변경은 프런트와 하우스키핑에 즉시 반영됩니다</p></div><div className="segmented" role="group" aria-label="객실 청소 상태 필터">{['ALL','DIRTY','CLEAN','INSPECTED'].map(f=><button type="button" className={roomFilter===f?'on':''} aria-pressed={roomFilter===f} onClick={()=>setRoomFilter(f)} key={f}>{f==='ALL'?'전체':labels[f]}</button>)}</div></div><div className="room-grid">{filteredRooms.map(r=><article className={`room-card ${r.housekeeping_status.toLowerCase()}`} key={r.id}><div><span>{r.room_type_code}</span><i className={`dot ${r.housekeeping_status.toLowerCase()}`}/></div><strong>{r.number}</strong><p>{r.room_type_name}</p><div className="room-status"><b>{labels[r.housekeeping_status]}</b><small>{labels[r.front_desk_status]}{r.assignee&&` · ${r.assignee}`}</small></div>{data.principal.capabilities.includes('HOUSEKEEPING_WRITE')&&r.housekeeping_status==='DIRTY'&&<button disabled={!!busy} onClick={()=>act('housekeeping',{roomId:r.id,status:'CLEAN'})}>청소 완료 처리</button>}{data.principal.capabilities.includes('HOUSEKEEPING_WRITE')&&r.housekeeping_status==='CLEAN'&&<button disabled={!!busy} onClick={()=>act('housekeeping',{roomId:r.id,status:'INSPECTED'})}>점검 완료 처리</button>}</article>)}{filteredRooms.length===0&&<div className="empty-state large room-empty"><b>조건에 맞는 객실이 없어요</b><p>검색어나 청소 상태 필터를 바꿔 보세요.</p></div>}</div></section>}
-      {section==='reports'&&<ReportsCenter businessDate={data.property.business_date} roomTypes={data.inventory.types}/>} {section==='master'&&<RoomMaster types={data.inventory.types} rooms={data.rooms} canAdmin={data.principal.capabilities.includes('MASTER_WRITE')}/>} {section==='revenue'&&domainStatus.finance==='ready'&&<Revenue data={data}/>} {section==='audit'&&<Audit data={data} onReview={code=>{if(code==='UNRESOLVED_ARRIVALS')navigateSection('frontdesk');else if(code==='OPEN_CASHIERS'&&data.controls.openCashier)setCashierModal('close');else if(code==='FAILED_INTERFACES')navigateSection('channels');else navigateSection('rooms')}}/>}
+      {section==='reports'&&<ReportsCenter businessDate={data.property.business_date} roomTypes={data.inventory.types}/>} {section==='master'&&<><RoomMaster types={data.inventory.types} rooms={data.rooms} canAdmin={data.principal.capabilities.includes('MASTER_WRITE')}/><HotelCatalogManager canWrite={data.principal.capabilities.includes('MASTER_WRITE')}/></>} {section==='revenue'&&domainStatus.finance==='ready'&&<Revenue data={data}/>} {section==='audit'&&<Audit data={data} onReview={code=>{if(code==='UNRESOLVED_ARRIVALS')navigateSection('frontdesk');else if(code==='OPEN_CASHIERS'&&data.controls.openCashier)setCashierModal('close');else if(code==='FAILED_INTERFACES')navigateSection('channels');else navigateSection('rooms')}}/>}
       <CompanyFooter />
     </main>
     {selected&&<ReservationDrawer r={selected} rooms={data.rooms} close={()=>setSelected(null)} capabilities={data.principal.capabilities} canExport={data.principal.canExport} cashierOpen={!!data.controls.openCashier}/>}

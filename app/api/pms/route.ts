@@ -35,6 +35,7 @@ import {
   PmsReadError,
 } from "./frontdesk-read";
 import { loadReservationVoucher } from "./voucher-service";
+import { loadChannelCatalog, loadOperationalCatalogs, loadRateBlockMatrix, HotelStoryCatalogError } from "./hotelstory-catalog-service";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -219,6 +220,26 @@ export async function GET(request: Request) {
       await workspaceProjection(db, view as WorkspaceProjection),
       { headers: { "Cache-Control": "private, no-store" } },
     );
+  }
+  if (view === "channel_catalog") {
+    if (!canViewWorkspace(principal.workspaceAccess, "channels"))
+      return Response.json({error:"채널 설정 조회 권한이 없습니다."},{status:403});
+    return Response.json(await loadChannelCatalog(db),{headers:{"Cache-Control":"private, no-store"}});
+  }
+  if (view === "rateblock") {
+    if (!canViewWorkspace(principal.workspaceAccess, "inventory"))
+      return Response.json({error:"블럭요금 조회 권한이 없습니다."},{status:403});
+    try {
+      return Response.json(await loadRateBlockMatrix(db,url.searchParams),{headers:{"Cache-Control":"private, no-store"}});
+    } catch(error) {
+      if(error instanceof HotelStoryCatalogError)return Response.json({error:error.message},{status:error.status});
+      throw error;
+    }
+  }
+  if (view === "hotel_catalogs") {
+    if (!canViewWorkspace(principal.workspaceAccess, "master"))
+      return Response.json({error:"호텔 운영 카탈로그 조회 권한이 없습니다."},{status:403});
+    return Response.json(await loadOperationalCatalogs(db),{headers:{"Cache-Control":"private, no-store"}});
   }
   if (url.searchParams.get("view") === "inventory") {
     if (!canViewWorkspace(principal.workspaceAccess, "inventory"))
