@@ -292,8 +292,8 @@ test(
       await sql`INSERT INTO worker_jobs(id,property_id,job_type,source_id,payload,status,priority,available_at) VALUES ('job-concurrency-saas',${propertyId},'USAGE_ROLLUP','concurrency-saas','{}'::jsonb,'PENDING',1,clock_timestamp()) ON CONFLICT(id) DO UPDATE SET status='PENDING',attempts=0,available_at=clock_timestamp(),locked_at=NULL,locked_by=NULL,completed_at=NULL`;
       const db = getPmsDatabase({ DATABASE_URL: databaseUrl });
       const [a, b] = await Promise.all([
-        db.claimWorkerJobs("test:worker-a", 1),
-        db.claimWorkerJobs("test:worker-b", 1),
+        db.claimWorkerJobs("test:worker-a", 1, 300),
+        db.claimWorkerJobs("test:worker-b", 1, 300),
       ]);
       assert.equal(a.length + b.length, 1);
       assert.equal([...a, ...b][0].id, "job-concurrency-saas");
@@ -307,21 +307,23 @@ test(
 );
 
 test(
-  "worker claim reaps ten-minute leases and closes every orphan attempt",
+  "worker claim uses the configured lease boundary and closes every orphan attempt",
   { skip },
   async () => {
     const sql = client(),
       propertyId = "prop-seoul",
       suffix = crypto.randomUUID().slice(0, 8),
       pendingId = `job-claim-pending-${suffix}`,
+      liveId = `job-claim-live-${suffix}`,
       retryId = `job-claim-retry-${suffix}`,
       deadId = `job-claim-dead-${suffix}`,
-      jobIds = [pendingId, retryId, deadId];
+      jobIds = [pendingId, liveId, retryId, deadId];
     try {
       await sql`INSERT INTO worker_jobs(id,property_id,job_type,source_id,payload,status,priority,attempts,max_attempts,attempt_cycle,available_at,locked_at,locked_by,updated_at)
         VALUES (${pendingId},${propertyId},'USAGE_ROLLUP',${`claim-pending-${suffix}`} ,'{}'::jsonb,'PENDING',-1000,0,3,1,clock_timestamp(),NULL,NULL,clock_timestamp()),
-               (${retryId},${propertyId},'USAGE_ROLLUP',${`claim-retry-${suffix}`} ,'{}'::jsonb,'RUNNING',100,1,3,1,clock_timestamp(),clock_timestamp()-interval '11 minutes','test:lost-retry',clock_timestamp()-interval '11 minutes'),
-               (${deadId},${propertyId},'USAGE_ROLLUP',${`claim-dead-${suffix}`} ,'{}'::jsonb,'RUNNING',110,2,2,1,clock_timestamp(),clock_timestamp()-interval '11 minutes','test:lost-dead',clock_timestamp()-interval '11 minutes')`;
+               (${liveId},${propertyId},'USAGE_ROLLUP',${`claim-live-${suffix}`} ,'{}'::jsonb,'RUNNING',90,1,3,1,clock_timestamp(),clock_timestamp()-interval '299 seconds','test:live-lease',clock_timestamp()-interval '299 seconds'),
+               (${retryId},${propertyId},'USAGE_ROLLUP',${`claim-retry-${suffix}`} ,'{}'::jsonb,'RUNNING',100,1,3,1,clock_timestamp(),clock_timestamp()-interval '301 seconds','test:lost-retry',clock_timestamp()-interval '301 seconds'),
+               (${deadId},${propertyId},'USAGE_ROLLUP',${`claim-dead-${suffix}`} ,'{}'::jsonb,'RUNNING',110,2,2,1,clock_timestamp(),clock_timestamp()-interval '302 seconds','test:lost-dead',clock_timestamp()-interval '302 seconds')`;
       // The older unfinished row simulates residue from a worker crash before
       // the latest attempt. Both rows must be closed by the lease reclamation.
       await sql`INSERT INTO worker_attempts(property_id,job_id,attempt_cycle,attempt_no,started_at)
@@ -330,11 +332,14 @@ test(
                (${propertyId},${deadId},1,2,clock_timestamp()-interval '11 minutes')`;
 
       const db = getPmsDatabase({ DATABASE_URL: databaseUrl }),
-        claimed = await db.claimWorkerJobs("test:lease-reaper", 1);
+        claimed = await db.claimWorkerJobs("test:lease-reaper", 1, 300);
       assert.deepEqual(claimed.map((job) => job.id), [pendingId]);
 
       const jobs = await sql`SELECT id,status,locked_at,locked_by,completed_at,last_error FROM worker_jobs WHERE id IN (${pendingId},${retryId},${deadId})`,
         byId = new Map(jobs.map((job) => [job.id, job]));
+      const [live] = await sql`SELECT status,locked_by FROM worker_jobs WHERE id=${liveId}`;
+      assert.equal(live.status, "RUNNING");
+      assert.equal(live.locked_by, "test:live-lease");
       assert.equal(byId.get(retryId).status, "RETRY");
       assert.equal(byId.get(retryId).locked_by, null);
       assert.equal(byId.get(deadId).status, "DEAD");
@@ -414,7 +419,7 @@ test(
       // unique-key collision against their immutable previous history.
       await sql`UPDATE worker_jobs SET priority=-2000 WHERE id IN (${jobIds[0]},${jobIds[2]})`;
       const db = getPmsDatabase({ DATABASE_URL: databaseUrl }),
-        claimed = await db.claimWorkerJobs("test:dead-revival", 2);
+        claimed = await db.claimWorkerJobs("test:dead-revival", 2, 300);
       assert.deepEqual(new Set(claimed.map((job) => job.id)), new Set([jobIds[0], jobIds[2]]));
       assert.ok(claimed.every((job) => job.attempts === 1 && job.attempt_cycle === 2));
     } finally {
@@ -485,7 +490,7 @@ test(
       assert.equal(expiredAttempt.outcome, "RETRY");
       assert.equal(expiredAttempt.error_code, "LEASE_EXPIRED");
       assert.ok(expiredAttempt.completed_at);
-      const claimed = await db.claimWorkerJobs("test:recovery-cycle", 3),
+      const claimed = await db.claimWorkerJobs("test:recovery-cycle", 3, 90),
         resetClaim = claimed.find((job) => job.id === resetId);
       assert.ok(resetClaim, "the reset delivery must be claimable");
       assert.equal(resetClaim.attempt_cycle, 2);

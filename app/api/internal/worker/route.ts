@@ -391,11 +391,17 @@ async function run(request: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   const root = getPmsDatabase({ DATABASE_URL: process.env.DATABASE_URL });
   await verifyPmsSchemaContract(root);
+  const leaseSeconds = boundedEnvInteger(
+    "AURORA_WORKER_LEASE_SECONDS",
+    300,
+    90,
+    3600,
+  );
   // A serverless timeout cannot run cleanup code. The next independent sweep
   // therefore reclaims expired RUNNING leases before claiming fresh work and
   // reopens only bounded webhook/ARI DEAD cycles.
   const recovery = await root.recoverWorkerJobs({
-    leaseSeconds: boundedEnvInteger("AURORA_WORKER_LEASE_SECONDS", 300, 90, 3600),
+    leaseSeconds,
     deadCooldownSeconds: boundedEnvInteger(
       "AURORA_WORKER_DEAD_COOLDOWN_SECONDS",
       900,
@@ -416,6 +422,7 @@ async function run(request: Request) {
         20,
         Math.max(1, Number(process.env.AURORA_WORKER_BATCH_SIZE || 10)),
       ),
+      leaseSeconds,
     ),
     results = [];
   for (const job of jobs) {
