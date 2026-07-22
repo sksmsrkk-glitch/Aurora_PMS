@@ -37,7 +37,9 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 @media(max-width:600px){.login-shell{align-items:end;padding:0}.login-card{padding:28px 20px calc(24px + env(safe-area-inset-bottom));border-radius:28px 28px 0 0}.login-copy{margin:28px 0 22px}.login-copy h1{font-size:25px}}
 
 @media(max-width:1100px){
-  .workspace>header{flex-wrap:wrap}
+  /* A wrapped 157px sticky header obscures operation rows on compact desktop
+   * widths. Let it leave with the document; local tables keep their own heads. */
+  .workspace>header{position:relative;top:auto;z-index:auto;flex-wrap:wrap}
   .header-actions{flex-wrap:wrap;justify-content:flex-end}
   .search{display:flex;width:min(100%,420px)}
 }
