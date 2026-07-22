@@ -6,6 +6,9 @@ html,body,body *{font-family:var(--aurora-font-product)!important}
 
 /* Talos interaction clarity and mobile operations */
 .dialog-open{overflow:hidden}
+/* Global-search deep links leave the resolved entity unmistakable after the
+   destination workspace scrolls it into view. */
+.room-card.search-focus,.ar-panel article[data-search-focus="true"]{border-color:#3182f6;box-shadow:0 0 0 3px rgba(49,130,246,.2),0 16px 34px rgba(49,130,246,.14)}
 /* Modal work must remain above the fixed mobile task dock (z-index 50), or
    bottom-sheet submit buttons become visually present but untappable. */
 .modal-backdrop{z-index:80}
@@ -39,7 +42,10 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 @media(max-width:1100px){
   /* A wrapped 157px sticky header obscures operation rows on compact desktop
    * widths. Let it leave with the document; local tables keep their own heads. */
-  .workspace>header{position:relative;top:auto;z-index:auto;flex-wrap:wrap}
+  /* Keep the header above later workspace content. `isolation:isolate` creates a
+     stacking context, so resetting z-index to auto made global-search results
+     visually overlap the page while pointer events landed on the page below. */
+  .workspace>header{position:relative;top:auto;z-index:15;flex-wrap:wrap}
   .header-actions{flex-wrap:wrap;justify-content:flex-end}
   .search{display:flex;width:min(100%,420px)}
 }

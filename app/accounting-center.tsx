@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { addIsoDays, formatMoney } from "../lib/format";
+import { matchesSearch } from "../lib/search";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
 
@@ -153,9 +154,7 @@ export default function AccountingCenter({
   const filteredEntries = useMemo(
     () =>
       data?.entries.filter((entry) =>
-        `${entry.entry_no} ${entry.description} ${entry.vendor || ""} ${entry.created_by}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
+        matchesSearch([entry.entry_no, entry.description, entry.vendor, entry.created_by], query),
       ) || [],
     [data, query],
   );

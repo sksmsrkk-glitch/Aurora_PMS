@@ -2,6 +2,7 @@
 import { randomBytes, scryptSync } from "node:crypto";
 import type { PmsDatabase } from "../../../db/pms-database";
 import type { Principal } from "./auth";
+import { phoneDigits, sqlCompactPattern, sqlLikePattern, sqlPhonePattern } from "../../../lib/search";
 
 const ISO_DATE=/^\d{4}-\d{2}-\d{2}$/u;
 const CLOCK_TIME=/^(?:[01]\d|2[0-3]):[0-5]\d$/u;
@@ -29,8 +30,8 @@ export async function loadStayOperations(db:PmsDatabase,params:URLSearchParams){
   if(mode==="checkin"){filters.push("r.status='DUE_IN' AND r.arrival_date=?");binds.push(selectedDate);}
   if(mode==="checkout"){filters.push("r.status='IN_HOUSE' AND r.departure_date<=?");binds.push(selectedDate);}
   if(mode==="occupancy"){filters.push("r.status IN ('DUE_IN','IN_HOUSE') AND r.arrival_date<?::date+18 AND r.departure_date>?");binds.push(selectedDate,selectedDate);}
-  if(q){filters.push("LOWER(CONCAT_WS(' ',r.confirmation_no,g.first_name,g.last_name,COALESCE(g.phone,''),COALESCE(rm.number,''))) LIKE ?");binds.push(`%${q}%`);}
-  if(source){filters.push("r.source=?");binds.push(source);}
+  if(q){const digits=phoneDigits(q);filters.push("(LOWER(CONCAT_WS(' ',r.confirmation_no,g.first_name,g.last_name,COALESCE(g.phone,''),COALESCE(rm.number,''))) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(g.last_name,'')||COALESCE(g.first_name,'')) LIKE ? ESCAPE '\\' OR (?<>'' AND REGEXP_REPLACE(COALESCE(g.phone,''),'\\D','','g') LIKE ? ESCAPE '\\'))");binds.push(sqlLikePattern(q),sqlCompactPattern(q),digits,sqlPhonePattern(q));}
+  if(source){filters.push("LOWER(r.source)=LOWER(?)");binds.push(source);}
   if(roomTypeId){filters.push("r.room_type_id=?");binds.push(roomTypeId);}
   if(ratePlan){filters.push("r.rate_plan=?");binds.push(ratePlan);}
   const [reservations,rooms,types,plans,sources]=await db.batch([
@@ -50,7 +51,7 @@ export async function loadBanquetCalendar(db:PmsDatabase,params:URLSearchParams)
   const fallback=String(property?.business_date||new Date().toISOString().slice(0,10)).slice(0,7),month=/^\d{4}-\d{2}$/u.test(params.get("month")||"")?String(params.get("month")):fallback;
   const q=bounded(params.get("q"),120).toLocaleLowerCase("ko-KR"),venueId=bounded(params.get("venueId"),80),status=bounded(params.get("status"),20).toUpperCase();
   const where=["b.property_id=pms_current_property_id()","b.event_date>=?::date","b.event_date<?::date+INTERVAL '1 month'"],binds:unknown[]=[`${month}-01`,`${month}-01`];
-  if(q){where.push("LOWER(CONCAT_WS(' ',b.event_name,b.contact_name,b.contact_phone,v.name)) LIKE ?");binds.push(`%${q}%`);}
+  if(q){const digits=phoneDigits(q);where.push("(LOWER(CONCAT_WS(' ',b.event_name,b.contact_name,b.contact_phone,v.name)) LIKE ? ESCAPE '\\' OR (?<>'' AND REGEXP_REPLACE(COALESCE(b.contact_phone,''),'\\D','','g') LIKE ? ESCAPE '\\'))");binds.push(sqlLikePattern(q),digits,sqlPhonePattern(q));}
   if(venueId){where.push("b.venue_id=?");binds.push(venueId);}
   if(["TENTATIVE","CONFIRMED","COMPLETED","CANCELLED"].includes(status)){where.push("b.status=?");binds.push(status);}
   const [venues,reservations]=await db.batch([
@@ -66,7 +67,7 @@ function maskedMember(row:Record<string,unknown>){return {...row,name:`${String(
 export async function loadHotelMembers(db:PmsDatabase,params:URLSearchParams,principal:Principal){
   const q=bounded(params.get("q"),120).toLocaleLowerCase("ko-KR"),type=bounded(params.get("type"),20).toUpperCase(),grade=bounded(params.get("grade"),40),adminType=bounded(params.get("administratorType"),20).toUpperCase(),active=params.get("active")||"ALL",joinedFrom=params.get("joinedFrom")||"",joinedTo=params.get("joinedTo")||"";
   const where=["property_id=pms_current_property_id()"],binds:unknown[]=[];
-  if(q){where.push("LOWER(CONCAT_WS(' ',member_no,COALESCE(login_id,''),name,phone,COALESCE(email,''),company,grade)) LIKE ?");binds.push(`%${q}%`);}
+  if(q){const digits=phoneDigits(q);where.push("(LOWER(CONCAT_WS(' ',member_no,COALESCE(login_id,''),name,phone,COALESCE(email,''),company,grade)) LIKE ? ESCAPE '\\' OR (?<>'' AND REGEXP_REPLACE(COALESCE(phone,''),'\\D','','g') LIKE ? ESCAPE '\\'))");binds.push(sqlLikePattern(q),digits,sqlPhonePattern(q));}
   if(["HOTEL","WEBSITE","BOTH"].includes(type)){where.push("member_type=?");binds.push(type);}
   if(grade){where.push("grade=?");binds.push(grade);}
   if(["NONE","COMPANY","WEBSITE"].includes(adminType)){where.push("administrator_type=?");binds.push(adminType);}

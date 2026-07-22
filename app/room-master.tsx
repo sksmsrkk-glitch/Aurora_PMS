@@ -4,6 +4,7 @@
 
 import { useMemo, useState } from "react";
 import { formatMoney, safeStringArray } from "../lib/format";
+import { matchesSearch } from "../lib/search";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
 
@@ -17,8 +18,8 @@ const featureText=(value:unknown)=>safeStringArray(value,20).join(", ");
 export default function RoomMaster({types,rooms,canAdmin}:{types:RoomType[];rooms:Room[];canAdmin:boolean}){
   const {busy,act}=usePmsActions();
   const [tab,setTab]=useState<"types"|"rooms">("types"),[query,setQuery]=useState(""),[editor,setEditor]=useState<Editor>(null);
-  const filteredTypes=useMemo(()=>{const keyword=query.trim().toLowerCase();return types.filter(type=>!keyword||`${type.code} ${type.name} ${type.description||""}`.toLowerCase().includes(keyword));},[types,query]);
-  const filtered=useMemo(()=>{const keyword=query.toLowerCase();return rooms.filter(room=>!keyword||`${room.number} ${room.room_type_code} ${room.room_type_name} ${room.floor}`.toLowerCase().includes(keyword));},[rooms,query]);
+  const filteredTypes=useMemo(()=>types.filter(type=>matchesSearch([type.code,type.name,type.description],query)),[types,query]);
+  const filtered=useMemo(()=>rooms.filter(room=>matchesSearch([room.number,room.room_type_code,room.room_type_name,room.floor],query)),[rooms,query]);
   async function submit(event:React.FormEvent<HTMLFormElement>){event.preventDefault();if(!editor)return;const form=event.currentTarget,data=Object.fromEntries(new FormData(form).entries()) as Record<string,string>;let action="";if(editor.kind==="newType")action="create_room_type";if(editor.kind==="editType"){action="update_room_type";data.roomTypeId=(editor.item as RoomType).id;data.expectedVersion=String((editor.item as RoomType).version);data.active=data.active?"true":"false";}if(editor.kind==="newRoom")action="create_room";if(editor.kind==="bulkRooms")action="bulk_create_rooms";if(editor.kind==="editRoom"){action="update_room";data.roomId=(editor.item as Room).id;data.expectedVersion=String((editor.item as Room).version||1);data.active=data.active?"true":"false";}if(await act(action,data))setEditor(null);}
   return <section className="master-panel">
     <div className="master-head"><div><p className="eyebrow">ROOM INVENTORY MASTER</p><h2>객실 타입 · 객실 마스터</h2><p>타입과 실제 판매 객실을 제한 없이 관리하고, 한 번에 최대 500실씩 안전하게 생성합니다.</p></div><div className="master-actions"><ListSearch value={query} onChange={setQuery} label={tab==="types"?"객실 타입 검색":"객실 마스터 검색"} placeholder={tab==="types"?"타입 코드·이름·설명 검색":"객실번호·타입·층 검색"} count={tab==="types"?filteredTypes.length:filtered.length}/>{canAdmin&&tab==="types"&&<button className="primary" onClick={()=>setEditor({kind:"newType"})}>＋ 객실 타입</button>}{canAdmin&&tab==="rooms"&&<><button className="secondary" onClick={()=>setEditor({kind:"bulkRooms"})}>대량 생성</button><button className="primary" onClick={()=>setEditor({kind:"newRoom"})}>＋ 객실</button></>}</div></div>
