@@ -283,3 +283,9 @@ sequenceDiagram
 Vercel 빌드는 재현 가능한 애플리케이션 산출물 생성 단계이므로 운영 DB 연결 성공에 의존하지 않습니다. `db:contract:static`은 최신 forward migration 파일명과 `REQUIRED_SCHEMA_VERSION` 동기화만 확인합니다. 실제 migration history, `aurora_app` 역할, role membership, RLS policy 수는 스테이징 릴리스의 `db:contract:verify`와 모든 런타임 진입점의 `verifyPmsSchemaContract`가 검사합니다. 따라서 DB 점검 중에도 빌드할 수 있지만 준비되지 않은 DB로 업무 요청을 처리할 수는 없습니다.
 
 임포트 권한은 파일 kind를 입력으로 받는 `importAccessFailure`가 단일 결정합니다. 예약은 프런트 업무 권한, 마스터 데이터는 사용자 관리 권한을 요구하고 둘 다 동일 identity/MFA 정책을 통과해야 합니다. 카드 참조와 채널 요금제 필수 연결은 API 검사 외에 forward migration의 CHECK·FK·NOT NULL로 최종 강제합니다.
+
+### ADR-027 · 회계 반제 동치와 예약 시점 상품 계약
+
+채널 입금 복구는 별도의 금액 입력이 아니라 원 RECEIPT 전체 금액의 반제입니다. DB trigger가 정산행을 잠근 상태에서 원 이벤트의 저널과 금액을 함께 비교하므로 API를 우회하거나 동시 요청을 보내도 부분·과다 반제가 생기지 않습니다.
+
+`talos_effective_product_rate`는 하나의 SQL 함수 안에서 활성 부모 체인을 수집하고 루트→요청 상품 순으로 일자 override와 파생 조정을 계산합니다. 클라이언트에는 다시 계산 로직을 두지 않습니다. 예약 snapshot은 최초 계약 또는 상품 ID 변경 때만 새로 만들고 이후 JSON 자체는 immutable로 유지합니다. 예상하지 못한 외부 라우트 오류는 `safeRouteError`가 correlation ID로 치환해 내부 SQL·제약명을 노출하지 않습니다.

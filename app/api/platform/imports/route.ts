@@ -22,6 +22,7 @@ import {
 } from "../../pms/auth";
 import { authenticateSupabaseRequest } from "../../../supabase-session";
 import { importAccessFailure } from "../../import-access-policy";
+import { safeRouteError } from "../../safe-route-error";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -120,15 +121,14 @@ export async function POST(request: Request) {
       return await commit(db, principal.email, parsed.jobId,parsed.expectedKind);
     return await rollback(db, principal.email, parsed.jobId,parsed.expectedKind);
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "데이터 이관을 완료하지 못했습니다.";
-    const conflict =
-      /duplicate|unique|foreign key|still referenced|changed after import/iu.test(
-        message,
-      );
-    return response({ error: message }, conflict ? 409 : 400);
+    const failure = safeRouteError(error, {
+      context: "platform-import",
+      conflicts: [{
+        pattern: /duplicate|unique|foreign key|still referenced|changed after import|VALIDATED|IMPORT_ROLLBACK_CHANGED_/iu,
+        error: "가져오기 대상이 다른 작업과 충돌했거나 검증 이후 변경되었습니다. 목록을 새로 조회해 주세요.",
+      }],
+    });
+    return response(failure.body, failure.status);
   }
 }
 

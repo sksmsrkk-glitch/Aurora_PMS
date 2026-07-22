@@ -7,6 +7,7 @@ import { commit, dryRun, rollback } from "../../platform/imports/route";
 import { principalAccessFailureResponse, principalFor, ready, runtimeBindings } from "../auth";
 import { authenticateSupabaseRequest } from "../../../supabase-session";
 import { importAccessFailure } from "../../import-access-policy";
+import { safeRouteError } from "../../safe-route-error";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
@@ -44,5 +45,5 @@ export async function POST(request:Request){
     if(parsed.data.action==="dry_run")return dryRun(resolved.db,resolved.principal.email,"RESERVATIONS",parsed.data.sourceName,parsed.data.csv);
     if(parsed.data.action==="commit")return commit(resolved.db,resolved.principal.email,parsed.data.jobId,"RESERVATIONS");
     return rollback(resolved.db,resolved.principal.email,parsed.data.jobId,"RESERVATIONS");
-  }catch(error){const message=error instanceof Error?error.message:"예약 가져오기를 완료하지 못했습니다.";return response({error:message},/duplicate|unique|changed|VALIDATED/iu.test(message)?409:400);}
+  }catch(error){const failure=safeRouteError(error,{context:"reservation-import",conflicts:[{pattern:/duplicate|unique|changed|VALIDATED|IMPORT_ROLLBACK_CHANGED_/iu,error:"예약 가져오기 대상이 다른 작업과 충돌했거나 검증 이후 변경되었습니다. 목록을 새로 조회해 주세요."}]});return response(failure.body,failure.status);}
 }

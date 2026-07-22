@@ -530,3 +530,12 @@ stay availability = minimum available across all stay nights
 - 객실 타입·객실·고객 마스터 이관은 `USER_ADMIN`과 동일한 identity/MFA 정책을 요구합니다.
 - `/api/pms/reservation-imports`와 `/api/platform/imports`는 같은 kind 기반 정책 함수만 호출하므로 진입점에 따라 권한이 달라지지 않습니다.
 - `channel_rate_overrides.rate_plan_id`는 필수이며 채널 매핑의 Rate Plan과 일치하지 않는 행은 DB trigger/FK/NOT NULL 계약에서 거부됩니다.
+
+### 16. 회계 반제·요금 상속·예약 계약 불변성
+
+- 채널 입금 `RESTORE` 이벤트는 참조하는 `RECEIPT`의 호텔·정산·저널뿐 아니라 금액까지 정확히 같아야 합니다.
+- 파생 Rate Plan은 부모가 다시 파생 상품이어도 루트부터 순서대로 OFFSET/PERCENT를 적용하며, 64단계 초과 또는 순환 체인은 가격을 반환하지 않습니다.
+- 예약 상품 snapshot은 예약 생성 또는 명시적인 `rate_plan_id` 변경 때만 생성됩니다. `{}` 재설정과 직접 JSON 변경은 DB trigger가 거부합니다.
+- 과거 자유 텍스트 요금제는 현재 상품으로 바꾸지 않고 예약 헤더를 명시적인 legacy snapshot으로 보존하고 migration 감사 로그를 남깁니다.
+- 룸 보드의 이미 배정된 객실·일자 셀은 비활성화되어 카드 여백을 클릭해도 신규예약 화면이 열리지 않습니다.
+- 플랫폼·임포트 라우트의 예상하지 못한 오류는 일반 문구와 오류 ID만 응답하며 DB·드라이버 원문은 서버 로그에만 기록합니다.
