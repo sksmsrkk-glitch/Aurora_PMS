@@ -9,6 +9,10 @@ import {
   pmsWorkspacePath,
 } from "../app/pms-workspaces.ts";
 import { pmsMutationReceipt } from "../app/pms-mutation.ts";
+import {
+  failedMutationQueryKeys,
+  successfulMutationQueryKeys,
+} from "../app/pms-query-invalidation.ts";
 import { demoAuthenticationEnabled } from "../app/api/pms/auth-policy.ts";
 import { clientAddress } from "../app/api/request-policy.ts";
 import { assertSafeQaTarget } from "../scripts/qa-target.mjs";
@@ -44,6 +48,16 @@ test("mutation receipts carry entity references without God payload data", () =>
   ]);
   assert.equal("reservations" in result, false);
   assert.equal("finance" in result, false);
+});
+
+test("mutation cache policy refreshes active room-board and detail projections", () => {
+  const success = successfulMutationQueryKeys({ invalidates: ["core", "full"] });
+  assert.ok(success.some((key) => key.join(":") === "pms:frontdesk"));
+  assert.ok(success.some((key) => key.join(":") === "pms:reservation-detail"));
+  assert.deepEqual(failedMutationQueryKeys(), [
+    ["pms", "frontdesk"],
+    ["pms", "reservation-detail"],
+  ]);
 });
 
 test("demo authentication is flag, environment, and constant-token bound", () => {

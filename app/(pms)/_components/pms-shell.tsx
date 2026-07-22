@@ -13,6 +13,10 @@ import FrontdeskWorkbench, { type FrontdeskReservation } from "../../frontdesk-w
 import ReservationWizard from "../../reservation-wizard";
 import { PmsActionProvider, usePmsActions } from "../../pms-action-context";
 import type { PmsMutationReceipt } from "../../pms-mutation";
+import {
+  failedMutationQueryKeys,
+  successfulMutationQueryKeys,
+} from "../../pms-query-invalidation";
 import { dashboardInsight } from "../../dashboard-insights";
 import { formatMoney } from "../../../lib/format";
 import {
@@ -153,7 +157,29 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
   useEffect(()=>{if(activeDomain&&domainStatus[activeDomain]==="idle")void loadDomain(activeDomain);},[activeDomain,domainStatus,loadDomain]);
   useEffect(()=>{if(data&&!sectionAllowed){const fallback=firstAccessibleWorkspace(data.principal.workspaceAccess);if(fallback)router.replace(pmsWorkspacePath(fallback));}},[data,router,sectionAllowed]);
   useEffect(()=>{const onKey=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="k"){event.preventDefault();setQuickPanel(null);requestAnimationFrame(()=>searchRef.current?.focus());}if(event.key==="Escape")setQuickPanel(null);};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);},[]);
-  async function act(action:string, payload:Record<string,string>={}) { setBusy(action); setError(""); try { const r=await fetch("/api/pms",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action,...payload})}); if(r.status===401){window.location.replace('/login');return false;} const receipt=await r.json() as PmsMutationReceipt&{error?:string}; if(!r.ok) throw new Error(receipt.error); await Promise.all([...(receipt.invalidates||["core","full"]).map(key=>queryClient.invalidateQueries({queryKey:["pms",key],refetchType:"none"})),queryClient.invalidateQueries({queryKey:["pms","workspace"],refetchType:"none"}),queryClient.invalidateQueries({queryKey:["pms","frontdesk"]}),queryClient.invalidateQueries({queryKey:["pms","search"],refetchType:"none"}),queryClient.invalidateQueries({queryKey:["pms","report"],refetchType:"none"})]); const refreshed=await load();if(activeDomain)await loadDomain(activeDomain);if(selected&&refreshed)setSelected(refreshed.reservations.find((x:Reservation)=>x.id===selected.id)||selected); return true; } catch(e){setError(e instanceof Error?e.message:"작업을 완료하지 못했습니다."); return false;} finally{setBusy("");} }
+  async function act(action:string, payload:Record<string,string>={}) {
+    setBusy(action);
+    setError("");
+    try {
+      const response=await fetch("/api/pms",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action,...payload})});
+      if(response.status===401){window.location.replace('/login');return false;}
+      const receipt=await response.json() as PmsMutationReceipt&{error?:string};
+      if(!response.ok)throw new Error(receipt.error||"작업을 완료하지 못했습니다.");
+      await Promise.all(successfulMutationQueryKeys(receipt).map(queryKey=>queryClient.invalidateQueries({queryKey,refetchType:"active"})));
+      const refreshed=await load();
+      if(activeDomain)await loadDomain(activeDomain);
+      if(selected&&refreshed)setSelected(refreshed.reservations.find((row:Reservation)=>row.id===selected.id)||selected);
+      return true;
+    }catch(reason){
+      setError(reason instanceof Error?reason.message:"작업을 완료하지 못했습니다.");
+      // A 409 is authoritative evidence that another terminal owns a newer
+      // version. Refetch all active board/detail projections before retry.
+      await Promise.allSettled(failedMutationQueryKeys().map(queryKey=>queryClient.invalidateQueries({queryKey,refetchType:"active"})));
+      return false;
+    }finally{
+      setBusy("");
+    }
+  }
   async function switchProperty(propertyId:string){
     if(!data||propertyId===data.principal.propertyId)return;
     setBusy("select_property");setError("");
