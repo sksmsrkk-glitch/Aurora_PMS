@@ -14,7 +14,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607210025_hotelstory_final_operations` |
+| 스키마 계약 | `202607220029_quality_integrity_closure` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
@@ -42,6 +42,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - 도메인 기반 호텔별 홈페이지·직접 예약, DNS 검증, JIT MFA 지원 접근과 개인정보 마스킹
 - CSV dry-run·원자적 반영·안전 rollback, durable worker·lease reaper·제한형 DEAD 복구·백업 검증·사용량 집계
 - 12px 보조정보·14px 업무본문·44px 조작영역을 하한으로 하는 전역 가독성 시스템, 모바일 예약 카드·하단 내비게이션·하단 시트
+- 대형 호텔 룸 보드 행 가상화, arrival-day 이동의 전체 숙박 승격, CMS 이미지 CSS URL 안전 직렬화, 채널 연결·매핑 멱등 replay
 
 ### 현장 운영 UX 6단계 완료 계약
 
@@ -227,6 +228,7 @@ flowchart LR
 | 예약 import 일자별 요금 원장·안전한 롤백 | `202607220026_reservation_import_rate_ledger.sql` |
 | 카드 참조 PCI·채널 요금제·임포트 권한 무결성 | `202607220027_import_pci_rate_override_integrity.sql` |
 | 채널 반제 금액·다단계 요금·예약 snapshot 불변성 | `202607220028_finance_rate_snapshot_integrity.sql` |
+| 요금 부모 체인 종료·과거 수리 provenance 감사 | `202607220029_quality_integrity_closure.sql` |
 
 배포 순서:
 

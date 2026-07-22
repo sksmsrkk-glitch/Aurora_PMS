@@ -1,6 +1,7 @@
 /** Integration tests executed against the exact migrated PostgreSQL schema. */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { consumeRateLimit } from "../app/api/rate-limit.ts";
 import { loadPmsSearch, loadReservationAvailability, loadReservationCalendar, loadReservationDetail } from "../app/api/pms/frontdesk-read.ts";
@@ -41,6 +42,21 @@ test("migrated schema contains booking tables and no arbitrary SQL RPC", { skip 
     assert.equal(surface.reservation_rate_nights, "reservation_rate_nights");
     assert.equal(surface.pms_execute, null);
     assert.equal(surface.pms_batch, null);
+    // CI creates its seed property after applying migrations. Replaying the
+    // forward-only, idempotent migration against that pre-existing tenant
+    // exercises the production upgrade path that emits repair provenance.
+    const closureMigration = readFileSync(
+      new URL("../supabase/migrations/202607220029_quality_integrity_closure.sql", import.meta.url),
+      "utf8",
+    );
+    await sql.unsafe(closureMigration);
+    const [provenance] = await sql`
+      SELECT COUNT(*)::int count
+      FROM audit_logs
+      WHERE actor='system:migration'
+        AND action='HISTORICAL_REPAIR_PROVENANCE'
+    `;
+    assert.ok(provenance.count >= 1, "historical tenant repairs require forward provenance");
   } finally {
     await sql.end({ timeout: 2 });
   }
@@ -393,6 +409,28 @@ test("sale products inherit rates, price occupancy, and preserve reservation sna
     const [snapshotAfter]=await sql`SELECT rate_plan_snapshot FROM reservations WHERE id=${reservationId}`;
     assert.equal(snapshotAfter.rate_plan_snapshot.name,"24-hour Full Package");
 
+    // Simulate a cycle inherited from a pre-guard legacy schema. The upgraded
+    // trigger must reject the next parent write as a domain error, not hang
+    // until PostgreSQL's statement timeout.
+    await sql`ALTER TABLE rate_plans DISABLE TRIGGER rate_plan_parent_guard`;
+    try {
+      await sql`UPDATE rate_plans SET parent_rate_plan_id=${grandchildId} WHERE id=${parentId}`;
+    } finally {
+      await sql`ALTER TABLE rate_plans ENABLE TRIGGER rate_plan_parent_guard`;
+    }
+    await sql`SET statement_timeout='2s'`;
+    await assert.rejects(
+      sql`UPDATE rate_plans SET parent_rate_plan_id=${parentId} WHERE id=${childId}`,
+      /rate plan parent cycle/iu,
+    );
+    await sql`RESET statement_timeout`;
+    await sql`ALTER TABLE rate_plans DISABLE TRIGGER rate_plan_parent_guard`;
+    try {
+      await sql`UPDATE rate_plans SET parent_rate_plan_id=NULL WHERE id=${parentId}`;
+    } finally {
+      await sql`ALTER TABLE rate_plans ENABLE TRIGGER rate_plan_parent_guard`;
+    }
+
     const visible=await sql.begin(async(tx)=>{
       await tx.unsafe("SET LOCAL ROLE aurora_app");
       await tx`SELECT set_config('app.property_id',${propertyId},true)`;
@@ -408,6 +446,8 @@ test("sale products inherit rates, price occupancy, and preserve reservation sna
     assert.equal(contract.udt_name,"numeric");
     assert.equal(contract.forced_rls,true);
   } finally {
+    await sql`RESET statement_timeout`;
+    await sql`ALTER TABLE rate_plans ENABLE TRIGGER rate_plan_parent_guard`;
     await sql`DELETE FROM reservations WHERE id=${reservationId}`;
     await sql`DELETE FROM guests WHERE id=${guestId}`;
     await sql`DELETE FROM rate_plan_calendar WHERE property_id=${propertyId}`;
@@ -564,7 +604,7 @@ test("HotelStory channel settings and rate blocks are transactional, bounded, an
   const from="2032-04-01",to="2032-04-02",keys=[];
   const previous={databaseUrl:process.env.DATABASE_URL,allow:process.env.PMS_ALLOW_DEMO_AUTH,token:process.env.PMS_DEMO_AUTH_TOKEN,email:process.env.PMS_DEMO_USER_EMAIL,rate:process.env.PMS_RATE_LIMIT_SECRET,node:process.env.NODE_ENV};
   const permissions={overview:"WRITE",frontdesk:"WRITE",inventory:"WRITE",website:"WRITE",groups:"WRITE",finance:"WRITE",accounting:"WRITE",channels:"WRITE",rooms:"WRITE",reports:"WRITE",master:"WRITE",revenue:"WRITE",users:"WRITE",audit:"WRITE"};
-  let settingId="",connectionId="",cutoffId="",planId="",seasonId="",holidayId="",amenityId="",serviceId="",ariIds=[],outboxIds=[];
+  let settingId="",connectionId="",directConnectionId="",directMappingId="",cutoffId="",planId="",seasonId="",holidayId="",amenityId="",serviceId="",ariIds=[],outboxIds=[];
   const post=async(body,label)=>{const key=`rate-block-${label}-${suffix}`;keys.push(key);const response=await handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":key},body:JSON.stringify(body)}));return {response,key};};
   const expectOk=async(body,label)=>{const {response,key}=await post(body,label);assert.equal(response.status,200,`${body.action}: ${await response.text()}`);return {response,key};};
   try{
@@ -576,6 +616,20 @@ test("HotelStory channel settings and rate blocks are transactional, bounded, an
     [{id:settingId,connection_id:connectionId}]=await sql`SELECT id,connection_id FROM property_channel_settings WHERE property_id='prop-seoul' AND catalog_id=${catalogId}`;
     assert.ok(settingId&&connectionId);
     [{id:planId}]=await sql`SELECT id FROM rate_plans WHERE property_id='prop-seoul' AND code='BAR'`;
+
+    const directConnectionBody={action:"create_channel_connection",provider:`DIRECT_${suffix.toUpperCase()}`,externalPropertyId:`direct-hotel-${suffix}`,name:"Direct idempotency contract"};
+    const {key:directConnectionKey}=await expectOk(directConnectionBody,"direct-connection");
+    [{id:directConnectionId}]=await sql`SELECT id FROM channel_connections WHERE property_id='prop-seoul' AND provider=${directConnectionBody.provider}`;
+    const directConnectionReplay=await handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":directConnectionKey},body:JSON.stringify(directConnectionBody)}));
+    assert.equal(directConnectionReplay.status,200);assert.equal(directConnectionReplay.headers.get("X-Idempotent-Replay"),"true");
+    assert.equal((await sql`SELECT COUNT(*)::int count FROM channel_connections WHERE property_id='prop-seoul' AND provider=${directConnectionBody.provider}`)[0].count,1);
+
+    const directMappingBody={action:"create_channel_mapping",connectionId:directConnectionId,roomTypeId:"rt-dlx",externalRoomTypeId:`direct-room-${suffix}`,ratePlan:"BAR",externalRatePlanId:`direct-bar-${suffix}`};
+    const {key:directMappingKey}=await expectOk(directMappingBody,"direct-mapping");
+    [{id:directMappingId}]=await sql`SELECT id FROM channel_mappings WHERE property_id='prop-seoul' AND connection_id=${directConnectionId}`;
+    const directMappingReplay=await handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":directMappingKey},body:JSON.stringify(directMappingBody)}));
+    assert.equal(directMappingReplay.status,200);assert.equal(directMappingReplay.headers.get("X-Idempotent-Replay"),"true");
+    assert.equal((await sql`SELECT COUNT(*)::int count FROM channel_mappings WHERE property_id='prop-seoul' AND connection_id=${directConnectionId}`)[0].count,1);
     await sql`INSERT INTO channel_mappings(id,property_id,connection_id,room_type_id,external_room_type_id,rate_plan,external_rate_plan_id,active,created_at,updated_at) VALUES (${mappingId},'prop-seoul',${connectionId},'rt-dlx',${`room-${suffix}`},'BAR',${`bar-${suffix}`},true,now(),now())`;
     await sql`INSERT INTO channel_contracts(id,property_id,connection_id,contract_type,commission_percent,settlement_cycle,payment_terms_days,currency,valid_from,valid_to,status,version,created_at,created_by,updated_at,updated_by) VALUES (${contractId},'prop-seoul',${connectionId},'COMMISSION',15,'PER_STAY',30,'KRW','2031-01-01',NULL,'ACTIVE',1,now(),'integration-test',now(),'integration-test')`;
 
@@ -633,9 +687,11 @@ test("HotelStory channel settings and rate blocks are transactional, bounded, an
     await sql`DELETE FROM channel_rate_overrides WHERE property_id='prop-seoul' AND mapping_id=${mappingId}`;
     if(cutoffId)await sql`DELETE FROM channel_product_cutoffs WHERE id=${cutoffId}`;
     if(mappingId)await sql`DELETE FROM channel_mappings WHERE id=${mappingId}`;
+    if(directMappingId)await sql`DELETE FROM channel_mappings WHERE id=${directMappingId}`;
     if(contractId)await sql`DELETE FROM channel_contracts WHERE id=${contractId}`;
     if(settingId)await sql`DELETE FROM property_channel_settings WHERE id=${settingId}`;
     if(connectionId)await sql`DELETE FROM channel_connections WHERE id=${connectionId}`;
+    if(directConnectionId)await sql`DELETE FROM channel_connections WHERE id=${directConnectionId}`;
     if(catalogId)await sql`DELETE FROM channel_catalog WHERE id=${catalogId}`;
     for(const [table,id] of [["property_seasons",seasonId],["property_holidays",holidayId],["amenity_catalog",amenityId],["service_catalog",serviceId]])if(id)await sql.unsafe(`DELETE FROM ${table} WHERE id=$1`,[id]);
     await sql`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND actor=${email}`;

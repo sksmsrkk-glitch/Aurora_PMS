@@ -18,6 +18,24 @@ const mealPlanLabels:Record<string,string>={ROOM_ONLY:"미포함",BREAKFAST:"조
 const mealPlanLabel=(value:string)=>mealPlanLabels[value]||value;
 function shiftMonth(value:string,delta:number){const date=new Date(`${value}-01T00:00:00Z`);date.setUTCMonth(date.getUTCMonth()+delta);return date.toISOString().slice(0,7);}
 
+/** One resolver feeds both the review total and the mutation payload. */
+export function reservationPriceInput(value: string, average: number) {
+  const nightlyRate = value.trim() === "" ? average : Number(value);
+  return {
+    nightlyRate,
+    rateOverride: nightlyRate !== average,
+  };
+}
+
+export function reservationDisplayedTotal(
+  value: string,
+  plan: Pick<Plan, "average" | "total">,
+  nights: number,
+) {
+  const price = reservationPriceInput(value, plan.average);
+  return price.rateOverride ? price.nightlyRate * nights : plan.total;
+}
+
 /** Keeps high-cardinality hotel masters out of the reservation dialog DOM. */
 export function reservationOfferWindow(offers: Offer[], query: string, page: number) {
   const keyword = query.trim().toLocaleLowerCase("ko-KR");
@@ -34,8 +52,8 @@ export function reservationCommandInput(
   search:{arrival:string;departure:string;adults:string;children:string},
   guest:Record<string,string>,roomTypeId:string,ratePlan:string,average:number,
 ) {
-  const nightlyRate=guest.nightlyRate||String(average);
-  return {...guest,arrivalDate:search.arrival,departureDate:search.departure,adults:search.adults,children:search.children,roomTypeId,ratePlan,nightlyRate,rateOverride:String(Number(nightlyRate)!==average)};
+  const price=reservationPriceInput(guest.nightlyRate||"",average);
+  return {...guest,arrivalDate:search.arrival,departureDate:search.departure,adults:search.adults,children:search.children,roomTypeId,ratePlan,nightlyRate:String(price.nightlyRate),rateOverride:String(price.rateOverride)};
 }
 
 export default function ReservationWizard({ rooms, businessDate, initial={}, close }: { rooms: Room[]; businessDate: string; initial?:{arrivalDate?:string;roomTypeId?:string;roomId?:string}; close: () => void }) {
@@ -60,9 +78,7 @@ export default function ReservationWizard({ rooms, businessDate, initial={}, clo
   const offer = availability?.offers.find((entry) => entry.roomTypeId === offerId) || null;
   const plan = offer?.plans.find((entry) => entry.id === planId) || null;
   const displayedTotal = plan
-    ? Number(guest.nightlyRate || plan.average) === plan.average
-      ? plan.total
-      : Number(guest.nightlyRate || 0) * Number(availability?.search.nights || 1)
+    ? reservationDisplayedTotal(guest.nightlyRate,plan,Number(availability?.search.nights||1))
     : 0;
   const assignableRooms = useMemo(() => rooms.filter((room) => room.active && room.room_type_id === offerId && room.front_desk_status === "VACANT" && ["CLEAN", "INSPECTED"].includes(room.housekeeping_status)), [offerId, rooms]);
   const offerWindow = useMemo(() => reservationOfferWindow(availability?.offers ?? [], offerQuery, offerPage), [availability, offerQuery, offerPage]);

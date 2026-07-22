@@ -539,3 +539,13 @@ stay availability = minimum available across all stay nights
 - 과거 자유 텍스트 요금제는 현재 상품으로 바꾸지 않고 예약 헤더를 명시적인 legacy snapshot으로 보존하고 migration 감사 로그를 남깁니다.
 - 룸 보드의 이미 배정된 객실·일자 셀은 비활성화되어 카드 여백을 클릭해도 신규예약 화면이 열리지 않습니다.
 - 플랫폼·임포트 라우트의 예상하지 못한 오류는 일반 문구와 오류 ID만 응답하며 DB·드라이버 원문은 서버 로그에만 기록합니다.
+
+### 17. 대형 호텔 품질·접근성·재시도 계약
+
+- 채널 연결과 채널 매핑 생성도 도메인 쓰기와 같은 transaction에 `idempotency_keys` 영수증을 기록하여 동일 키 재시도는 새 행을 만들지 않습니다.
+- 룸 이동 시작일이 예약 도착일이면 UI와 command가 모두 전체 숙박일 배정으로 승격합니다. 중간 날짜만 기존 객실을 유지하는 부분 이동으로 표시됩니다.
+- 리포트 필터는 고정 열 개수 대신 `auto-fit/minmax`로 컨테이너 폭에 맞춰 재배치되며 넓은 검색 필드는 한 행 전체를 사용합니다.
+- 새 예약의 검토 총액과 전송 `nightlyRate/rateOverride`는 같은 순수 계산 함수를 사용합니다.
+- 대형 객실 목록은 TanStack Virtual로 현재 viewport와 overscan 행만 렌더링하면서 sticky 날짜·객실 축을 유지합니다. 리포트 데이터는 기존 25/50/100행 서버 페이지 경계를 유지합니다.
+- CMS 이미지 URL은 공개 호텔·부킹·관리자 미리보기에서 동일한 quoted CSS serializer를 통과하여 괄호·따옴표·제어문자가 CSS token을 종료하지 못합니다.
+- voucher 메일 재시도는 delivery ID를 provider body `messageId`와 `Idempotency-Key`에 동일하게 사용합니다. 승인된 adapter가 이 키를 보존하지 않으면 운영 연결을 허용하지 않습니다.

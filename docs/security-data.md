@@ -38,6 +38,8 @@
 14. 카드 원문·CVV 미수집·미저장; 카드 참조는 모든 비숫자 구분자를 제외한 숫자가 12자리 이상이면 앱과 DB에서 거부
 15. 데이터 임포트는 kind별 단일 capability 정책과 검증된 Supabase identity·MFA 추가 인증을 공통 강제
 16. 외부 플랫폼·임포트 API의 미분류 예외는 UUID 오류 ID만 공개하고 SQL·driver 원문은 서버 로그로 제한
+17. CMS 이미지 URL은 quoted CSS serializer로 괄호·따옴표·제어문자를 percent-encode한 뒤에만 `background-image`에 사용
+18. 채널 연결·매핑을 포함한 모든 PMS mutation은 도메인 변경과 멱등 영수증을 같은 transaction에서 commit
 
 Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV !== production`, `PMS_ALLOW_DEMO_AUTH=true`, 32자 이상 `PMS_DEMO_AUTH_TOKEN`, 같은 값의 `x-aurora-demo-token`, `PMS_DEMO_USER_EMAIL`, 그리고 해당 이메일의 수동 `role_assignments`가 모두 있어야만 성립합니다. 런타임 초기화와 seed는 어떤 관리자 역할도 생성하지 않습니다.
 

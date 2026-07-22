@@ -40,6 +40,7 @@
     "@expo-google-fonts/noto-sans-kr": "^0.4.3",
     "@pdf-lib/fontkit": "^1.1.1",
     "@tanstack/react-query": "^5.101.2",
+    "@tanstack/react-virtual": "^3.14.7",
     "fflate": "^0.8.2",
     "jose": "6.2.3",
     "next": "^16.2.10",
@@ -61,7 +62,8 @@
     "typescript": "5.9.3"
   },
   "overrides": {
-    "postcss": "8.5.19"
+    "postcss": "8.5.19",
+    "sharp": "0.35.3"
   },
   "type": "module"
 }

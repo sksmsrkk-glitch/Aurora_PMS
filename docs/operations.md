@@ -16,11 +16,11 @@
 
 ### 멀티호텔 SaaS 배포 추가 점검
 
-- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607210025_hotelstory_final_operations`까지 적용 및 80개 tenant policy 계약 확인
+- [ ] `202607190016_multihotel_saas_control_plane`부터 `202607220029_quality_integrity_closure`까지 순서대로 적용 및 80개 tenant policy 계약 확인
 - [ ] 채널 입금 스테이징 표본에서 ACCRUED → PAID → RESTORE → ACCRUED와 원전표 REVERSED·반대전표·불변 사건을 대사
 - [ ] `AURORA_TENANT_BASE_DOMAIN`, `AURORA_PLATFORM_HOSTS`, `PMS_REQUIRE_PLATFORM_MFA=true` 확인
 - [ ] Vercel·GitHub에 동일한 `CRON_SECRET`을 설정하고 즉시 kick, GitHub 5분 sweep, Vercel 일일 fail-safe의 성공·재시도·DEAD incident 확인
-- [ ] `TALOS_EMAIL_ENDPOINT`, `TALOS_EMAIL_SECRET`, `TALOS_EMAIL_FROM`을 production/staging별로 분리하고 승인된 HTTPS 메일 adapter에서 delivery ID 멱등 처리를 확인
+- [ ] `TALOS_EMAIL_ENDPOINT`, `TALOS_EMAIL_SECRET`, `TALOS_EMAIL_FROM`을 production/staging별로 분리하고 승인된 HTTPS 메일 adapter가 body `messageId`와 `Idempotency-Key`의 동일 delivery ID를 같은 결과로 deduplicate하는지 계약 테스트
 - [ ] scheduler reaper와 직접 claim 모두 stale RUNNING lease를 `LEASE_EXPIRED` attempt로 종결하고, attempts 잔여 여부에 따라 RETRY/DEAD로 나누는지 확인
 - [ ] outbox·ARI source 재실패가 RUNNING lease를 보존하고 DEAD만 attempts=0·last_error=NULL·새 attempt cycle로 재개하는지 확인
 - [ ] 정지 subscription의 custom domain·플랫폼 `/hotel`·직접 CMS projection이 노출되지 않고, 정지·미배정 계정 로그인이 403 안내에 머무는지 확인
