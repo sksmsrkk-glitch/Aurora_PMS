@@ -85,6 +85,13 @@ body {
   overflow-x: clip;
 }
 
+/* Reports must adapt their controls to the main column instead of hiding
+   overflow at the workspace boundary. Wide result tables remain contained by
+   their dedicated .report-scroll region. */
+.workspace-reports {
+  overflow-x: visible;
+}
+
 .sidebar {
   padding: 1.75rem 1rem 1.125rem;
 }
@@ -960,6 +967,8 @@ body {
 .report-workspace {
   grid-template-columns: 18rem minmax(0, 1fr);
   gap: 1.25rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .report-catalog,
@@ -1004,8 +1013,32 @@ body {
 }
 
 .report-filters {
-  gap: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 13.75rem), 1fr));
+  gap: 0.75rem 1rem;
+  align-items: end;
   padding: 1rem;
+}
+
+.report-filters > * {
+  min-width: 0;
+}
+
+.report-filters input,
+.report-filters select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.report-filter-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.report-filter-actions > button {
+  width: 100%;
+  min-width: 0;
 }
 
 .report-filters label > span,

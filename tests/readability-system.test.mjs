@@ -7,6 +7,7 @@ const globals = await readFile(new URL("../app/globals.css", import.meta.url), "
 const css = await readFile(new URL("../app/styles/readability-system.css", import.meta.url), "utf8");
 const finalOperationsCss = await readFile(new URL("../app/styles/hotelstory-final-operations.css", import.meta.url), "utf8");
 const finalOperationsSource = await readFile(new URL("../app/hotelstory-final-operations.tsx", import.meta.url), "utf8");
+const reportsSource = await readFile(new URL("../app/reports-center.tsx", import.meta.url), "utf8");
 
 test("the readability contract is the final PMS stylesheet", () => {
   const imports = [...globals.matchAll(/@import\s+"([^"]+)"/gu)].map((match) => match[1]);
@@ -52,4 +53,13 @@ test("HotelStory parity workspaces contain wide calendars and tables on mobile",
   assert.match(finalOperationsCss, /\.hs-table-wrap\{overflow:auto/u);
   assert.match(finalOperationsCss, /\.hs-timeline-wrap\{overflow:auto/u);
   assert.match(finalOperationsCss, /@media\(max-width:720px\)/u);
+});
+
+test("report filters adapt to the main column without clipping controls", () => {
+  assert.match(css, /\.workspace-reports\s*\{[^}]*overflow-x:\s*visible/su);
+  assert.match(css, /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*13\.75rem\),\s*1fr\)\)/u);
+  assert.match(css, /\.report-filters\s*>\s*\*\s*\{[^}]*min-width:\s*0/su);
+  assert.match(css, /\.report-filters input,[\s\S]*?\.report-filters select\s*\{[^}]*width:\s*100%[^}]*box-sizing:\s*border-box/su);
+  assert.match(reportsSource, /className="report-filter-actions"/u);
+  assert.doesNotMatch(css, /\.report-scroll\s*\{[^}]*overflow-x:\s*(?:visible|clip|hidden)/su);
 });
