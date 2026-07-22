@@ -12,7 +12,7 @@
 | 등록 PMS action | 85 | action registry key |
 | Unit/behavior test | 65 | `tests/*.test.mjs`의 test case |
 | PostgreSQL integration test | 35 | `tests/*.integration.mjs`의 test case |
-| PMS CSS source | 234,818 bytes / 14 files | root PMS layout imports |
+| PMS CSS source | 235,121 bytes / 14 files | root PMS layout imports |
 | Public hotel CSS source | 21,106 bytes / 1 file | isolated `app/hotel/hotel.css` |
 | 상세 문서 | 9 files | `docs/*.md` (generated 제외) |
 
