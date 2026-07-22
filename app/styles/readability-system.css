@@ -1004,8 +1004,20 @@ body {
 }
 
 .report-filters {
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, 150px), 1fr)
+  );
   gap: 0.75rem;
   padding: 1rem;
+}
+
+.report-filters > * {
+  min-width: 0;
+}
+
+.report-filters .wide {
+  grid-column: 1 / -1;
 }
 
 .report-filters label > span,

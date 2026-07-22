@@ -4,3 +4,14 @@ export function occupiedRoomDates(
 ): Set<string> {
   return new Set(spans.flatMap((span) => span.dates));
 }
+
+/** A move beginning on arrival is semantically a full-stay assignment. */
+export function normalizedRoomMoveMode(
+  requested: "FULL" | "FROM_DATE",
+  arrivalDate: string,
+  moveDate: string,
+): "FULL" | "FROM_DATE" {
+  return requested === "FROM_DATE" && moveDate > arrivalDate
+    ? "FROM_DATE"
+    : "FULL";
+}

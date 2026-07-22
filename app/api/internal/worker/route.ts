@@ -14,6 +14,7 @@ import {
 } from "../../../../db/pms-database";
 import { verifyPmsSchemaContract } from "../../../../db/schema-contract";
 import type { VoucherPayload } from "../../pms/voucher-service";
+import { voucherAdapterRequest } from "./voucher-adapter-contract";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -267,7 +268,8 @@ async function processJob(job: WorkerJob) {
       // The provider must honor the delivery id as its idempotency key. If the
       // provider accepts mail but the DB acknowledgement times out, a retry is
       // therefore observable without delivering a duplicate message.
-      const response=await postJson(endpoint,{messageId:delivery.id,from,to:delivery.recipient_email,subject:delivery.subject,html:renderVoucherHtml(voucher as unknown as VoucherPayload,false),metadata:{propertyId:job.property_id,reservationId:delivery.reservation_id,language:delivery.language,showAmount:delivery.show_amount}},{Authorization:`Bearer ${secret}`,"Idempotency-Key":String(delivery.id)});
+      const adapter=voucherAdapterRequest({deliveryId:String(delivery.id),secret,from,to:String(delivery.recipient_email),subject:String(delivery.subject),html:renderVoucherHtml(voucher as unknown as VoucherPayload,false),propertyId:job.property_id,reservationId:String(delivery.reservation_id),language:delivery.language,showAmount:delivery.show_amount});
+      const response=await postJson(endpoint,adapter.body,adapter.headers);
       if(!response.ok)throw Object.assign(new Error(`Email adapter returned ${response.status}`),{httpStatus:response.status});
       let receipt:Record<string,unknown>={};try{receipt=object(await response.json());}catch{/* A 2xx adapter may deliberately return no body. */}
       await db.prepare("UPDATE reservation_voucher_deliveries SET status='SENT',provider_message_id=?,sent_at=?,last_error=NULL WHERE id=? AND property_id=pms_current_property_id()").bind(receipt.messageId?String(receipt.messageId):null,now,job.source_id).run();

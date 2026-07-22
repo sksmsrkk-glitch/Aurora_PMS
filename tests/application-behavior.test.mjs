@@ -17,7 +17,16 @@ import { demoAuthenticationEnabled } from "../app/api/pms/auth-policy.ts";
 import { clientAddress } from "../app/api/request-policy.ts";
 import { assertSafeQaTarget } from "../scripts/qa-target.mjs";
 import { safeRouteError } from "../app/api/safe-route-error.ts";
-import { occupiedRoomDates } from "../app/room-board-coverage.ts";
+import {
+  normalizedRoomMoveMode,
+  occupiedRoomDates,
+} from "../app/room-board-coverage.ts";
+import {
+  reservationCommandInput,
+  reservationDisplayedTotal,
+} from "../app/reservation-wizard.tsx";
+import { cssUrl } from "../app/css-url.ts";
+import { voucherAdapterRequest } from "../app/api/internal/worker/voucher-adapter-contract.ts";
 
 const root = new URL("../", import.meta.url);
 
@@ -91,6 +100,75 @@ test("room-board covered dates disable every cell beneath an assignment span", (
   assert.equal(occupied.has("2032-01-01"), true);
   assert.equal(occupied.has("2032-01-03"), false);
   assert.equal(occupied.has("2032-01-04"), true);
+});
+
+test("arrival-day room moves are normalized to an unambiguous full stay", () => {
+  assert.equal(
+    normalizedRoomMoveMode("FROM_DATE", "2032-01-01", "2032-01-01"),
+    "FULL",
+  );
+  assert.equal(
+    normalizedRoomMoveMode("FROM_DATE", "2032-01-01", "2032-01-02"),
+    "FROM_DATE",
+  );
+});
+
+test("reservation review and command use the same nightly-rate resolver", () => {
+  const search = {
+    arrival: "2032-01-01",
+    departure: "2032-01-03",
+    adults: "2",
+    children: "0",
+  };
+  const guest = { nightlyRate: "" };
+  const automatic = reservationCommandInput(search, guest, "rt", "BAR", 125000);
+  assert.equal(automatic.nightlyRate, "125000");
+  assert.equal(automatic.rateOverride, "false");
+  assert.equal(
+    reservationDisplayedTotal("", { average: 125000, total: 260000 }, 2),
+    260000,
+  );
+  const manual = reservationCommandInput(
+    search,
+    { nightlyRate: "140000" },
+    "rt",
+    "BAR",
+    125000,
+  );
+  assert.equal(manual.nightlyRate, "140000");
+  assert.equal(manual.rateOverride, "true");
+  assert.equal(
+    reservationDisplayedTotal("140000", { average: 125000, total: 260000 }, 2),
+    280000,
+  );
+});
+
+test("CMS image URLs cannot terminate their quoted CSS url token", () => {
+  const serialized = cssUrl('https://cdn.example/hero)name("night").webp');
+  assert.equal(
+    serialized,
+    'url("https://cdn.example/hero%29name%28%22night%22%29.webp")',
+  );
+});
+
+test("voucher provider retries preserve the delivery idempotency contract", () => {
+  const input = {
+    deliveryId: "delivery-42",
+    secret: "adapter-secret",
+    from: "hotel@example.com",
+    to: "guest@example.com",
+    subject: "Reservation",
+    html: "<p>Voucher</p>",
+    propertyId: "hotel-a",
+    reservationId: "reservation-a",
+    language: "KO",
+    showAmount: true,
+  };
+  const first = voucherAdapterRequest(input);
+  const retry = voucherAdapterRequest(input);
+  assert.deepEqual(retry, first);
+  assert.equal(first.headers["Idempotency-Key"], input.deliveryId);
+  assert.equal(first.body.messageId, input.deliveryId);
 });
 
 test("demo authentication is flag, environment, and constant-token bound", () => {

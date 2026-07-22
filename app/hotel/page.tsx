@@ -11,6 +11,7 @@ import { getCachedWebsiteContent } from "./content";
 import type { WebsiteSectionId } from "../website-editor-contract";
 import { resolvePublicPropertyForRequest } from "../api/booking/property-resolver";
 import CompanyFooter from "../company-footer";
+import { cssUrl } from "../css-url";
 
 // Published CMS content is refreshed at most one minute after an administrator
 // changes it without forcing every public request through a server render.
@@ -39,7 +40,7 @@ export default async function HotelHomePage() {
   const siteStyle = { "--hotel-blue": settings.themeAccent } as CSSProperties;
   const heroStyle = {
     "--hotel-hero-height": `${settings.heroHeight}px`,
-    ...(hero ? { backgroundImage: `linear-gradient(90deg,rgba(5,13,29,${Math.min(.92, overlay + .14)}),rgba(5,13,29,${Math.max(.08, overlay * .38)})),url(${JSON.stringify(hero.url)})` } : {}),
+    ...(hero ? { backgroundImage: `linear-gradient(90deg,rgba(5,13,29,${Math.min(.92, overlay + .14)}),rgba(5,13,29,${Math.max(.08, overlay * .38)})),${cssUrl(hero.url)}` } : {}),
   } as CSSProperties;
 
   const sections: Record<WebsiteSectionId, ReactNode> = {
@@ -51,7 +52,7 @@ export default async function HotelHomePage() {
         {content.rooms.map((room,index)=>{
           const image=room.media.find((item)=>item.role==="CARD")||room.media[0];
           return <article key={room.id}>
-            <i className={`room-art ${image?"cms-room-image":`art-${["one","two","three"][index%3]}`}`} style={image?{backgroundImage:`url(${JSON.stringify(image.url)})`}:undefined}/>
+            <i className={`room-art ${image?"cms-room-image":`art-${["one","two","three"][index%3]}`}`} style={image?{backgroundImage:cssUrl(image.url)}:undefined}/>
             <small>{room.code} · {money(room.baseRate)}부터</small>
             <h3>{room.marketingName}</h3>
             <p>{room.shortDescription}</p>

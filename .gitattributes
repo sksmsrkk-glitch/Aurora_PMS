@@ -1,0 +1,2 @@
+# Generated documentation must be byte-identical on Windows and Linux CI.
+docs/generated/* text eol=lf
