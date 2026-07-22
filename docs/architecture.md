@@ -111,6 +111,7 @@ sequenceDiagram
 | `app/api/pms/command-gateway.ts` | command 실행, strict idempotency receipt, 감사·Outbox 기록 |
 | `app/api/pms/read-model.ts` | core/full projection과 압축·짧은 읽기 cache |
 | `app/api/pms/frontdesk-read.ts` | 권한 인식 통합 검색, 프런트 페이지, 예약 가용성·달력·단건 상세·인라인 로그 projection |
+| `app/api/pms/room-assignment-service.ts` | 물리 객실 전체 배정·선택일 이후 이동·배정 해제의 낙관적 잠금·멱등 transaction |
 | `app/api/pms/voucher-service.ts` | tenant-scoped 예약·숙박객·상품·일자 요금의 바우처 전용 bounded projection |
 | `app/api/pms/voucher-document.ts` | 국문/영문 HTML·PDF·XLSX 렌더링과 금액 표시 정책; PDF에 Noto Sans KR subset 임베딩 |
 | `app/api/pms/hotelstory-catalog-service.ts` | 채널/상품 마감, 4축 블럭요금 projection·bulk command, 운영 카탈로그 CRUD |
@@ -173,6 +174,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | --- | --- | --- |
 | Core Snapshot | `GET /api/pms?view=core` | 오늘 도착·현재 재실·오늘 체크아웃과 객실·14일 재고만 제공; 과거 전체 예약은 제외 |
 | 프런트 페이지 | `GET /api/pms?view=frontdesk` | 업무 큐·복합 필터·정렬·최대 50행 server pagination |
+| 룸 배정 보드 | `GET /api/pms?view=room_board&from=...&to=...` | 최대 31일 객실·물리 숙박 박·미배정 예약을 한 batch로 읽고 연속 박을 span으로 projection; 지원 principal의 PII 마스킹 유지 |
 | 통합 검색 | `GET /api/pms?view=search` | 현재 직원이 열 수 있는 예약·객실·AR 도메인만 각각 8/6/6건 반환; AR 잔액은 청구서의 저장 값이 아니라 원장 debit-credit 합계로 계산 |
 | 예약 가용성 | `GET /api/pms?view=reservation_availability` | 최대 30박의 타입 재고·블록 hold·Rate Plan·MLOS·CTA·CTD·일자 요금 계산 |
 | 예약 달력 | `GET /api/pms?view=reservation_calendar` | 한 상품·한 달의 일자별 타입 가격과 잔여/전체 재고를 고정 배치로 계산 |
@@ -193,6 +195,9 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 ### 원자성 단위
 
 - 예약 생성: guest + reservation + folio window + 타입/객실 night + audit + outbox가 하나의 batch입니다.
+- 객실 전체 배정: 기존 `reservation_nights` 제거 + 전 숙박일 재생성 + 대표 `room_id`/version + audit + outbox + idempotency가 하나의 batch이며 타입 재고는 변경하지 않습니다.
+- 부분 룸 무브: `moveDate` 이전 물리 박 보존 + 해당일 이후 물리 박 교체 + `room_moves` 1행 + 영업일 기준 대표 `room_id` + version/audit/outbox/idempotency가 하나의 batch입니다.
+- 배정 해제: `IN_HOUSE`를 거부한 뒤 물리 박과 대표 `room_id`만 제거하고 타입 재고는 보존합니다.
 - 예약 상세: staying guest + booker/option reservation update + version mutation + audit + outbox + idempotency가 하나의 batch입니다.
 - 예약 바우처 메일: immutable document snapshot + delivery + `VOUCHER_EMAIL` worker job + audit + idempotency가 하나의 batch입니다.
 - 연회 예약: venue/day advisory lock 아래 overlap trigger + 예약 + before/after audit + idempotency가 하나의 batch입니다.
@@ -223,6 +228,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | ADR-013 | transaction-local tenant context + NOBYPASSRLS app role | 문자열 `replaceAll`로 property literal을 치환하면 누락 쿼리를 정적으로 보장할 수 없음 | adapter가 매 statement/batch에 `aurora_app`과 `app.property_id`를 설정하고 DB가 교차 접근 거부 |
 | ADR-014 | 실제 workspace URL + action Context | `useState` 화면 전환은 새로고침과 딥링크가 깨지고 공통 props가 전 컴포넌트로 전파됨 | 13개 App Router 경로와 공용 command context 사용 |
 | ADR-015 | command receipt + TanStack Query invalidation | 객실 1실 변경에도 30개 쿼리 snapshot을 재계산·재렌더하던 God payload 제거 | POST는 변경 참조만 반환하고 UI가 관련 projection cache를 무효화 |
+| ADR-016 | 타입 재고와 실물 객실 배정을 독립 원장으로 유지 | 예약 판매 가능 수량과 특정 호실의 날짜 충돌은 생명주기와 제약이 다름 | 배정/이동/해제가 `reservation_type_nights`를 건드리지 않으며 DB unique·version·OOS 검사가 물리 충돌을 차단 |
 | ADR-016 | PostgreSQL service 기반 CI behavior gate | 소스 정규식과 테스트 내부 SQLite trigger는 운영 schema drift를 잡지 못함 | PR마다 빈 PostgreSQL 17에 전체 migration을 적용하고 실제 RLS·trigger·경합 실행 |
 | ADR-017 | 예약자와 투숙자를 다른 운영 개념으로 저장 | 여행사·회사·가족 예약에서는 결제/연락 주체와 실제 투숙자가 다름 | booker는 예약 snapshot, guest는 투숙자 profile이며 상세 화면과 감사에 함께 투영 |
 | ADR-018 | 취소정책·일자요금 예약 시점 snapshot | 상품 master 변경이 과거 바우처·취소수수료·정산 근거를 바꾸면 안 됨 | JSONB cancellation terms와 immutable night rates를 상세/바우처가 우선 사용 |

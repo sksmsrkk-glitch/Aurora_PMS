@@ -3,7 +3,7 @@
 /** Talos PMS application shell and cross-domain operational workspaces. */
 
 import dynamic from "next/dynamic";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDialogController } from "../../dialog-controller";
@@ -41,6 +41,7 @@ const BanquetManager = dynamic(() => import("../../hotelstory-final-operations")
 const ReservationImportCenter = dynamic(() => import("../../hotelstory-final-operations").then(module=>module.ReservationImportCenter), { loading: workspaceLoading });
 const HotelMemberManager = dynamic(() => import("../../hotelstory-final-operations").then(module=>module.HotelMemberManager), { loading: workspaceLoading });
 const HotelStoryQuickLinks = dynamic(() => import("../../hotelstory-final-operations").then(module=>module.HotelStoryQuickLinks), { loading: workspaceLoading });
+const FrontdeskRoomBoard = dynamic(() => import("../../frontdesk-room-board"), { loading: workspaceLoading });
 
 /** Warms only the code chunk associated with a user's navigation intent. */
 function prefetchWorkspaceModule(workspace: PmsWorkspace) {
@@ -107,6 +108,7 @@ async function fetchPmsData<T=Data>(url:string):Promise<T> {
 export default function PmsShell({ initialSection }: { initialSection: PmsWorkspace }) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [data,setData] = useState<Data|null>(null); const [error,setError] = useState(""); const [busy,setBusy] = useState("");
   const [domainStatus,setDomainStatus]=useState<DomainStatus>(idleDomains);
@@ -116,7 +118,8 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
   const activeDomain=sectionAllowed?domainForWorkspace(section):null;
   const [selected,setSelected] = useState<Reservation|null>(null); const [roomQuery,setRoomQuery] = useState(""); const [roomFilter,setRoomFilter] = useState("ALL");
   const [quickPanel,setQuickPanel] = useState<"notifications"|"profile"|null>(null); const searchRef=useRef<GlobalSearchHandle>(null);
-  const [newBooking,setNewBooking] = useState(false);
+  const [newBooking,setNewBooking] = useState<{arrivalDate?:string;roomTypeId?:string;roomId?:string}|null>(null);
+  const frontdeskView=searchParams.get("view")==="board"?"board":"list";
   const [cashierModal,setCashierModal] = useState<"open"|"close"|null>(null);
   const navigateSection = useCallback((workspace: string) => {
     const target = parsePmsWorkspace(workspace);
@@ -187,7 +190,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
       <div className="sidebar-bottom"><div className={`system-ok ${systemHealthy?'':'warn'}`}><span/> {systemHealthy?'인터페이스 오류 없음':`인터페이스 실패 ${failedInterfaceCount}건`}</div><button type="button" className="profile" aria-expanded={quickPanel==='profile'} onClick={()=>setQuickPanel(current=>current==='profile'?null:'profile')}><span>{data.principal.displayName.slice(0,2).toUpperCase()}</span><div><b>{data.principal.displayName}</b><small>{roleLabels[data.principal.role]||data.principal.role}</small></div><i>•••</i></button></div>
     </aside>
     <main className={`workspace workspace-${section}`}>
-      <header><div><div className="mobile-brand" aria-label="Talos PMS"><b className="talos-wordmark">TALOS PMS</b></div><p className="eyebrow">{data.property.name} · 영업일 {data.property.business_date}</p><h1>{nestedPage==='checkin'?'당일 체크인':nestedPage==='checkout'?'당일 체크아웃':nestedPage==='occupancy'?'객실 점유 현황':nestedPage==='imports'?'예약 일괄 등록':nestedPage==='banquet'?'연회 예약':nestedPage==='members'?'호텔·홈페이지 회원':section==='overview'?'오늘의 오퍼레이션':section==='frontdesk'?'예약·체크인':section==='inventory'?'요금·재고 캘린더':section==='website'?'호텔 홈페이지 관리':section==='groups'?'그룹·거래처':section==='finance'?'폴리오·미수금':section==='accounting'?'회계·손익':section==='channels'?'채널 관리':section==='rooms'?'객실 상태':section==='reports'?'리포트 센터':section==='master'?'객실 설정':section==='revenue'?'매출 분석':section==='users'?'직원·권한':'영업일 마감'}</h1></div><div className="header-actions">{searchAvailable&&<GlobalPmsSearch ref={searchRef} onNavigate={()=>setQuickPanel(null)}/>} {section==='rooms'&&<ListSearch value={roomQuery} onChange={setRoomQuery} label="객실 검색" placeholder="객실번호·타입·층·담당자" count={filteredRooms.length} className="header-room-search"/>}{data.principal.capabilities.includes('CASHIER_WRITE')&&<button className={`cashier-btn ${data.controls.openCashier?'open':''}`} onClick={()=>setCashierModal(data.controls.openCashier?'close':'open')}><i/> {data.controls.openCashier?'캐셔 마감':'캐셔 개시'}</button>}<button type="button" className="icon-btn" aria-label="운영 알림" aria-expanded={quickPanel==='notifications'} onClick={()=>setQuickPanel(current=>current==='notifications'?null:'notifications')}>●{notificationCount>0&&<b>{notificationCount}</b>}</button>{data.principal.capabilities.includes('RESERVATION_WRITE')&&<button className="primary" onClick={()=>setNewBooking(true)}>＋ 새 예약</button>}</div></header>
+      <header><div><div className="mobile-brand" aria-label="Talos PMS"><b className="talos-wordmark">TALOS PMS</b></div><p className="eyebrow">{data.property.name} · 영업일 {data.property.business_date}</p><h1>{nestedPage==='checkin'?'당일 체크인':nestedPage==='checkout'?'당일 체크아웃':nestedPage==='occupancy'?'객실 점유 현황':nestedPage==='imports'?'예약 일괄 등록':nestedPage==='banquet'?'연회 예약':nestedPage==='members'?'호텔·홈페이지 회원':section==='overview'?'오늘의 오퍼레이션':section==='frontdesk'?'예약·체크인':section==='inventory'?'요금·재고 캘린더':section==='website'?'호텔 홈페이지 관리':section==='groups'?'그룹·거래처':section==='finance'?'폴리오·미수금':section==='accounting'?'회계·손익':section==='channels'?'채널 관리':section==='rooms'?'객실 상태':section==='reports'?'리포트 센터':section==='master'?'객실 설정':section==='revenue'?'매출 분석':section==='users'?'직원·권한':'영업일 마감'}</h1></div><div className="header-actions">{searchAvailable&&<GlobalPmsSearch ref={searchRef} onNavigate={()=>setQuickPanel(null)}/>} {section==='rooms'&&<ListSearch value={roomQuery} onChange={setRoomQuery} label="객실 검색" placeholder="객실번호·타입·층·담당자" count={filteredRooms.length} className="header-room-search"/>}{data.principal.capabilities.includes('CASHIER_WRITE')&&<button className={`cashier-btn ${data.controls.openCashier?'open':''}`} onClick={()=>setCashierModal(data.controls.openCashier?'close':'open')}><i/> {data.controls.openCashier?'캐셔 마감':'캐셔 개시'}</button>}<button type="button" className="icon-btn" aria-label="운영 알림" aria-expanded={quickPanel==='notifications'} onClick={()=>setQuickPanel(current=>current==='notifications'?null:'notifications')}>●{notificationCount>0&&<b>{notificationCount}</b>}</button>{data.principal.capabilities.includes('RESERVATION_WRITE')&&<button className="primary" onClick={()=>setNewBooking({})}>＋ 새 예약</button>}</div></header>
       {quickPanel==='notifications'&&<aside className="quick-panel notification-panel" aria-label="운영 알림"><div className="quick-panel-head"><div><span>NOW</span><h2>지금 확인할 일</h2></div><button type="button" aria-label="알림 닫기" onClick={()=>setQuickPanel(null)}>×</button></div>{notifications.map(item=><button type="button" key={item.id} onClick={()=>{navigateSection(item.section);setQuickPanel(null)}}><span><b>{item.title}</b><small>{item.detail}</small></span><i>›</i></button>)}</aside>}
       {quickPanel==='profile'&&<aside className="quick-panel profile-panel" aria-label="사용자 메뉴"><div className="quick-profile"><span>{data.principal.displayName.slice(0,2).toUpperCase()}</span><div><b>{data.principal.displayName}</b><small>{data.principal.email}</small></div></div><dl><div><dt>현재 역할</dt><dd>{roleLabels[data.principal.role]||data.principal.role}</dd></div><div><dt>권한 수</dt><dd>{data.principal.capabilities.length}개</dd></div></dl>{data.principal.capabilities.includes('USER_ADMIN')&&<button type="button" onClick={()=>window.location.assign('/platform')}>멀티호텔 관리 콘솔 <i>›</i></button>}{canViewWorkspace(data.principal.workspaceAccess,'audit')&&<button type="button" onClick={()=>{navigateSection('audit');setQuickPanel(null)}}>내 작업 감사 로그 보기 <i>›</i></button>}<button type="button" onClick={async()=>{await fetch('/api/auth/logout',{method:'POST'});window.location.replace('/login')}}>로그아웃</button></aside>}
       {error&&<div className="toast" role="alert"><span>!</span>{error}<button onClick={()=>setError('')}>×</button></div>}
@@ -210,7 +213,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
         </div>
         <section className="insight-strip"><span>✦</span><div><b>Talos 인사이트</b><p>{insight?.message}</p></div><button onClick={()=>navigateSection(insight?.workspace||'frontdesk')}>{insight?.actionLabel||'운영 현황 보기'}</button></section>
       </>}
-      {section==='frontdesk'&&!nestedPage&&<><HotelStoryQuickLinks workspace="frontdesk"/><FrontdeskWorkbench key={data.principal.propertyId} propertyId={data.principal.propertyId} businessDate={data.property.business_date} onOpen={(reservation:FrontdeskReservation)=>setSelected(reservation)}/></>}
+      {section==='frontdesk'&&!nestedPage&&<><HotelStoryQuickLinks workspace="frontdesk"/><div className="frontdesk-view-toggle" role="group" aria-label="프런트데스크 보기 방식"><button type="button" className={frontdeskView==='list'?'on':''} aria-pressed={frontdeskView==='list'} onClick={()=>router.replace('/frontdesk',{scroll:false})}>예약 목록</button><button type="button" className={frontdeskView==='board'?'on':''} aria-pressed={frontdeskView==='board'} onClick={()=>router.replace(`/frontdesk?view=board&from=${data.property.business_date}&days=7`,{scroll:false})}>룸 배정 보드</button></div>{frontdeskView==='board'?<FrontdeskRoomBoard businessDate={data.property.business_date} canWrite={data.principal.capabilities.includes('RESERVATION_WRITE')} onOpen={(reservation:FrontdeskReservation)=>setSelected(reservation)} onCreate={prefill=>setNewBooking(prefill)}/>:<FrontdeskWorkbench key={data.principal.propertyId} propertyId={data.principal.propertyId} businessDate={data.property.business_date} onOpen={(reservation:FrontdeskReservation)=>setSelected(reservation)}/>}</>}
       {section==='frontdesk'&&nestedPage==='checkin'&&<StayOperationsCenter mode="checkin" businessDate={data.property.business_date}/>}
       {section==='frontdesk'&&nestedPage==='checkout'&&<StayOperationsCenter mode="checkout" businessDate={data.property.business_date}/>}
       {section==='frontdesk'&&nestedPage==='occupancy'&&<StayOperationsCenter mode="occupancy" businessDate={data.property.business_date}/>}
@@ -232,7 +235,7 @@ export default function PmsShell({ initialSection }: { initialSection: PmsWorksp
     </main>
     {selected&&<ReservationDrawer r={selected} rooms={data.rooms} close={()=>setSelected(null)} capabilities={data.principal.capabilities} canExport={data.principal.canExport} cashierOpen={!!data.controls.openCashier}/>}
     <nav className="mobile-task-nav" style={{gridTemplateColumns:`repeat(${Math.max(1,primaryNavigation.length)},minmax(0,1fr))`}} aria-label="모바일 핵심 업무">{primaryNavigation.map(item=><button type="button" key={item.workspace} className={section===item.workspace?'active':''} aria-current={section===item.workspace?'page':undefined} onClick={()=>navigateSection(item.workspace)}><i aria-hidden="true">{item.icon}</i><span>{item.label}</span></button>)}</nav>
-    {newBooking&&<ReservationWizard rooms={data.rooms} businessDate={data.property.business_date} close={()=>setNewBooking(false)}/>}
+    {newBooking&&<ReservationWizard rooms={data.rooms} businessDate={data.property.business_date} initial={newBooking} close={()=>setNewBooking(null)}/>}
     {cashierModal&&<CashierModal mode={cashierModal} close={()=>setCashierModal(null)}/>} 
   </div></PmsActionProvider>;
 }

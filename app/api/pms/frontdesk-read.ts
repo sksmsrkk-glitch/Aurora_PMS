@@ -3,6 +3,7 @@
 import type { PmsDatabase } from "../../../db/pms-database";
 import type { Principal } from "./auth";
 import { canViewWorkspace } from "../../access-control";
+import { addIsoDays } from "../../../lib/format";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const QUEUES = ["TODAY", "ALL", "DUE_IN", "IN_HOUSE", "DUE_OUT", "UNASSIGNED", "BALANCE"] as const;
@@ -156,6 +157,91 @@ function maskReservationRows(rows: Array<Record<string, unknown>>, principal: Pr
     phone: "***-****-****",
     notes: "지원 조회에서 마스킹됨",
   }));
+}
+
+type RoomBoardReservation=Record<string,unknown>&{
+  id:string;arrival_date:string;departure_date:string;room_type_id:string;version:number;
+};
+type RoomBoardNight=RoomBoardReservation&{assignment_room_id:string;stay_date:string};
+
+function boardRange(params:URLSearchParams){
+  const from=params.get("from")||"",to=params.get("to")||"";
+  if(!/^\d{4}-\d{2}-\d{2}$/u.test(from)||!/^\d{4}-\d{2}-\d{2}$/u.test(to))
+    throw new PmsReadError("룸 배정 보드의 시작일과 종료일이 필요합니다.");
+  const start=new Date(`${from}T00:00:00Z`),end=new Date(`${to}T00:00:00Z`);
+  const days=Math.round((end.valueOf()-start.valueOf())/86_400_000);
+  if(!Number.isFinite(days)||days<1||days>31)
+    throw new PmsReadError("룸 배정 보드는 1일부터 최대 31일까지 조회할 수 있습니다.");
+  return {from,to,days,dates:Array.from({length:days},(_,index)=>addIsoDays(from,index))};
+}
+
+function boardReservation(row:RoomBoardReservation){
+  return {
+    id:String(row.id),confirmation_no:String(row.confirmation_no),first_name:String(row.first_name),last_name:String(row.last_name),
+    vip_level:String(row.vip_level||"NONE"),room_number:row.room_number==null?null:String(row.room_number),room_id:row.room_id==null?null:String(row.room_id),
+    room_type_id:String(row.room_type_id),room_type_code:String(row.room_type_code),room_type_name:String(row.room_type_name),
+    arrival_date:String(row.arrival_date),departure_date:String(row.departure_date),status:String(row.status),adults:Number(row.adults),children:Number(row.children),
+    source:String(row.source),rate_plan:String(row.rate_plan),nightly_rate:Number(row.nightly_rate),eta:row.eta==null?null:String(row.eta),notes:String(row.notes||""),
+    balance:Number(row.balance||0),version:Number(row.version),
+  };
+}
+
+/**
+ * Bounded room/night projection for the physical assignment board. All source
+ * rows are fetched in one transaction batch and continuous spans are grouped in
+ * memory, avoiding one query per room or date while preserving move segments.
+ */
+export async function loadRoomBoard(db:PmsDatabase,params:URLSearchParams,principal:Principal){
+  const range=boardRange(params);
+  const reservationProjection=`r.id,r.confirmation_no,r.room_id,r.room_type_id,r.arrival_date,r.departure_date,r.status,r.adults,r.children,r.source,r.rate_plan,r.nightly_rate,r.eta,r.notes,r.version,
+    g.first_name,g.last_name,g.vip_level,rt.code room_type_code,rt.name room_type_name,rm.number room_number,
+    COALESCE((SELECT SUM(CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'PAYMENT' THEN -f.amount WHEN 'CHARGE_REVERSAL' THEN -f.amount WHEN 'PAYMENT_REVERSAL' THEN f.amount WHEN 'REFUND' THEN f.amount ELSE 0 END) FROM folio_entries f WHERE f.property_id=r.property_id AND f.reservation_id=r.id),0) balance`;
+  const [propertyResult,roomResult,nightResult,unassignedResult]=await db.batch([
+    db.prepare("SELECT business_date FROM properties WHERE id=pms_current_property_id() LIMIT 1"),
+    db.prepare(`SELECT rm.id,rm.number,rm.floor,rm.room_type_id,rt.code room_type_code,rt.name room_type_name,
+      rm.front_desk_status,rm.housekeeping_status,rm.version
+      FROM rooms rm JOIN room_types rt ON rt.id=rm.room_type_id AND rt.property_id=rm.property_id
+      WHERE rm.property_id=pms_current_property_id() AND rm.active ORDER BY rm.floor,rm.number`),
+    db.prepare(`SELECT rn.room_id assignment_room_id,rn.stay_date,${reservationProjection}
+      FROM reservation_nights rn
+      JOIN reservations r ON r.id=rn.reservation_id AND r.property_id=rn.property_id
+      JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id
+      JOIN room_types rt ON rt.id=r.room_type_id AND rt.property_id=r.property_id
+      LEFT JOIN rooms rm ON rm.id=rn.room_id AND rm.property_id=rn.property_id
+      WHERE rn.property_id=pms_current_property_id() AND rn.stay_date>=? AND rn.stay_date<?
+      ORDER BY rn.room_id,rn.reservation_id,rn.stay_date`).bind(range.from,range.to),
+    db.prepare(`SELECT ${reservationProjection}
+      FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id
+      JOIN room_types rt ON rt.id=r.room_type_id AND rt.property_id=r.property_id
+      LEFT JOIN rooms rm ON rm.id=r.room_id AND rm.property_id=r.property_id
+      WHERE r.property_id=pms_current_property_id() AND r.room_id IS NULL
+        AND r.status NOT IN ('CANCELLED','NO_SHOW','CHECKED_OUT') AND r.arrival_date<? AND r.departure_date>?
+      ORDER BY r.arrival_date,r.confirmation_no`).bind(range.to,range.from),
+  ]);
+  const maskedNights=maskReservationRows(nightResult.results,principal) as RoomBoardNight[];
+  const spans:Array<{id:string;roomId:string;startDate:string;endDate:string;dates:string[];reservation:ReturnType<typeof boardReservation>}>=[];
+  for(const row of maskedNights){
+    const previous=spans.at(-1),date=String(row.stay_date),reservation=boardReservation(row);
+    if(previous&&previous.roomId===String(row.assignment_room_id)&&previous.reservation.id===reservation.id&&previous.endDate===date){
+      previous.dates.push(date);previous.endDate=addIsoDays(date,1);
+    }else spans.push({id:`${row.assignment_room_id}:${reservation.id}:${date}`,roomId:String(row.assignment_room_id),startDate:date,endDate:addIsoDays(date,1),dates:[date],reservation});
+  }
+  const unassigned=maskReservationRows(unassignedResult.results,principal).map(row=>boardReservation(row as RoomBoardReservation));
+  const businessDate=String((propertyResult.results[0] as {business_date?:string})?.business_date||range.from);
+  const reservations=new Map<string,ReturnType<typeof boardReservation>>();
+  for(const span of spans)reservations.set(span.reservation.id,span.reservation);
+  for(const row of unassigned)reservations.set(row.id,row);
+  const values=[...reservations.values()];
+  return {
+    ...range,businessDate,rooms:roomResult.results,spans,unassigned,
+    summary:{
+      arrivals:values.filter(row=>row.arrival_date===businessDate&&row.status==="DUE_IN").length,
+      inHouse:values.filter(row=>row.status==="IN_HOUSE").length,
+      departures:values.filter(row=>row.departure_date===businessDate&&row.status==="IN_HOUSE").length,
+      unassigned:unassigned.length,
+      sellable:roomResult.results.filter(row=>row.housekeeping_status!=="OUT_OF_SERVICE").length,
+    },
+  };
 }
 
 /** Server-side pagination prevents a long-running property from hydrating years of stays. */
@@ -432,13 +518,14 @@ function productNightRate(facts:Awaited<ReturnType<typeof loadReservationFacts>>
   const relation=facts.roomPlanMap.get(`${type.id}:${plan.id}`) as ReservationFactRow|undefined;
   if(!relation||relation.active===false)return null;
   const calendar=facts.calendarMap.get(`${type.id}:${plan.id}:${date}`) as ReservationFactRow|undefined;
-  let base=calendar?.sell_rate==null?Number(relation.base_rate):Number(calendar.sell_rate);
-  if(calendar?.sell_rate==null&&plan.parent_rate_plan_id&&["OFFSET","PERCENT"].includes(String(plan.pricing_model))){
+  const openCalendar=calendar&&!calendar.closed?calendar:undefined;
+  let base=openCalendar?.sell_rate==null?Number(relation.base_rate):Number(openCalendar.sell_rate);
+  if(openCalendar?.sell_rate==null&&plan.parent_rate_plan_id&&["OFFSET","PERCENT"].includes(String(plan.pricing_model))){
     const parent=facts.planMap.get(String(plan.parent_rate_plan_id)) as ReservationFactRow|undefined;
     const parentRelation=facts.roomPlanMap.get(`${type.id}:${plan.parent_rate_plan_id}`) as ReservationFactRow|undefined;
     const parentCalendar=facts.calendarMap.get(`${type.id}:${plan.parent_rate_plan_id}:${date}`) as ReservationFactRow|undefined;
     if(!parent||!parentRelation)return null;
-    const parentBase=Number(parentCalendar?.sell_rate??parentRelation.base_rate),adjustment=Number(plan.adjustment||0);
+    const parentBase=Number((parentCalendar&&!parentCalendar.closed?parentCalendar.sell_rate:null)??parentRelation.base_rate),adjustment=Number(plan.adjustment||0);
     base=plan.pricing_model==="OFFSET"?parentBase+adjustment:parentBase*(1+adjustment/100);
   }
   if(!Number.isFinite(base))return null;
