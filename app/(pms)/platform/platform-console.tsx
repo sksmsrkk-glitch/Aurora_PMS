@@ -923,7 +923,7 @@ function ImportPanel({
                     <button
                       disabled={disabled}
                       onClick={() =>
-                        void onAction({ action: "commit", jobId: row.id })
+                        void onAction({ action: "commit", jobId: row.id,expectedKind:row.kind })
                       }
                     >
                       원자적 반영
@@ -933,7 +933,7 @@ function ImportPanel({
                   <button
                     disabled={disabled}
                     onClick={() =>
-                      void onAction({ action: "rollback", jobId: row.id })
+                      void onAction({ action: "rollback", jobId: row.id,expectedKind:row.kind })
                     }
                   >
                     안전 롤백

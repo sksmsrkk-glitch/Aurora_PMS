@@ -577,10 +577,11 @@ test(
           db,
           "integration@example.com",
           dry.job.id,
+          "ROOM_TYPES",
         ),
         committed = await commitResponse.json();
       assert.equal(committed.committed, 1);
-      const replayResponse=await commit(db,"integration@example.com",dry.job.id),replayed=await replayResponse.json();
+      const replayResponse=await commit(db,"integration@example.com",dry.job.id,"ROOM_TYPES"),replayed=await replayResponse.json();
       assert.equal(replayed.replayed,true);
       assert.equal(replayed.jobId,committed.jobId);
       const [created] =
@@ -591,6 +592,7 @@ test(
           db,
           "integration@example.com",
           committed.jobId,
+          "ROOM_TYPES",
         ),
         rolled = await rollbackResponse.json();
       assert.equal(rolled.rolledBack, 1);
@@ -610,11 +612,15 @@ test("reservation CSV can create an embedded guest and retry commit idempotently
     const db=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul"),[type]=await sql`SELECT code FROM room_types WHERE property_id='prop-seoul' AND active ORDER BY code LIMIT 1`,[plan]=await sql`SELECT code FROM rate_plans WHERE property_id='prop-seoul' AND active ORDER BY code LIMIT 1`;
     const csv=`external_id,confirmation_no,guest_external_id,guest_first_name,guest_last_name,guest_email,guest_phone,room_type_code,arrival_date,departure_date,adults,children,source,rate_plan,nightly_rate,eta,notes\n${external},${confirmation},${guestExternal},길동,홍,csv-${suffix.toLowerCase()}@example.com,010-5555-5555,${type.code},2032-05-10,2032-05-12,2,0,HotelStory,${plan.code},188000,15:00,Embedded guest\n`;
     const dryPayload=await (await dryRun(db,"reservation-import@example.com","RESERVATIONS",`reservations-${suffix}.csv`,csv)).json();assert.equal(dryPayload.job.error_count,0);
-    const commitResponses=await Promise.all([commit(db,"reservation-import@example.com",dryPayload.job.id),commit(db,"reservation-import@example.com",dryPayload.job.id)]),commitPayloads=await Promise.all(commitResponses.map(response=>response.json()));
+    await assert.rejects(commit(db,"reservation-import@example.com",dryPayload.job.id,"ROOMS"),/검증 작업을 찾을 수 없습니다/u);
+    const commitResponses=await Promise.all([commit(db,"reservation-import@example.com",dryPayload.job.id,"RESERVATIONS"),commit(db,"reservation-import@example.com",dryPayload.job.id,"RESERVATIONS")]),commitPayloads=await Promise.all(commitResponses.map(response=>response.json()));
     assert.equal(commitPayloads.filter(payload=>payload.replayed===true).length,1);assert.equal(new Set(commitPayloads.map(payload=>payload.jobId)).size,1);
-    const committed=commitPayloads[0],replayed=await (await commit(db,"reservation-import@example.com",dryPayload.job.id)).json();assert.equal(replayed.replayed,true);assert.equal(replayed.jobId,committed.jobId);
-    const [created]=await sql`SELECT r.id,g.id guest_id,g.first_name,g.last_name FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id WHERE r.property_id='prop-seoul' AND r.confirmation_no=${confirmation}`;assert.equal(created.first_name,"길동");assert.equal(created.last_name,"홍");
-    const rolled=await (await rollback(db,"reservation-import@example.com",committed.jobId)).json();assert.equal(rolled.rolledBack,2);
+    const committed=commitPayloads[0],replayed=await (await commit(db,"reservation-import@example.com",dryPayload.job.id,"RESERVATIONS")).json();assert.equal(replayed.replayed,true);assert.equal(replayed.jobId,committed.jobId);
+    const [created]=await sql`SELECT r.id,g.id guest_id,g.first_name,g.last_name,(SELECT COUNT(*)::int FROM reservation_rate_nights n WHERE n.property_id=r.property_id AND n.reservation_id=r.id) rate_nights,(SELECT COALESCE(SUM(n.sell_rate),0)::numeric FROM reservation_rate_nights n WHERE n.property_id=r.property_id AND n.reservation_id=r.id) ledger_revenue FROM reservations r JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id WHERE r.property_id='prop-seoul' AND r.confirmation_no=${confirmation}`;assert.equal(created.first_name,"길동");assert.equal(created.last_name,"홍");assert.equal(created.rate_nights,2);assert.equal(Number(created.ledger_revenue),376000);
+    const [commitAudit]=await sql`SELECT after_json FROM audit_logs WHERE property_id='prop-seoul' AND entity_id=${committed.jobId} AND action='COMMIT_DATA_IMPORT'`;assert.equal(commitAudit.after_json.nightlyRateLedger,true);
+    await assert.rejects(sql`DELETE FROM reservation_rate_nights WHERE property_id='prop-seoul' AND reservation_id=${created.id}`,/reservation rate nights are immutable/u);
+    await assert.rejects(rollback(db,"reservation-import@example.com",committed.jobId,"ROOMS"),/반영 작업을 찾을 수 없습니다/u);
+    const rolled=await (await rollback(db,"reservation-import@example.com",committed.jobId,"RESERVATIONS")).json();assert.equal(rolled.rolledBack,2);
     const [remaining]=await sql`SELECT COUNT(*)::int count FROM reservations WHERE property_id='prop-seoul' AND confirmation_no=${confirmation}`;assert.equal(remaining.count,0);
   }finally{await sql`DELETE FROM audit_logs WHERE property_id='prop-seoul' AND actor='reservation-import@example.com'`;await sql.end({timeout:2});await closePmsDatabase();}
 });
