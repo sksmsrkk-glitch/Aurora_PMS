@@ -21,6 +21,7 @@ import {
   runtimeBindings,
 } from "../../pms/auth";
 import { authenticateSupabaseRequest } from "../../../supabase-session";
+import { importMfaFailure } from "../../import-mfa-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,10 +32,11 @@ const requestSchema = z.discriminatedUnion("action", [
     sourceName: z.string().trim().min(1).max(180),
     csv: z.string().min(1).max(2_000_000),
   }),
-  z.object({ action: z.literal("commit"), jobId: z.string().min(3).max(200) }),
+  z.object({ action: z.literal("commit"), jobId: z.string().min(3).max(200),expectedKind:z.enum(["ROOM_TYPES","ROOMS","GUESTS","RESERVATIONS"]) }),
   z.object({
     action: z.literal("rollback"),
     jobId: z.string().min(3).max(200),
+    expectedKind:z.enum(["ROOM_TYPES","ROOMS","GUESTS","RESERVATIONS"]),
   }),
 ]);
 
@@ -61,21 +63,8 @@ async function context(request: Request) {
       rejected: response({ error: "데이터 이관 권한이 필요합니다." }, 403),
     };
   const identity = await authenticateSupabaseRequest(request);
-  if (!identity)
-    return { rejected: response({ error: "로그인이 필요합니다." }, 401) };
-  if (
-    process.env.PMS_REQUIRE_PLATFORM_MFA !== "false" &&
-    identity.assuranceLevel !== "aal2"
-  )
-    return {
-      rejected: response(
-        {
-          error: "데이터 이관에는 MFA 추가 인증이 필요합니다.",
-          code: "MFA_REQUIRED",
-        },
-        403,
-      ),
-    };
+  const mfaFailure=importMfaFailure(identity);
+  if(mfaFailure){const {status,...body}=mfaFailure;return {rejected:response(body,status)};}
   return { root, db: scopePmsDatabase(root, principal.propertyId), principal };
 }
 
@@ -124,8 +113,8 @@ export async function POST(request: Request) {
         parsed.csv,
       );
     if (parsed.action === "commit")
-      return await commit(db, principal.email, parsed.jobId);
-    return await rollback(db, principal.email, parsed.jobId);
+      return await commit(db, principal.email, parsed.jobId,parsed.expectedKind);
+    return await rollback(db, principal.email, parsed.jobId,parsed.expectedKind);
   } catch (error) {
     const message =
       error instanceof Error
@@ -318,12 +307,13 @@ export async function commit(
   db: ReturnType<typeof scopePmsDatabase>,
   actor: string,
   dryRunJobId: string,
+  expectedKind:ImportKind,
 ) {
   const job = await db
     .prepare(
-      "SELECT * FROM data_import_jobs WHERE id=? AND property_id=pms_current_property_id() AND mode='DRY_RUN' FOR UPDATE",
+      "SELECT * FROM data_import_jobs WHERE id=? AND property_id=pms_current_property_id() AND mode='DRY_RUN' AND kind=? FOR UPDATE",
     )
-    .bind(dryRunJobId)
+    .bind(dryRunJobId,expectedKind)
     .first<Record<string, unknown>>();
   if (!job) throw new Error("검증 작업을 찾을 수 없습니다.");
   const existingCommit=await db.prepare("SELECT id,status,row_count FROM data_import_jobs WHERE property_id=pms_current_property_id() AND kind=? AND content_hash=? AND mode='COMMIT' LIMIT 1").bind(job.kind,job.content_hash).first<Record<string,unknown>>();
@@ -373,7 +363,7 @@ export async function commit(
         String(job.content_hash),
         rows.length,
         rows.length,
-        { sourceDryRunJobId: dryRunJobId },
+        { sourceDryRunJobId: dryRunJobId,nightlyRateLedger:kind==="RESERVATIONS" },
         now,
         actor,
         now,
@@ -509,6 +499,16 @@ export async function commit(
           )
           .bind(entityId, typeId, row.arrival_date, row.departure_date),
       );
+      // Reservation imports carry a flat nightly rate. Preserve that value for
+      // every stay date so revenue reports use the immutable nightly ledger
+      // instead of their legacy reservation-header fallback.
+      statements.push(
+        db.prepare(`INSERT INTO reservation_rate_nights(id,property_id,reservation_id,room_type_id,stay_date,sell_rate,currency,rate_plan,created_at)
+          SELECT ?||':'||to_char(day::date,'YYYYMMDD'),pms_current_property_id(),?,?,day::date,?::numeric,
+            (SELECT currency FROM properties WHERE id=pms_current_property_id()),?,?
+          FROM generate_series(?::date,(?::date-interval '1 day')::date,interval '1 day') day`)
+          .bind(`import-rate-${entityId}`,entityId,typeId,row.nightly_rate,row.rate_plan,now,row.arrival_date,row.departure_date),
+      );
     }
     statements.push(
       db
@@ -528,7 +528,7 @@ export async function commit(
         randomUUID(),
         actor,
         commitId,
-        { kind, rows: rows.length, sourceDryRunJobId: dryRunJobId },
+        { kind, rows: rows.length, sourceDryRunJobId: dryRunJobId,nightlyRateLedger:kind==="RESERVATIONS" },
         now,
       ),
   );
@@ -554,12 +554,13 @@ export async function rollback(
   db: ReturnType<typeof scopePmsDatabase>,
   actor: string,
   jobId: string,
+  expectedKind:ImportKind,
 ) {
   const job = await db
     .prepare(
-      "SELECT * FROM data_import_jobs WHERE id=? AND property_id=pms_current_property_id() AND mode='COMMIT' FOR UPDATE",
+      "SELECT * FROM data_import_jobs WHERE id=? AND property_id=pms_current_property_id() AND mode='COMMIT' AND kind=? FOR UPDATE",
     )
-    .bind(jobId)
+    .bind(jobId,expectedKind)
     .first<Record<string, unknown>>();
   if (!job) throw new Error("반영 작업을 찾을 수 없습니다.");
   if (job.status !== "COMPLETED")
@@ -587,9 +588,20 @@ export async function rollback(
     if (changed?.changed)
       throw new Error("예약이 이관 후 변경되어 안전하게 롤백할 수 없습니다.");
   }
-  const statements: PmsPreparedStatement[] = [];
+  const statements: PmsPreparedStatement[] = [
+    // The immutable-ledger trigger accepts deletes only for reservations mapped
+    // to this exact completed RESERVATIONS import job in the same transaction.
+    db.prepare("SELECT set_config('app.import_rollback_job_id',?,true)").bind(jobId),
+  ];
   for (const id of ids("RESERVATION")) {
     statements.push(
+      db.prepare(`SELECT CASE WHEN COUNT(*)=1 THEN 1
+        ELSE ('IMPORT_ROLLBACK_CHANGED_'||COUNT(*)::text)::int END rollback_guard
+        FROM (SELECT r.id FROM reservations r WHERE r.id=? AND r.property_id=pms_current_property_id()
+          AND r.status='DUE_IN' AND r.version=1
+          AND NOT EXISTS(SELECT 1 FROM folio_entries f WHERE f.property_id=r.property_id AND f.reservation_id=r.id)
+          FOR UPDATE) unchanged_reservation`).bind(id),
+      db.prepare("DELETE FROM reservation_rate_nights WHERE reservation_id=? AND property_id=pms_current_property_id()").bind(id),
       db
         .prepare(
           "DELETE FROM reservation_type_nights WHERE reservation_id=? AND property_id=pms_current_property_id()",
@@ -657,8 +669,12 @@ export async function rollback(
       .prepare(
         "INSERT INTO audit_logs(id,property_id,actor,action,entity_type,entity_id,before_json,after_json,created_at) VALUES (?,pms_current_property_id(),?,'ROLLBACK_DATA_IMPORT','data_import',?,NULL,?,?)",
       )
-      .bind(randomUUID(), actor, jobId, { entities: entities.length }, now),
+      .bind(randomUUID(), actor, jobId, { entities: entities.length,kind:expectedKind,nightlyRateLedger:expectedKind==="RESERVATIONS" }, now),
   );
-  await db.batch(statements);
+  try{await db.batch(statements);}catch(error){
+    if(/IMPORT_ROLLBACK_CHANGED_/u.test(error instanceof Error?error.message:String(error)))
+      throw new Error("예약이 이관 후 변경되어 안전하게 롤백할 수 없습니다.");
+    throw error;
+  }
   return response({ ok: true, jobId, rolledBack: entities.length });
 }

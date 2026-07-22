@@ -118,6 +118,7 @@ sequenceDiagram
 | `app/api/pms/final-operations-service.ts` | 연회·당일 체크인/체크아웃·18일 점유·호텔/웹 회원의 bounded read와 원자 command |
 | `app/hotelstory-final-operations.tsx` | 독립 URL 업무 큐, 연회 월 캘린더, 예약 CSV dry-run, 회원 관리 UI |
 | `app/api/pms/reservation-imports/route.ts` | `RESERVATION_WRITE`·DATA_IMPORT entitlement·분산 rate limit을 적용한 operational import boundary |
+| `app/api/import-mfa-policy.ts` | 플랫폼·프런트 예약 CSV가 공유하는 Supabase identity·AAL2 step-up 정책 |
 | `app/api/pms/error-map.ts` | 안정된 DB 오류 코드/패턴을 HTTP 상태와 사용자 메시지로 매핑 |
 | `app/api/booking/service.ts` | 공개 판매 타입, 투숙 제한, 일별 가용재고·요금 재계산, 예약·취소 원자 처리 |
 | `app/api/booking/website-service.ts` | CMS에서 공개 승인된 호텔·객실·미디어만 읽는 서버 projection |
@@ -186,7 +187,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | 당일 운영 | `GET /api/pms?view=stay_operations&mode=checkin|checkout|occupancy` | 기준일·복합필터의 체크인/아웃 queue와 정확히 18일 객실 timeline |
 | 연회 | `GET /api/pms?view=banquet&month=YYYY-MM` | 한 달의 연회장 master·행사와 검색/장소/상태 필터 |
 | 회원 | `GET /api/pms?view=hotel_members` | 최대 500명의 서버 필터 회원 projection; 지원 principal은 PII 마스킹 |
-| 예약 가져오기 | `GET/POST /api/pms/reservation-imports` | 이력, dry-run, 원자 commit/replay와 변경되지 않은 entity rollback |
+| 예약 가져오기 | `GET/POST /api/pms/reservation-imports` | 이력, AAL2 MFA, 강제 `RESERVATIONS` job kind, dry-run, 원자 commit/replay와 변경되지 않은 entity rollback |
 | 장기 재고 | `GET /api/pms?view=inventory` | 선택은 730일까지 허용하되 UI가 한 요청당 14/30일만 조회 |
 | 회계 센터 | `GET /api/pms?view=accounting` | 기간별 journal, settlement, account, P/L summary를 별도 조회 |
 | 리포트 | `GET /api/pms?view=report` | 필터·정렬·페이지네이션·마스킹이 적용된 서버 읽기 모델 |
@@ -202,7 +203,8 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 - 예약 바우처 메일: immutable document snapshot + delivery + `VOUCHER_EMAIL` worker job + audit + idempotency가 하나의 batch입니다.
 - 연회 예약: venue/day advisory lock 아래 overlap trigger + 예약 + before/after audit + idempotency가 하나의 batch입니다.
 - 회원 저장·활성·비밀번호: 회원 projection + redacted audit + idempotency가 하나의 batch이며 비밀번호 원문은 transaction 경계를 넘지 않습니다.
-- 예약 CSV: commit job + 내장 guest/mapping + reservation/folio/night + import entity + audit + dry-run 완료 전이가 하나의 batch입니다.
+- 예약 CSV: commit job + 내장 guest/mapping + reservation/folio/type night/immutable rate night + import entity + audit + dry-run 완료 전이가 하나의 batch입니다.
+- 예약 CSV rollback: exact `RESERVATIONS` commit job과 unchanged reservation을 잠근 뒤 transaction-local job ID가 소유한 rate night만 immutable trigger가 삭제를 허용합니다.
 - 그룹 픽업: block pickup night + reservation night + rooming 상태가 같은 트랜잭션에서 이동합니다.
 - AR 이관: invoice debit + folio direct-bill payment + window 상태 전이가 함께 commit됩니다.
 - 회계 수기 전표: journal header + 모든 debit/credit line + audit + idempotency가 함께 commit됩니다.
@@ -229,7 +231,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | ADR-014 | 실제 workspace URL + action Context | `useState` 화면 전환은 새로고침과 딥링크가 깨지고 공통 props가 전 컴포넌트로 전파됨 | 13개 App Router 경로와 공용 command context 사용 |
 | ADR-015 | command receipt + TanStack Query invalidation | 객실 1실 변경에도 30개 쿼리 snapshot을 재계산·재렌더하던 God payload 제거 | POST는 변경 참조만 반환하고 UI가 관련 projection cache를 무효화 |
 | ADR-016 | 타입 재고와 실물 객실 배정을 독립 원장으로 유지 | 예약 판매 가능 수량과 특정 호실의 날짜 충돌은 생명주기와 제약이 다름 | 배정/이동/해제가 `reservation_type_nights`를 건드리지 않으며 DB unique·version·OOS 검사가 물리 충돌을 차단 |
-| ADR-016 | PostgreSQL service 기반 CI behavior gate | 소스 정규식과 테스트 내부 SQLite trigger는 운영 schema drift를 잡지 못함 | PR마다 빈 PostgreSQL 17에 전체 migration을 적용하고 실제 RLS·trigger·경합 실행 |
+| ADR-019 | PostgreSQL service 기반 CI behavior gate | 소스 정규식과 테스트 내부 SQLite trigger는 운영 schema drift를 잡지 못함 | PR마다 빈 PostgreSQL 17에 전체 migration을 적용하고 실제 RLS·trigger·경합 실행 |
 | ADR-017 | 예약자와 투숙자를 다른 운영 개념으로 저장 | 여행사·회사·가족 예약에서는 결제/연락 주체와 실제 투숙자가 다름 | booker는 예약 snapshot, guest는 투숙자 profile이며 상세 화면과 감사에 함께 투영 |
 | ADR-018 | 취소정책·일자요금 예약 시점 snapshot | 상품 master 변경이 과거 바우처·취소수수료·정산 근거를 바꾸면 안 됨 | JSONB cancellation terms와 immutable night rates를 상세/바우처가 우선 사용 |
 | ADR-020 | 바우처 문서 snapshot과 비동기 전달 분리 | 문서 생성 뒤 예약이 바뀌거나 메일 제공자가 느려도 사용자 요청과 전달 증빙이 일관돼야 함 | queue 시점 payload를 JSONB로 고정하고 worker가 provider idempotency key로 전달; PAN·내부 메모는 projection에서 제외 |
@@ -238,6 +240,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | ADR-023 | 연회 중복을 venue/day advisory lock과 trigger로 방어 | API 사전 조회만으로는 두 요청이 같은 빈 시간대를 동시에 통과함 | 활성 가예약/확정만 시간 교집합을 검사하고 완료/취소는 시간을 해제 |
 | ADR-024 | 호텔 회원과 직원 권한 계정을 분리 | 고객·웹 회원을 `role_assignments`에 넣으면 PMS 접근 권한과 개인정보 생명주기가 혼합됨 | `hotel_members`는 고객 master이며 Supabase 직원 Auth·workspace capability와 독립 |
 | ADR-025 | 예약 import를 검증 job과 commit job으로 분리 | Excel 행 오류가 일부만 반영되거나 네트워크 재시도로 중복 예약이 생기면 복구가 어려움 | content hash dry-run, 전량 원자 commit, commit replay와 변경 여부를 확인한 rollback |
+| ADR-026 | 모든 CSV 이관에 AAL2와 expected kind 적용 | 대량 개인정보·운영 원장 변경은 탈취된 aal1 세션과 다른 종류의 job ID 재사용을 모두 차단해야 함 | 기본은 MFA fail-closed이며 commit/rollback 함수가 job kind를 SQL 조건으로 다시 확인 |
 ## 직원 계정·권한 아키텍처
 
 Supabase Auth는 이메일/비밀번호 검증과 세션만 담당합니다. 권한은 변경 가능한 `user_metadata`가 아니라 tenant table인 `role_assignments`의 `property_id`, `active`, `workspace_permissions`, `can_export`, `must_change_password`에서 해석합니다. Root DB는 인증 직후 닫힌 `findActiveRoleAssignments(authUserId, email)` capability로 Auth user ID와 이메일이 모두 일치하는 배정만 읽습니다. 연결되지 않은 레거시 이메일 행은 권한으로 승격되지 않으며, 이후 직원 목록·변경·업무 데이터는 모두 property-scoped adapter와 RLS를 통과합니다.

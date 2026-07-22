@@ -31,7 +31,9 @@
 - `/frontdesk?view=board&from=YYYY-MM-DD&days=7|14|30`에서 실제 객실×숙박일 배정 보드, sticky 객실/날짜 축, 미배정 tray, 내부 가로 스크롤과 공유 가능한 딥링크
 - 보드의 빈 셀은 날짜·객실타입·실물 객실을 새 예약에 미리 채우고, 예약 막대는 상세 Drawer·전체 숙박일 재배정·선택일 이후 룸 무브·배정 해제로 연결
 - 드래그가 어려운 운영자를 위해 모든 배정에 `객실 선택` 키보드 동선을 제공하고, 타입 불일치·DIRTY 객실은 확인 후 감사 로그에 override 사유를 남김
-- `/frontdesk/imports`에서 Excel용 CSV 양식 다운로드, 2,000행 dry-run, 행 오류, 원자 반영, 같은 파일 replay와 안전 rollback 이력
+- `/frontdesk/imports`에서 Excel용 CSV 양식 다운로드, 2,000행 dry-run, 행 오류, 원자 반영, 같은 파일 replay와 안전 rollback 이력; 모든 변경 요청은 Supabase AAL2 MFA 세션을 기본 요구
+- 예약 import의 commit/rollback은 요청 job이 `RESERVATIONS` 종류인지 서버에서 다시 확인해 다른 데이터 이관 job ID 오용을 차단
+- import한 예약은 CSV의 flat nightly rate를 숙박일별 immutable `reservation_rate_nights`로 생성해 예약·매출·리포트가 같은 야간 원장을 사용
 - PDF는 한글 글꼴을 문서에 subset 임베딩하고, 금액 숨김은 HTML·PDF·XLSX 모두 동일한 서버 정책을 사용
 - 메일은 예약 시점 문서 snapshot을 durable worker에 넣고 delivery ID 멱등 키로 중복 발송을 방지하며 PAN·관리자/호텔 내부 메모를 포함하지 않음
 - 예약 일정·객실 타입·인원·요금·ETA 수정

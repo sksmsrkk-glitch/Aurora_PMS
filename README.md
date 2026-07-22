@@ -133,6 +133,7 @@ flowchart LR
 14. 로그인 성공 뒤 활성 호텔·구독 배정을 다시 확인하고 과거 호텔 선택 쿠키를 만료시키며, 미인증 401과 정지·미배정 403을 분리해 로그인 redirect loop를 차단합니다.
 15. 공개 CMS projection은 도메인 resolver와 별도로 구독을 재검증해 `SUSPENDED`·`CANCELLED` 호텔을 `published=false`로 강제합니다.
 16. 객실 배정 보드는 타입 재고(`reservation_type_nights`)와 물리 호실 박(`reservation_nights`)을 섞지 않습니다. 전체 배정·부분 룸 무브·해제는 expected version, 물리 호실/일자 unique, OOS gate, 감사·Outbox·멱등 영수증을 같은 transaction에서 처리합니다.
+17. 플랫폼·프런트 예약 CSV는 같은 Supabase AAL2 정책을 사용하고 commit/rollback에서 expected job kind를 SQL로 재검증합니다. 예약 import는 숙박일별 immutable rate ledger를 생성하며 rollback trigger는 같은 완료 job이 소유한 원장만 transaction-local 범위에서 삭제합니다.
 
 주요 코드 진입점:
 
@@ -157,6 +158,7 @@ flowchart LR
 | 멀티호텔 Control Plane | `app/(pms)/platform`, `app/api/platform/route.ts` |
 | 도메인 tenant resolver | `app/api/booking/property-resolver.ts` |
 | 데이터 이관 | `app/api/platform/imports/route.ts`, `app/import-csv.ts` |
+| 데이터 이관 MFA 정책 | `app/api/import-mfa-policy.ts` |
 | durable worker | `app/api/internal/worker/route.ts` |
 | 즉시 worker kick·5분 독립 scheduler | `app/worker-kick.ts`, `.github/workflows/worker-scheduler.yml` |
 | SaaS 전체 운영 설계 | `docs/multihotel-saas.md` |
