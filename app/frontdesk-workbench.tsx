@@ -6,6 +6,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { formatMoney } from "../lib/format";
+import { resolveFocusedRow } from "../lib/focus-result";
 
 export type FrontdeskReservation = {
   id: string;
@@ -55,7 +56,12 @@ type Filters = {
   sort: string;
 };
 type Payload = {
-  query: Filters & { queue: QueueKey; page: number; pageSize: number };
+  query: Filters & {
+    focus: string;
+    queue: QueueKey;
+    page: number;
+    pageSize: number;
+  };
   rows: FrontdeskReservation[];
   queues: {
     total?: number;
@@ -221,11 +227,16 @@ export default function FrontdeskWorkbench({
     staleTime: 10_000,
     placeholderData: keepPreviousData,
   });
+  const focusedReservation = resolveFocusedRow(
+    result.data,
+    focus,
+    result.isPlaceholderData,
+  );
   useEffect(() => {
-    if (!focus || !result.data?.rows[0]) return;
-    onOpen(result.data.rows[0]);
+    if (!focusedReservation) return;
+    onOpen(focusedReservation);
     router.replace(frontdeskLocation(queue, applied, page), { scroll: false });
-  }, [applied, focus, onOpen, page, queue, result.data, router]);
+  }, [applied, focusedReservation, onOpen, page, queue, router]);
   useEffect(() => {
     if (focus) return;
     const next = frontdeskLocation(queue, applied, page);

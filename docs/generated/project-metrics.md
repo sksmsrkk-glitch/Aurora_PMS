@@ -10,7 +10,7 @@
 | Foreign key 선언 | 109 | 고유 named FK constraint |
 | Tenant RLS 대상 | 80 | runtime tenant table catalog; DB 계약이 동일 수의 정책 검증 |
 | 등록 PMS action | 85 | action registry key |
-| Unit/behavior test | 80 | `tests/*.test.mjs`의 test case |
+| Unit/behavior test | 81 | `tests/*.test.mjs`의 test case |
 | PostgreSQL integration test | 35 | `tests/*.integration.mjs`의 test case |
 | PMS CSS source | 236,436 bytes / 14 files | root PMS layout imports |
 | Public hotel CSS source | 21,106 bytes / 1 file | isolated `app/hotel/hotel.css` |
