@@ -1,5 +1,6 @@
 /** Server-side report catalog, filters, masking and export projections. */
 import type { PmsDatabase } from "../../../db/pms-database";
+import { sqlLikePattern } from "../../../lib/search";
 
 export type ReportPrincipal = { email:string; role:string; capabilities:string[] };
 
@@ -32,8 +33,8 @@ const moneyKinds = "CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'PAYMENT' THEN 
 const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(new Date(`${value}T00:00:00Z`).valueOf());
 const dayDiff=(from:string,to:string)=>Math.floor((new Date(`${to}T00:00:00Z`).valueOf()-new Date(`${from}T00:00:00Z`).valueOf())/86400000);
 const round=(value:number)=>Math.round((value+Number.EPSILON)*100)/100;
-const sqlLike=(columns:string[])=>`(${columns.map(column=>`LOWER(COALESCE(${column},'')) LIKE ?`).join(" OR ")})`;
-const searchBinds=(q:string,count:number)=>Array.from({length:count},()=>`%${q.toLowerCase()}%`);
+const sqlLike=(columns:string[])=>`(${columns.map(column=>`LOWER(COALESCE(${column},'')) LIKE ? ESCAPE '\\'`).join(" OR ")})`;
+const searchBinds=(q:string,count:number)=>Array.from({length:count},()=>sqlLikePattern(q));
 
 function parseParams(input:URLSearchParams,businessDate:string,overrides?:Partial<Params>):Params {
   // Normalize every report through one filter contract. Interactive pages are
@@ -58,8 +59,8 @@ async function reservationsReport(db:PmsDatabase,p:Params,principal:ReportPrinci
   // Export permission also controls guest contact visibility. Masking is applied
   // before the response is built so restricted PII never reaches the browser.
   const where=["r.property_id=pms_current_property_id()","r.arrival_date<=?","r.departure_date>?"]; const binds:unknown[]=[p.to,p.from];
-  if(p.q){where.push(sqlLike(["r.confirmation_no","g.first_name||' '||g.last_name","g.email","g.phone","rm.number","rt.code","r.notes"]));binds.push(...searchBinds(p.q,7));}
-  if(p.status){where.push("r.status=?");binds.push(p.status);} if(p.source){where.push("r.source=?");binds.push(p.source);} if(p.roomTypeId){where.push("r.room_type_id=?");binds.push(p.roomTypeId);}
+  if(p.q){where.push(sqlLike(["r.confirmation_no","g.first_name||' '||g.last_name","g.last_name||g.first_name","g.email","g.phone","rm.number","rt.code","r.notes"]));binds.push(...searchBinds(p.q,8));}
+  if(p.status){where.push("r.status=?");binds.push(p.status);} if(p.source){where.push("LOWER(r.source)=LOWER(?)");binds.push(p.source);} if(p.roomTypeId){where.push("r.room_type_id=?");binds.push(p.roomTypeId);}
   const from=`FROM reservations r JOIN properties prop ON prop.id=r.property_id JOIN guests g ON g.id=r.guest_id JOIN room_types rt ON rt.id=r.room_type_id LEFT JOIN rooms rm ON rm.id=r.room_id LEFT JOIN folio_entries f ON f.reservation_id=r.id WHERE ${where.join(" AND ")}`;
   const total=await scalarCount(db,`SELECT COUNT(DISTINCT r.id) count ${from}`,binds);
   const rows=await pageQuery(db,`SELECT r.confirmation_no,g.first_name||' '||g.last_name guest_name,g.email,g.phone,rt.code room_type,rm.number room_number,r.arrival_date,r.departure_date,(r.departure_date-r.arrival_date) nights,r.created_at,GREATEST(r.arrival_date-(r.created_at AT TIME ZONE prop.timezone)::date,0) lead_time_days,CASE WHEN EXTRACT(HOUR FROM r.created_at AT TIME ZONE prop.timezone)<6 THEN '00–06' WHEN EXTRACT(HOUR FROM r.created_at AT TIME ZONE prop.timezone)<12 THEN '06–12' WHEN EXTRACT(HOUR FROM r.created_at AT TIME ZONE prop.timezone)<18 THEN '12–18' ELSE '18–24' END booking_time_band,r.status,r.source,r.rate_plan,r.adults,r.children,r.nightly_rate,ROUND(COALESCE(SUM(${moneyKinds}),0),2) balance ${from} GROUP BY r.id,g.id,rt.id,rm.id,prop.timezone ORDER BY r.arrival_date DESC,r.confirmation_no`,binds,p);
@@ -74,7 +75,7 @@ async function occupancyReport(db:PmsDatabase,p:Params){
   // Occupancy, ADR, and RevPAR share the same room-night denominator; deriving them
   // together avoids discrepancies between dashboard totals and exported rows.
   const typeWhere=p.roomTypeId?"WHERE rt.id=?":"";const typeBinds=p.roomTypeId?[p.roomTypeId]:[];
-  const qWhere=p.q?"WHERE LOWER(x.room_type||' '||x.room_type_name) LIKE ?":"";const binds:unknown[]=[p.from,p.to,...typeBinds,...(p.q?[`%${p.q.toLowerCase()}%`]:[])];
+  const qWhere=p.q?"WHERE LOWER(x.room_type||' '||x.room_type_name) LIKE ? ESCAPE '\\'":"";const binds:unknown[]=[p.from,p.to,...typeBinds,...(p.q?[sqlLikePattern(p.q)]:[])];
   const base=`WITH dates(stay_date) AS (SELECT day::date FROM generate_series(?::date,(?::date-INTERVAL '1 day'),INTERVAL '1 day') day), physical AS (SELECT room_type_id,COUNT(*) rooms FROM rooms WHERE property_id=pms_current_property_id() AND active AND housekeeping_status<>'OUT_OF_SERVICE' GROUP BY room_type_id), sold AS (SELECT room_type_id,stay_date,COUNT(*) rooms FROM reservation_type_nights WHERE property_id=pms_current_property_id() GROUP BY room_type_id,stay_date), revenue AS (SELECT n.room_type_id,n.stay_date,SUM(CASE f.kind WHEN 'CHARGE' THEN f.amount WHEN 'CHARGE_REVERSAL' THEN -f.amount ELSE 0 END) amount FROM reservation_type_nights n JOIN folio_entries f ON f.reservation_id=n.reservation_id AND f.business_date=n.stay_date AND f.code='ROOM' WHERE n.property_id=pms_current_property_id() GROUP BY n.room_type_id,n.stay_date), x AS (SELECT d.stay_date,rt.code room_type,rt.name room_type_name,COALESCE(p.rooms,0) available_rooms,COALESCE(s.rooms,0) sold_rooms,ROUND(CASE WHEN COALESCE(p.rooms,0)=0 THEN 0 ELSE COALESCE(s.rooms,0)*100.0/p.rooms END,2) occupancy,ROUND(COALESCE(r.amount,0),2) room_revenue,ROUND(CASE WHEN COALESCE(s.rooms,0)=0 THEN 0 ELSE COALESCE(r.amount,0)*1.0/s.rooms END,2) adr,ROUND(CASE WHEN COALESCE(p.rooms,0)=0 THEN 0 ELSE COALESCE(r.amount,0)*1.0/p.rooms END,2) revpar FROM dates d CROSS JOIN room_types rt LEFT JOIN physical p ON p.room_type_id=rt.id LEFT JOIN sold s ON s.room_type_id=rt.id AND s.stay_date=d.stay_date LEFT JOIN revenue r ON r.room_type_id=rt.id AND r.stay_date=d.stay_date ${typeWhere})`;
   const rows=(await db.prepare(`${base} SELECT x.*,COUNT(*) OVER() total_count,SUM(available_rooms) OVER() summary_available,SUM(sold_rooms) OVER() summary_sold,SUM(room_revenue) OVER() summary_revenue FROM x ${qWhere} ORDER BY stay_date,room_type LIMIT ? OFFSET ?`).bind(...binds,p.pageSize,(p.page-1)*p.pageSize).all<Record<string,unknown>>()).results;
   const aggregate=rows[0]||{},total=Number(aggregate.total_count||0),available=Number(aggregate.summary_available||0),sold=Number(aggregate.summary_sold||0),revenue=Number(aggregate.summary_revenue||0);for(const row of rows){delete row.total_count;delete row.summary_available;delete row.summary_sold;delete row.summary_revenue;}
@@ -83,7 +84,7 @@ async function occupancyReport(db:PmsDatabase,p:Params){
 
 async function financialReport(db:PmsDatabase,p:Params){
   const where=["f.property_id=pms_current_property_id()","f.business_date BETWEEN ? AND ?"];const binds:unknown[]=[p.from,p.to];
-  if(p.q){where.push(sqlLike(["f.code","f.description","f.payment_method","f.created_by","r.confirmation_no","g.first_name||' '||g.last_name"]));binds.push(...searchBinds(p.q,6));}if(p.status){where.push("f.kind=?");binds.push(p.status);}if(p.source){where.push("COALESCE(f.payment_method,'')=?");binds.push(p.source);}
+  if(p.q){where.push(sqlLike(["f.code","f.description","f.payment_method","f.created_by","r.confirmation_no","g.first_name||' '||g.last_name","g.last_name||g.first_name"]));binds.push(...searchBinds(p.q,7));}if(p.status){where.push("f.kind=?");binds.push(p.status);}if(p.source){where.push("LOWER(COALESCE(f.payment_method,''))=LOWER(?)");binds.push(p.source);}
   const from=`FROM folio_entries f JOIN reservations r ON r.id=f.reservation_id JOIN guests g ON g.id=r.guest_id LEFT JOIN folio_entry_details d ON d.entry_id=f.id LEFT JOIN folio_windows w ON w.id=d.folio_window_id WHERE ${where.join(" AND ")}`;
   const total=await scalarCount(db,`SELECT COUNT(*) count ${from}`,binds);const rows=await pageQuery(db,`SELECT f.business_date,f.created_at,r.confirmation_no,g.first_name||' '||g.last_name guest_name,w.window_no,f.kind,f.code,f.description,f.amount,f.payment_method,d.net_amount,d.tax_amount,d.service_amount,f.created_by ${from} ORDER BY f.business_date DESC,f.created_at DESC`,binds,p);
   const sums=await db.prepare(`SELECT COALESCE(SUM(CASE WHEN f.kind='CHARGE' THEN f.amount WHEN f.kind='CHARGE_REVERSAL' THEN -f.amount ELSE 0 END),0) charges,COALESCE(SUM(CASE WHEN f.kind='PAYMENT' THEN f.amount WHEN f.kind='PAYMENT_REVERSAL' THEN -f.amount WHEN f.kind='REFUND' THEN -f.amount ELSE 0 END),0) payments,COALESCE(SUM(CASE WHEN f.kind='REFUND' THEN f.amount ELSE 0 END),0) refunds,COALESCE(SUM(${moneyKinds}),0) balance ${from}`).bind(...binds).first<Record<string,unknown>>();
@@ -115,14 +116,14 @@ async function groupsReport(db:PmsDatabase,p:Params){
 }
 
 async function channelsReport(db:PmsDatabase,p:Params){
-  const where=["a.property_id=pms_current_property_id()","a.created_at::date BETWEEN ?::date AND ?::date"];const binds:unknown[]=[p.from,p.to];if(p.q){where.push(sqlLike(["a.provider","a.aggregate_type","a.aggregate_id","a.error_code","a.error_message"]));binds.push(...searchBinds(p.q,5));}if(p.status){where.push("a.status=?");binds.push(p.status);}if(p.source){where.push("a.provider=?");binds.push(p.source);}
+  const where=["a.property_id=pms_current_property_id()","a.created_at::date BETWEEN ?::date AND ?::date"];const binds:unknown[]=[p.from,p.to];if(p.q){where.push(sqlLike(["a.provider","a.aggregate_type","a.aggregate_id","a.error_code","a.error_message"]));binds.push(...searchBinds(p.q,5));}if(p.status){where.push("a.status=?");binds.push(p.status);}if(p.source){where.push("LOWER(a.provider)=LOWER(?)");binds.push(p.source);}
   const from=`FROM integration_delivery_attempts a WHERE ${where.join(" AND ")}`;const total=await scalarCount(db,`SELECT COUNT(*) count ${from}`,binds);const rows=await pageQuery(db,`SELECT a.created_at,a.direction,a.provider,a.aggregate_type,a.aggregate_id,a.attempt_no,a.status,a.http_status,a.error_code,a.error_message,a.created_by ${from} ORDER BY a.created_at DESC`,binds,p);
   const counts=await db.prepare(`SELECT COUNT(*) attempts,SUM(CASE WHEN a.status='ACKED' THEN 1 ELSE 0 END) success,SUM(CASE WHEN a.status='FAILED' THEN 1 ELSE 0 END) failed ${from}`).bind(...binds).first<Record<string,unknown>>();const attempts=Number(counts?.attempts||0),success=Number(counts?.success||0);
   return {columns:[{key:"created_at",label:"처리 시각",type:"datetime"},{key:"direction",label:"방향"},{key:"provider",label:"채널"},{key:"aggregate_type",label:"대상 유형"},{key:"aggregate_id",label:"대상 ID"},{key:"attempt_no",label:"시도",type:"number"},{key:"status",label:"상태"},{key:"http_status",label:"HTTP",type:"number"},{key:"error_code",label:"오류 코드"},{key:"error_message",label:"오류 내용"},{key:"created_by",label:"처리자"}] as Column[],rows,total,summary:[{label:"전송 시도",value:attempts,format:"number"},{label:"성공",value:success,format:"number"},{label:"실패",value:Number(counts?.failed||0),format:"number"},{label:"성공률",value:attempts?round(success*100/attempts):100,format:"percent"}] as SummaryItem[]};
 }
 
 async function auditReport(db:PmsDatabase,p:Params){
-  const where=["property_id=pms_current_property_id()","created_at::date BETWEEN ?::date AND ?::date"];const binds:unknown[]=[p.from,p.to];if(p.q){where.push(sqlLike(["actor","action","entity_type","entity_id"]));binds.push(...searchBinds(p.q,4));}if(p.status){where.push("action=?");binds.push(p.status);}if(p.source){where.push("actor=?");binds.push(p.source);}
+  const where=["property_id=pms_current_property_id()","created_at::date BETWEEN ?::date AND ?::date"];const binds:unknown[]=[p.from,p.to];if(p.q){where.push(sqlLike(["actor","action","entity_type","entity_id"]));binds.push(...searchBinds(p.q,4));}if(p.status){where.push("action=?");binds.push(p.status);}if(p.source){where.push("LOWER(actor)=LOWER(?)");binds.push(p.source);}
   const from=`FROM audit_logs WHERE ${where.join(" AND ")}`;const total=await scalarCount(db,`SELECT COUNT(*) count ${from}`,binds);const rows=await pageQuery(db,`SELECT created_at,actor,action,entity_type,entity_id,before_json,after_json ${from} ORDER BY created_at DESC`,binds,p);const actors=await scalarCount(db,`SELECT COUNT(DISTINCT actor) count ${from}`,binds);
   return {columns:[{key:"created_at",label:"처리 시각",type:"datetime"},{key:"actor",label:"사용자"},{key:"action",label:"작업"},{key:"entity_type",label:"대상 유형"},{key:"entity_id",label:"대상 ID"},{key:"before_json",label:"변경 전"},{key:"after_json",label:"변경 후"}] as Column[],rows,total,summary:[{label:"감사 이벤트",value:total,format:"number"},{label:"작업 사용자",value:actors,format:"number"}] as SummaryItem[]};
 }
@@ -136,7 +137,7 @@ async function roomInventoryReport(db:PmsDatabase,p:Params){
 async function accountingJournalReport(db:PmsDatabase,p:Params){
   const where=["e.property_id=pms_current_property_id()","e.business_date BETWEEN ? AND ?"],binds:unknown[]=[p.from,p.to];
   if(p.q){where.push(sqlLike(["e.entry_no","e.description","e.vendor","e.created_by","a.code","a.name","l.department","l.memo"]));binds.push(...searchBinds(p.q,8));}
-  if(p.status){where.push("e.entry_type=?");binds.push(p.status);}if(p.source){where.push("e.source_type=?");binds.push(p.source);}
+  if(p.status){where.push("e.entry_type=?");binds.push(p.status);}if(p.source){where.push("LOWER(e.source_type)=LOWER(?)");binds.push(p.source);}
   const from=`FROM accounting_journal_entries e JOIN accounting_journal_lines l ON l.journal_entry_id=e.id JOIN accounting_accounts a ON a.id=l.account_id WHERE ${where.join(" AND ")}`;
   const total=await scalarCount(db,`SELECT COUNT(*) count ${from}`,binds),rows=await pageQuery(db,`SELECT e.business_date,e.entry_no,e.entry_type,e.source_type,e.description,e.vendor,e.status,a.code account_code,a.name account_name,a.account_type,l.department,l.debit,l.credit,l.memo,e.created_by ${from} ORDER BY e.business_date DESC,e.created_at DESC,e.entry_no,a.code`,binds,p);
   const sums=await db.prepare(`SELECT COALESCE(SUM(l.debit),0) debit,COALESCE(SUM(l.credit),0) credit,COALESCE(SUM(CASE WHEN a.account_type='REVENUE' THEN l.credit-l.debit ELSE 0 END),0) revenue,COALESCE(SUM(CASE WHEN a.account_type='EXPENSE' THEN l.debit-l.credit ELSE 0 END),0) expense ${from}`).bind(...binds).first<Record<string,unknown>>(),revenue=Number(sums?.revenue||0),expense=Number(sums?.expense||0);
@@ -146,7 +147,7 @@ async function accountingJournalReport(db:PmsDatabase,p:Params){
 async function channelSettlementsReport(db:PmsDatabase,p:Params){
   const where=["s.property_id=pms_current_property_id()","s.business_date BETWEEN ? AND ?"],binds:unknown[]=[p.from,p.to];
   if(p.q){where.push(sqlLike(["c.provider","c.name","r.confirmation_no","s.contract_type","s.status"]));binds.push(...searchBinds(p.q,5));}
-  if(p.status){where.push("s.status=?");binds.push(p.status);}if(p.source){where.push("c.provider=?");binds.push(p.source);}
+  if(p.status){where.push("s.status=?");binds.push(p.status);}if(p.source){where.push("LOWER(c.provider)=LOWER(?)");binds.push(p.source);}
   const from=`FROM channel_settlements s JOIN channel_connections c ON c.id=s.connection_id LEFT JOIN property_channel_settings pcs ON pcs.connection_id=c.id AND pcs.property_id=c.property_id LEFT JOIN reservations r ON r.id=s.reservation_id WHERE ${where.join(" AND ")}`;
   const total=await scalarCount(db,`SELECT COUNT(*) count ${from}`,binds),rows=await pageQuery(db,`SELECT s.business_date,c.provider,c.name channel_name,r.confirmation_no,s.contract_type,s.commission_percent,s.gross_sell_amount,s.channel_cost_amount,s.hotel_net_amount,s.currency,s.due_date,s.status,s.paid_at,s.created_by ${from} ORDER BY s.business_date DESC,COALESCE(pcs.sort_order,9999),s.due_date,c.provider`,binds,p);
   const sums=await db.prepare(`SELECT COALESCE(SUM(s.gross_sell_amount),0) gross,COALESCE(SUM(s.channel_cost_amount),0) cost,COALESCE(SUM(s.hotel_net_amount),0) hotel_net,COALESCE(SUM(CASE WHEN s.status='ACCRUED' THEN s.hotel_net_amount ELSE 0 END),0) receivable ${from}`).bind(...binds).first<Record<string,unknown>>();
@@ -155,8 +156,8 @@ async function channelSettlementsReport(db:PmsDatabase,p:Params){
 
 async function bookingCurveReport(db:PmsDatabase,p:Params){
   const where=["r.property_id=pms_current_property_id()","(r.created_at AT TIME ZONE prop.timezone)::date BETWEEN ? AND ?"],binds:unknown[]=[p.from,p.to];
-  if(p.q){where.push(sqlLike(["r.confirmation_no","g.first_name||' '||g.last_name","r.source","rt.code"]));binds.push(...searchBinds(p.q,4));}
-  if(p.status){where.push("r.status=?");binds.push(p.status);}if(p.source){where.push("r.source=?");binds.push(p.source);}if(p.roomTypeId){where.push("r.room_type_id=?");binds.push(p.roomTypeId);}
+  if(p.q){where.push(sqlLike(["r.confirmation_no","g.first_name||' '||g.last_name","g.last_name||g.first_name","r.source","rt.code"]));binds.push(...searchBinds(p.q,5));}
+  if(p.status){where.push("r.status=?");binds.push(p.status);}if(p.source){where.push("LOWER(r.source)=LOWER(?)");binds.push(p.source);}if(p.roomTypeId){where.push("r.room_type_id=?");binds.push(p.roomTypeId);}
   const raw=`SELECT (r.created_at AT TIME ZONE prop.timezone)::date booking_date,EXTRACT(HOUR FROM r.created_at AT TIME ZONE prop.timezone) booking_hour,r.status,GREATEST(r.arrival_date-(r.created_at AT TIME ZONE prop.timezone)::date,0) lead_time,COALESCE((SELECT SUM(n.sell_rate) FROM reservation_rate_nights n WHERE n.property_id=r.property_id AND n.reservation_id=r.id),r.nightly_rate*(r.departure_date-r.arrival_date)) revenue FROM reservations r JOIN properties prop ON prop.id=r.property_id JOIN guests g ON g.id=r.guest_id JOIN room_types rt ON rt.id=r.room_type_id WHERE ${where.join(" AND ")}`;
   const grouped=`FROM (${raw}) b GROUP BY booking_date`;
   const total=await scalarCount(db,`SELECT COUNT(*) count FROM (SELECT booking_date ${grouped}) x`,binds);
@@ -168,7 +169,7 @@ async function bookingCurveReport(db:PmsDatabase,p:Params){
 async function channelDepositsReport(db:PmsDatabase,p:Params){
   const where=["s.property_id=pms_current_property_id()","s.due_date BETWEEN ? AND ?"],binds:unknown[]=[p.from,p.to];
   if(p.q){where.push(sqlLike(["c.provider","c.name","cat.display_name","r.confirmation_no","s.deposit_memo","j.entry_no"]));binds.push(...searchBinds(p.q,6));}
-  if(p.status){where.push("s.status=?");binds.push(p.status);}if(p.source){where.push("c.provider=?");binds.push(p.source);}
+  if(p.status){where.push("s.status=?");binds.push(p.status);}if(p.source){where.push("LOWER(c.provider)=LOWER(?)");binds.push(p.source);}
   if(p.scope==="EXCLUDE_ONSITE")where.push("COALESCE(r.payment_type,'CHANNEL')<>'HOTEL' AND COALESCE(cat.integration_mode,'INTEGRATED')<>'MANUAL'");
   const from=`FROM channel_settlements s JOIN channel_connections c ON c.id=s.connection_id LEFT JOIN property_channel_settings pcs ON pcs.connection_id=c.id AND pcs.property_id=c.property_id LEFT JOIN channel_catalog cat ON cat.id=pcs.catalog_id AND cat.property_id=pcs.property_id LEFT JOIN reservations r ON r.id=s.reservation_id LEFT JOIN accounting_journal_entries j ON j.id=s.payment_journal_id WHERE ${where.join(" AND ")}`;
   const total=await scalarCount(db,`SELECT COUNT(*) count ${from}`,binds);
@@ -179,7 +180,7 @@ async function channelDepositsReport(db:PmsDatabase,p:Params){
 
 async function deferredSettlementsReport(db:PmsDatabase,p:Params){
   const where=["i.property_id=pms_current_property_id()","i.issued_date BETWEEN ? AND ?"],binds:unknown[]=[p.from,p.to];
-  if(p.q){where.push(sqlLike(["i.invoice_no","a.account_no","a.name","r.confirmation_no","l.memo"]));binds.push(...searchBinds(p.q,5));}if(p.status){where.push("i.status=?");binds.push(p.status);}if(p.source){where.push("a.name=?");binds.push(p.source);}
+  if(p.q){where.push(sqlLike(["i.invoice_no","a.account_no","a.name","r.confirmation_no","l.memo"]));binds.push(...searchBinds(p.q,5));}if(p.status){where.push("i.status=?");binds.push(p.status);}if(p.source){where.push("LOWER(a.name)=LOWER(?)");binds.push(p.source);}
   const from=`FROM ar_invoices i JOIN ar_accounts a ON a.id=i.ar_account_id JOIN reservations r ON r.id=i.reservation_id LEFT JOIN ar_ledger_entries l ON l.invoice_id=i.id WHERE ${where.join(" AND ")}`;
   const total=await scalarCount(db,`SELECT COUNT(DISTINCT i.id) count ${from}`,binds);
   const rows=await pageQuery(db,`SELECT i.id invoice_id,i.invoice_no,a.account_no,a.name account_name,r.confirmation_no,i.issued_date,i.due_date,i.total,ROUND(COALESCE(SUM(l.credit),0),2) paid,ROUND(COALESCE(SUM(l.debit-l.credit),0),2) balance,i.status,MAX(l.business_date) FILTER (WHERE l.kind='PAYMENT') last_payment_date,CASE WHEN i.status='OPEN' AND i.due_date<?::date THEN ?::date-i.due_date ELSE 0 END days_overdue ${from} GROUP BY i.id,a.id,r.id ORDER BY CASE WHEN i.status='OPEN' THEN 0 ELSE 1 END,i.due_date,i.invoice_no`,[p.to,p.to,...binds],p);
@@ -189,7 +190,7 @@ async function deferredSettlementsReport(db:PmsDatabase,p:Params){
 
 async function yoyReport(db:PmsDatabase,p:Params){
   const extra:string[]=[];const binds:unknown[]=[p.from,p.to];
-  if(p.q){extra.push(sqlLike(["r.confirmation_no","g.first_name||' '||g.last_name","r.source","rt.code"]));binds.push(...searchBinds(p.q,4));}if(p.source){extra.push("r.source=?");binds.push(p.source);}if(p.roomTypeId){extra.push("r.room_type_id=?");binds.push(p.roomTypeId);}
+  if(p.q){extra.push(sqlLike(["r.confirmation_no","g.first_name||' '||g.last_name","g.last_name||g.first_name","r.source","rt.code"]));binds.push(...searchBinds(p.q,5));}if(p.source){extra.push("LOWER(r.source)=LOWER(?)");binds.push(p.source);}if(p.roomTypeId){extra.push("r.room_type_id=?");binds.push(p.roomTypeId);}
   const base=`WITH input AS (SELECT ?::date from_date,?::date to_date),months AS (SELECT generate_series(date_trunc('month',from_date),date_trunc('month',to_date),INTERVAL '1 month')::date stay_month FROM input),bookings AS (SELECT date_trunc('month',r.arrival_date)::date arrival_month,COALESCE((SELECT SUM(n.sell_rate) FROM reservation_rate_nights n WHERE n.property_id=r.property_id AND n.reservation_id=r.id),r.nightly_rate*(r.departure_date-r.arrival_date)) revenue FROM reservations r JOIN guests g ON g.id=r.guest_id JOIN room_types rt ON rt.id=r.room_type_id CROSS JOIN input WHERE r.property_id=pms_current_property_id() AND r.arrival_date BETWEEN (input.from_date-INTERVAL '1 year') AND input.to_date AND r.status NOT IN ('CANCELLED','NO_SHOW')${extra.length?` AND ${extra.join(" AND ")}`:""}),series AS (SELECT m.stay_month,COUNT(b.*) FILTER (WHERE b.arrival_month=m.stay_month) current_book,COUNT(b.*) FILTER (WHERE b.arrival_month=(m.stay_month-INTERVAL '1 year')::date) prior_book,COALESCE(SUM(b.revenue) FILTER (WHERE b.arrival_month=m.stay_month),0) current_rev,COALESCE(SUM(b.revenue) FILTER (WHERE b.arrival_month=(m.stay_month-INTERVAL '1 year')::date),0) prior_rev FROM months m LEFT JOIN bookings b ON b.arrival_month IN (m.stay_month,(m.stay_month-INTERVAL '1 year')::date) GROUP BY m.stay_month)`;
   const total=await scalarCount(db,`${base} SELECT COUNT(*) count FROM series`,binds);
   const rows=await pageQuery(db,`${base} SELECT stay_month,current_book,prior_book,ROUND(CASE WHEN prior_book=0 THEN CASE WHEN current_book=0 THEN 0 ELSE 100 END ELSE (current_book-prior_book)*100.0/prior_book END,2) book_yoy,current_rev,prior_rev,ROUND(CASE WHEN prior_rev=0 THEN CASE WHEN current_rev=0 THEN 0 ELSE 100 END ELSE (current_rev-prior_rev)*100.0/prior_rev END,2) rev_yoy FROM series ORDER BY stay_month`,binds,p);

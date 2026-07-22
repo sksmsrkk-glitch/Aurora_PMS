@@ -4,6 +4,12 @@ import type { PmsDatabase } from "../../../db/pms-database";
 import type { Principal } from "./auth";
 import { canViewWorkspace } from "../../access-control";
 import { addIsoDays } from "../../../lib/format";
+import {
+  phoneDigits,
+  sqlCompactPattern,
+  sqlLikePattern,
+  sqlPhonePattern,
+} from "../../../lib/search";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const QUEUES = ["TODAY", "ALL", "DUE_IN", "IN_HOUSE", "DUE_OUT", "UNASSIGNED", "BALANCE"] as const;
@@ -120,8 +126,9 @@ function frontdeskWhere(query: FrontdeskQuery) {
     binds.push(query.status);
   }
   if (query.q) {
-    clauses.push("LOWER(CONCAT_WS(' ',x.first_name,x.last_name,x.confirmation_no,COALESCE(x.room_number,''),COALESCE(x.phone,''),COALESCE(x.email,''),COALESCE(x.external_reservation_id,''))) LIKE ?");
-    binds.push(`%${query.q.toLocaleLowerCase("ko-KR")}%`);
+    clauses.push("(LOWER(CONCAT_WS(' ',x.first_name,x.last_name,x.confirmation_no,COALESCE(x.room_number,''),COALESCE(x.phone,''),COALESCE(x.email,''),COALESCE(x.external_reservation_id,''))) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(x.last_name,'')||COALESCE(x.first_name,'')) LIKE ? ESCAPE '\\' OR (?<>'' AND REGEXP_REPLACE(COALESCE(x.phone,''),'\\D','','g') LIKE ? ESCAPE '\\'))");
+    const digits=phoneDigits(query.q);
+    binds.push(sqlLikePattern(query.q),sqlCompactPattern(query.q),digits,sqlPhonePattern(query.q));
   }
   const dateColumn = query.dateField === "departure" ? "x.departure_date" : "x.arrival_date";
   if (query.from) {
@@ -133,8 +140,8 @@ function frontdeskWhere(query: FrontdeskQuery) {
     binds.push(query.to);
   }
   if (query.source) {
-    clauses.push("LOWER(x.source) LIKE ?");
-    binds.push(`%${query.source.toLocaleLowerCase("ko-KR")}%`);
+    clauses.push("LOWER(x.source) LIKE ? ESCAPE '\\'");
+    binds.push(sqlLikePattern(query.source));
   }
   if (query.roomTypeId) {
     clauses.push("x.room_type_id=?");
@@ -402,7 +409,10 @@ export async function loadPmsSearch(
 ) {
   const q = (params.get("q") || "").trim().slice(0, 120);
   if (q.length < 2) return { q, groups: [], total: 0 };
-  const pattern = `%${q.toLocaleLowerCase("ko-KR")}%`;
+  const pattern = sqlLikePattern(q);
+  const compactPattern = sqlCompactPattern(q);
+  const digits = phoneDigits(q);
+  const digitPattern = sqlPhonePattern(q);
   // Domain-level read flags are bound into every query so opening the global
   // search never broadens a narrow staff member's workspace permissions.
   const maySearchReservations = canViewWorkspace(principal.workspaceAccess, "frontdesk");
@@ -418,19 +428,21 @@ export async function loadPmsSearch(
       LEFT JOIN rooms rm ON rm.id=r.room_id AND rm.property_id=r.property_id
       LEFT JOIN (SELECT reservation_id,MIN(external_reservation_id) external_reservation_id FROM channel_reservation_links WHERE property_id=pms_current_property_id() GROUP BY reservation_id) er ON er.reservation_id=r.id
       WHERE r.property_id=pms_current_property_id() AND ?
-        AND LOWER(CONCAT_WS(' ',r.confirmation_no,g.first_name,g.last_name,COALESCE(g.phone,''),COALESCE(g.email,''),COALESCE(rm.number,''),COALESCE(er.external_reservation_id,''))) LIKE ?
-      ORDER BY r.updated_at DESC LIMIT 8`).bind(maySearchReservations, pattern),
+        AND (LOWER(CONCAT_WS(' ',r.confirmation_no,g.first_name,g.last_name,COALESCE(g.phone,''),COALESCE(g.email,''),COALESCE(rm.number,''),COALESCE(er.external_reservation_id,''))) LIKE ? ESCAPE '\\'
+          OR LOWER(COALESCE(g.last_name,'')||COALESCE(g.first_name,'')) LIKE ? ESCAPE '\\'
+          OR (?<>'' AND REGEXP_REPLACE(COALESCE(g.phone,''),'\\D','','g') LIKE ? ESCAPE '\\'))
+      ORDER BY r.updated_at DESC LIMIT 8`).bind(maySearchReservations, pattern, compactPattern, digits, digitPattern),
     db.prepare(`SELECT rm.id,rm.number,rm.front_desk_status,rm.housekeeping_status,rt.code,rt.name
       FROM rooms rm JOIN room_types rt ON rt.id=rm.room_type_id AND rt.property_id=rm.property_id
       WHERE rm.property_id=pms_current_property_id() AND ? AND rm.active
-        AND LOWER(CONCAT_WS(' ',rm.number,rt.code,rt.name,rm.floor)) LIKE ?
+        AND LOWER(CONCAT_WS(' ',rm.number,rt.code,rt.name,rm.floor)) LIKE ? ESCAPE '\\'
       ORDER BY rm.number LIMIT 6`).bind(maySearchRooms, pattern),
     db.prepare(`SELECT i.id,i.invoice_no,i.status,
         COALESCE(SUM(l.debit-l.credit),0) balance,a.name account_name
       FROM ar_invoices i JOIN ar_accounts a ON a.id=i.ar_account_id AND a.property_id=i.property_id
       LEFT JOIN ar_ledger_entries l ON l.invoice_id=i.id AND l.property_id=i.property_id
       WHERE i.property_id=pms_current_property_id() AND ?
-        AND LOWER(CONCAT_WS(' ',i.invoice_no,a.account_no,a.name)) LIKE ?
+        AND LOWER(CONCAT_WS(' ',i.invoice_no,a.account_no,a.name)) LIKE ? ESCAPE '\\'
       GROUP BY i.id,a.id ORDER BY i.issued_date DESC LIMIT 6`).bind(maySearchFinance, pattern),
   ]);
   const reservationItems = reservations.results.map((row) => ({
@@ -458,7 +470,8 @@ export async function loadPmsSearch(
     { id: "rooms", label: "객실", items: roomItems },
     { id: "finance", label: "정산·미수금", items: financeItems },
   ].filter((group) => group.items.length > 0);
-  return { q, groups, total: groups.reduce((sum, group) => sum + group.items.length, 0) };
+  const total=groups.reduce((sum, group) => sum + group.items.length, 0);
+  return { q, groups, total, truncated: reservationItems.length===8||roomItems.length===6||financeItems.length===6 };
 }
 
 function stayDates(arrival: string, departure: string) {

@@ -262,6 +262,22 @@ test("global PMS search executes every permitted domain query on the production 
     });
     assert.ok(result.total >= 1);
     assert.ok(result.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("Sofia"))));
+    const naturalKoreanName = await loadPmsSearch(db, new URLSearchParams({ q: "김민지" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.ok(naturalKoreanName.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
+    const digitsOnlyPhone = await loadPmsSearch(db, new URLSearchParams({ q: "01020118800" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.ok(digitsOnlyPhone.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
+    const literalWildcards = await loadPmsSearch(db, new URLSearchParams({ q: "%%" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.equal(literalWildcards.total, 0);
+    assert.match(String(result.groups[0]?.items[0]?.path || ""), /^\/(frontdesk|rooms|finance)\?focus=/u);
   } finally {
     await closePmsDatabase();
     if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;

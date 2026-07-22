@@ -5,6 +5,7 @@
 import { useMemo, useState } from "react";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
+import { matchesSearch } from "../lib/search";
 
 type Connection = {
   id: string;
@@ -45,10 +46,10 @@ export default function ChannelContracts({
   // Search starts from connections rather than contracts so a newly connected OTA
   // with missing commercial terms remains visible and actionable.
   const visibleConnections = useMemo(() => {
-    const keyword = query.trim().toLocaleLowerCase("ko-KR");
     return connections.filter((connection) => {
       const contract = contracts.find((item) => item.connection_id === connection.id);
-      return !keyword || `${connection.provider} ${connection.name} ${connection.status} ${contract?.contract_type||"계약 미설정"} ${contract?.status||""}`.toLocaleLowerCase("ko-KR").includes(keyword);
+      const contractLabel=contract?.contract_type==="COMMISSION"?"판매가 수수료 수수료 계약":contract?.contract_type==="NET_RATE"?"호텔 입금가 입금가 계약":"계약 미설정";
+      return matchesSearch([connection.provider,connection.name,connection.status,contract?.contract_type,contractLabel,contract?.status],query);
     });
   }, [connections, contracts, query]);
   return (
