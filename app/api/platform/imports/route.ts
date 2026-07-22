@@ -21,7 +21,7 @@ import {
   runtimeBindings,
 } from "../../pms/auth";
 import { authenticateSupabaseRequest } from "../../../supabase-session";
-import { importMfaFailure } from "../../import-mfa-policy";
+import { importAccessFailure } from "../../import-access-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,14 +58,8 @@ async function context(request: Request) {
   const principal = await principalFor(request, root);
   if (!principal)
     return { rejected: await principalAccessFailureResponse(request) };
-  if (!principal.capabilities.includes("USER_ADMIN"))
-    return {
-      rejected: response({ error: "데이터 이관 권한이 필요합니다." }, 403),
-    };
   const identity = await authenticateSupabaseRequest(request);
-  const mfaFailure=importMfaFailure(identity);
-  if(mfaFailure){const {status,...body}=mfaFailure;return {rejected:response(body,status)};}
-  return { root, db: scopePmsDatabase(root, principal.propertyId), principal };
+  return { root, db: scopePmsDatabase(root, principal.propertyId), principal, identity };
 }
 
 export async function POST(request: Request) {
@@ -91,6 +85,16 @@ export async function POST(request: Request) {
       },
       400,
     );
+  }
+  const kind = parsed.action === "dry_run" ? parsed.kind : parsed.expectedKind;
+  const accessFailure = importAccessFailure({
+    capabilities: resolved.principal.capabilities,
+    identity: resolved.identity,
+    kind,
+  });
+  if (accessFailure) {
+    const { status, ...body } = accessFailure;
+    return response(body, status);
   }
   const { db, principal } = resolved;
   const entitlement = await db

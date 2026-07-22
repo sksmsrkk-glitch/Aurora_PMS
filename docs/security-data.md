@@ -35,7 +35,8 @@
 11. CSP, HSTS, frame deny, nosniff, strict referrer, permissions policy, COOP 보안 헤더
 12. 미분류 서버 오류는 UUID 오류 ID만 응답하고 원인은 server log에 남기는 오류 마스킹
 13. 감사 로그, reservation mutation/transition, immutable 원장, transactional outbox
-14. 카드 원문·CVV 미수집·미저장
+14. 카드 원문·CVV 미수집·미저장; 카드 참조는 모든 비숫자 구분자를 제외한 숫자가 12자리 이상이면 앱과 DB에서 거부
+15. 데이터 임포트는 kind별 단일 capability 정책과 검증된 Supabase identity·MFA 추가 인증을 공통 강제
 
 Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV !== production`, `PMS_ALLOW_DEMO_AUTH=true`, 32자 이상 `PMS_DEMO_AUTH_TOKEN`, 같은 값의 `x-aurora-demo-token`, `PMS_DEMO_USER_EMAIL`, 그리고 해당 이메일의 수동 `role_assignments`가 모두 있어야만 성립합니다. 런타임 초기화와 seed는 어떤 관리자 역할도 생성하지 않습니다.
 

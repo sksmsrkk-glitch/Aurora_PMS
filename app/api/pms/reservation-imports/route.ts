@@ -6,7 +6,7 @@ import { consumeRateLimit, rateLimitHeaders } from "../../rate-limit";
 import { commit, dryRun, rollback } from "../../platform/imports/route";
 import { principalAccessFailureResponse, principalFor, ready, runtimeBindings } from "../auth";
 import { authenticateSupabaseRequest } from "../../../supabase-session";
-import { importMfaFailure } from "../../import-mfa-policy";
+import { importAccessFailure } from "../../import-access-policy";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
@@ -20,8 +20,8 @@ const response=(body:unknown,status=200,headers:HeadersInit={})=>Response.json(b
 async function context(request:Request,requireStepUp=false){
   const root=getPmsDatabase(runtimeBindings);try{await ready(root);}catch(error){const rejected=schemaNotReadyResponse(error);if(rejected)return {rejected};throw error;}
   const principal=await principalFor(request,root);if(!principal)return {rejected:await principalAccessFailureResponse(request)};
-  if(!principal.capabilities.includes("RESERVATION_WRITE"))return {rejected:response({error:"예약 일괄 등록 권한이 필요합니다."},403)};
-  if(requireStepUp){const failure=importMfaFailure(await authenticateSupabaseRequest(request));if(failure){const {status,...body}=failure;return {rejected:response(body,status)};}}
+  const failure=importAccessFailure({capabilities:principal.capabilities,identity:requireStepUp?await authenticateSupabaseRequest(request):{assuranceLevel:"aal2"},kind:"RESERVATIONS"});
+  if(failure){const {status,...body}=failure;return {rejected:response(body,status)};}
   const db=scopePmsDatabase(root,principal.propertyId),entitlement=await db.prepare("SELECT enabled FROM property_entitlements WHERE property_id=pms_current_property_id() AND feature_key='DATA_IMPORT'").first<{enabled:boolean}>();
   if(!entitlement?.enabled)return {rejected:response({error:"이 호텔 플랜에는 데이터 가져오기 기능이 활성화되지 않았습니다."},403)};
   return {root,db,principal};

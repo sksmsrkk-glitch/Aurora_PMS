@@ -61,6 +61,8 @@ WHERE departure_date <= arrival_date;
 5. `npm run db:contract:verify`, `npm run db:supabase:smoke`, 스테이징 `qa:workflow`를 통과한 뒤 애플리케이션을 배포합니다.
 6. 긴 lock, dead tuple, API 5xx, 예약·room-night·원장 합계를 관찰하고 쓰기를 재개합니다.
 
+Vercel의 `release:build`는 DB에 접속하지 않습니다. migration 적용 여부는 배포 전 `db:contract:verify`와 배포 후 `/api/health`에서 확인하며, 계약이 준비되지 않은 런타임은 `SCHEMA_NOT_READY` 503으로 닫힙니다.
+
 2026-07-17 운영 점검 결과 `0011`~`0014`는 이미 적용되어 추가 테이블 재작성은 필요하지 않았습니다. `0013` 적용 이력에는 0박 예약 32건이 `NORMALIZE_ZERO_NIGHT_RESERVATION`으로 기록되어 있었고 모두 Direct 소스였습니다. 점검 시점의 `departure_date <= arrival_date` 잔존 건수는 0건입니다. 이 수치는 과거 수리 영향 감사 기록이며 fixture나 재적용 지시가 아닙니다.
 
 ### 매일 운영
@@ -234,6 +236,7 @@ WHERE departure_date <= arrival_date;
 | 2026-07-21 HotelStory voucher | KR/EN·금액 표시 정책, 한글 글꼴 임베딩 PDF, XLSX·인쇄, immutable 문서 snapshot, 멱등 메일 worker와 migration 0022·PostgreSQL 회귀 테스트 |
 | 2026-07-20 worker durability follow-up | claim 내부 10분 lease 회수·고아 attempt 종결, DEAD enqueue 초기화·RUNNING lease 보호, CMS 구독 재검증, 로그인 선택 쿠키 초기화, migration 0019·PostgreSQL 회귀 테스트 |
 | 2026-07-22 worker lease/proxy audit | claim·recovery가 `AURORA_WORKER_LEASE_SECONDS`를 단일 사용, 299/301초 경계 PostgreSQL 테스트, Next.js 16 `proxy.ts` custom-domain rewrite 행동 테스트 |
+| 2026-07-22 import/PCI/release audit | 구분자 포함 PAN 제거·차단, 채널 요금제 NOT NULL, kind별 공통 임포트 권한/MFA, DB 비의존 Vercel 정적 빌드와 runtime readiness 분리 |
 | 2026-07-20 worker delivery recovery | stale RUNNING lease reaper, bounded DEAD attempt cycle, incident 자동 종료, 정지 홈페이지·로그인 loop 차단, 0016→0017 격리 스테이징 19개 PostgreSQL 통합 검증 |
 | 2026-07-17 P2 platform hardening | 배포 schema gate, 닫힌 auth capability, native temporal types, Rate Plan/WEB-DIRECT, 실제 dashboard 비교, 호텔 SEO, CSS·README 모듈화 |
 | 2026-07-17 structural debt remediation | migration 단일 원본, tenant RLS context, API registry/Zod 모듈화, 13개 실제 route와 action Context, mutation receipt/TanStack Query, PostgreSQL CI, 20-way last-room concurrency test |

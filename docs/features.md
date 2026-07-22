@@ -22,7 +22,7 @@
 - HotelStory형 와이드 예약 상세 Drawer: 좌측 예약·상품·일자별 요금·취소정책, 우측 예약자/투숙자·옵션·메모
 - 예약자 이름·전화·이메일과 실제 투숙자 정보를 별도 저장하고 서로 다른 경우도 정상 처리
 - 고객요청/호텔응답, 관리자메모/호텔메모, 예약 확인, 결제구분, 서비스 요금 포함, 얼리체크인/레이트체크아웃 시간
-- 원문 카드번호 대신 PG token 또는 마스킹된 Card Info 참조만 저장; 12자리 이상 연속 숫자는 서버와 DB에서 거부
+- 원문 카드번호 대신 PG token 또는 마스킹된 Card Info 참조만 저장; 공백·하이픈 등 구분자를 제외한 숫자가 12자리 이상이면 서버와 DB에서 거부
 - 예약변경·연계예약·예약복사·상세저장·취소접수 동작과 동반/연박/그룹 연계 목록
 - 예약 상세 하단의 연동로그/수정로그/요금로그/블럭로그; actor·시각·before/after와 immutable 일자 요금 표시
 - 예약 바우처 dialog에서 국문/영문, 금액 표시/숨김, 제목·수신자를 선택하고 PDF·Excel·인쇄·메일 전송
@@ -523,3 +523,10 @@ stay availability = minimum available across all stay nights
 - 다른 단말이 먼저 예약을 변경해 `409 Conflict`가 발생하면 활성 룸 보드와 예약 상세 projection을 즉시 다시 조회합니다.
 - 재조회가 끝난 뒤 최신 `version`으로 다시 시도할 수 있으므로 같은 오래된 버전으로 반복 실패하지 않습니다.
 - 성공한 명령도 예약 상세 prefix를 무효화하여 폴리오·연동 기록처럼 예약 버전이 바뀌지 않는 부수효과가 열린 상세 화면에 반영됩니다.
+
+### 15. 데이터 임포트 보안 경계
+
+- `RESERVATIONS` dry-run·commit·rollback은 `RESERVATION_WRITE`와 검증된 Supabase identity/MFA를 요구합니다.
+- 객실 타입·객실·고객 마스터 이관은 `USER_ADMIN`과 동일한 identity/MFA 정책을 요구합니다.
+- `/api/pms/reservation-imports`와 `/api/platform/imports`는 같은 kind 기반 정책 함수만 호출하므로 진입점에 따라 권한이 달라지지 않습니다.
+- `channel_rate_overrides.rate_plan_id`는 필수이며 채널 매핑의 Rate Plan과 일치하지 않는 행은 DB trigger/FK/NOT NULL 계약에서 거부됩니다.
