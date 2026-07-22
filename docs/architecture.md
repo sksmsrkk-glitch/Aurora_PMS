@@ -271,3 +271,9 @@ sequenceDiagram
 ### ADR-024 · 충돌 후 권위 projection 재조회
 
 낙관적 잠금 충돌은 명령 실패일 뿐 아니라 다른 단말에 더 최신 상태가 있다는 신호입니다. 공통 command client는 성공 시 도메인 receipt와 열린 예약 상세를 무효화하고, 실패 시에도 룸 보드와 예약 상세의 활성 query를 강제로 다시 읽습니다. 룸 보드는 요청 중 예약 ID를 잠가 중복 드래그를 막습니다. 이 규약으로 stale `expectedVersion` 재사용 루프와 응답 대기 중 이중 명령을 함께 차단합니다.
+
+### ADR-025 · 단일 워커 리스와 Next.js Proxy
+
+`AURORA_WORKER_LEASE_SECONDS`는 독립 recovery sweep과 claim transaction 내부의 최종 reaper가 함께 사용하는 유일한 리스 임계값입니다. claim API가 값을 필수 인자로 받으므로 호출자가 다른 하드코딩 임계값을 사용할 수 없습니다. 경계 테스트는 300초 정책에서 299초 lease를 유지하고 301초 lease만 회수하는지 실제 PostgreSQL로 검증합니다.
+
+공개 커스텀 도메인은 Next.js 16의 공식 `proxy.ts` 진입점을 사용합니다. matcher는 `/`와 `/book`만 실행하고, 플랫폼 hostname은 PMS 경로를 유지하며 그 밖의 hostname만 `/hotel`과 `/hotel/book`으로 rewrite합니다. tenant 선택과 구독 검증은 여전히 목적지 서비스가 수행합니다.

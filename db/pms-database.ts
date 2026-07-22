@@ -95,7 +95,7 @@ export interface PmsDatabase {
   findActiveSupportAssignments(authUserId:string,email:string):Promise<SupportAssignment[]>;
   recordSupportAccess(input:{grantId:string;authUserId:string;actorEmail:string;write:boolean;requestId:string;action:string}):Promise<boolean>;
   provisionProperty(input: ProvisionPropertyInput): Promise<{propertyId:string;hostname:string}>;
-  claimWorkerJobs(workerId: string, limit: number): Promise<WorkerJob[]>;
+  claimWorkerJobs(workerId: string, limit: number, leaseSeconds: number): Promise<WorkerJob[]>;
   recoverWorkerJobs(input:{leaseSeconds:number;deadCooldownSeconds:number;maxRecoveries:number;limit:number}):Promise<WorkerRecoverySummary>;
   enqueueUsageRollups(usageDate:string):Promise<number>;
   finishWorkerJob(input:{jobId:string;workerId:string;outcome:"SUCCEEDED"|"RETRY"|"DEAD";durationMs:number;httpStatus?:number;errorCode?:string;errorMessage?:string}):Promise<boolean>;
@@ -471,19 +471,19 @@ class PostgresDatabase implements PmsDatabase {
   }
 
   /** Claims jobs across properties with SKIP LOCKED; no tenant payload can alter SQL. */
-  async claimWorkerJobs(workerId: string, limit: number) {
+  async claimWorkerJobs(workerId: string, limit: number, leaseSeconds: number) {
     if(this.propertyId)throw new Error("Worker claims require the root database capability");
-    if(!/^[A-Za-z0-9:_-]{3,100}$/u.test(workerId)||!Number.isInteger(limit)||limit<1||limit>25)throw new Error("Invalid worker claim");
+    if(!/^[A-Za-z0-9:_-]{3,100}$/u.test(workerId)||!Number.isInteger(limit)||limit<1||limit>25||!Number.isInteger(leaseSeconds)||leaseSeconds<90||leaseSeconds>3600)throw new Error("Invalid worker claim");
     return this.client.begin(async(transaction)=>{
       // A claim is the final durability boundary, so it must not depend on the
       // scheduler having called recoverWorkerJobs first. Reap leases that have
-      // been abandoned for ten minutes while holding row locks in this same
-      // transaction; a concurrent worker can never reclaim the same job.
+      // exceeded the same configured lease used by the recovery sweep while
+      // holding row locks; a concurrent worker can never reclaim the same job.
       const expired=await this.executeRaw<{id:string;property_id:string;job_type:string;attempts:number;max_attempts:number;attempt_cycle:number}>(
         `SELECT id,property_id,job_type,attempts,max_attempts,attempt_cycle FROM worker_jobs
-          WHERE status='RUNNING' AND locked_at<=clock_timestamp()-interval '10 minutes'
+          WHERE status='RUNNING' AND locked_at<=clock_timestamp()-(?||' seconds')::interval
           ORDER BY locked_at,id FOR UPDATE SKIP LOCKED LIMIT 100`,
-        [],transaction,
+        [String(leaseSeconds)],transaction,
       );
       for(const job of expired.results){
         const outcome=job.attempts<job.max_attempts?"RETRY":"DEAD";
