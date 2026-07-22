@@ -38,10 +38,11 @@ export function reservationCommandInput(
   return {...guest,arrivalDate:search.arrival,departureDate:search.departure,adults:search.adults,children:search.children,roomTypeId,ratePlan,nightlyRate,rateOverride:String(Number(nightlyRate)!==average)};
 }
 
-export default function ReservationWizard({ rooms, businessDate, close }: { rooms: Room[]; businessDate: string; close: () => void }) {
+export default function ReservationWizard({ rooms, businessDate, initial={}, close }: { rooms: Room[]; businessDate: string; initial?:{arrivalDate?:string;roomTypeId?:string;roomId?:string}; close: () => void }) {
   const { busy, act } = usePmsActions();
   const [step, setStep] = useState(0);
-  const [search, setSearch] = useState({ arrival: businessDate, departure: addIsoDays(businessDate, 1), adults: "2", children: "0" });
+  const initialArrival=initial.arrivalDate&&initial.arrivalDate>=businessDate?initial.arrivalDate:businessDate;
+  const [search, setSearch] = useState({ arrival: initialArrival, departure: addIsoDays(initialArrival, 1), adults: "2", children: "0" });
   const [availability, setAvailability] = useState<Availability | null>(null);
   const [offerId, setOfferId] = useState("");
   const [planId, setPlanId] = useState("");
@@ -74,8 +75,8 @@ export default function ReservationWizard({ rooms, businessDate, close }: { room
       const response = await fetch(`/api/pms?${params}`, { cache: "no-store" });
       const json = (await response.json()) as Availability;
       if (!response.ok) throw new Error(json.error || "가용 객실을 찾지 못했습니다.");
-      const preferredOffer=json.offers.find(entry=>entry.plans.some(rate=>rate.id===preferredPlanId)),preferredPlan=preferredOffer?.plans.find(rate=>rate.id===preferredPlanId);
-      setSearch(criteria);setAvailability(json);setOfferId(preferredOffer?.roomTypeId||"");setPlanId(preferredPlan?.id||"");setOfferQuery("");setOfferPage(0);setGuestField("nightlyRate",preferredPlan?String(preferredPlan.average):"");setGuestField("roomId","");setStep(1);
+      const preferredOffer=json.offers.find(entry=>entry.plans.some(rate=>rate.id===preferredPlanId))||json.offers.find(entry=>entry.roomTypeId===initial.roomTypeId),preferredPlan=preferredOffer?.plans.find(rate=>rate.id===preferredPlanId)||preferredOffer?.plans[0];
+      setSearch(criteria);setAvailability(json);setOfferId(preferredOffer?.roomTypeId||"");setPlanId(preferredPlan?.id||"");setOfferQuery("");setOfferPage(0);setGuestField("nightlyRate",preferredPlan?String(preferredPlan.average):"");setGuestField("roomId",initial.roomId&&rooms.some(room=>room.id===initial.roomId)?initial.roomId:"");setStep(1);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "가용 객실을 찾지 못했습니다."); }
     finally { setSearching(false); }
   }

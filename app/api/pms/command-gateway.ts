@@ -15,6 +15,7 @@ import { handleStaffAction, StaffAccessError } from "./staff";
 import { StaffAuthError } from "./staff-auth";
 import { loadReservationVoucher } from "./voucher-service";
 import { FinalOperationsError, handleFinalOperationsAction } from "./final-operations-service";
+import { handleRoomAssignmentAction, ROOM_ASSIGNMENT_ACTIONS, RoomAssignmentError } from "./room-assignment-service";
 
 type D1=PmsDatabase;
 type D1PreparedStatement=PmsPreparedStatement;
@@ -165,7 +166,10 @@ export async function handlePmsPost(request: Request) {
   const reservation = body.reservationId ? await db.prepare("SELECT * FROM reservations WHERE id=? AND property_id=pms_current_property_id()").bind(body.reservationId).first<Record<string, unknown>>() : null;
   const propertyState = await db.prepare("SELECT business_date,currency FROM properties WHERE id=pms_current_property_id()").first<{business_date:string;currency:string}>(); const businessDate=String(propertyState?.business_date);
   try {
-    if(["upsert_banquet_venue","upsert_banquet_reservation","set_banquet_reservation_status","upsert_hotel_member","set_hotel_member_active","reset_hotel_member_password"].includes(body.action)){
+    if(ROOM_ASSIGNMENT_ACTIONS.has(body.action as never)){
+      const handled=await handleRoomAssignmentAction(db,body,principal,now,idempotencyKey);
+      if(!handled)return Response.json({error:"등록된 객실 배정 핸들러가 작업을 처리하지 못했습니다."},{status:500});
+    } else if(["upsert_banquet_venue","upsert_banquet_reservation","set_banquet_reservation_status","upsert_hotel_member","set_hotel_member_active","reset_hotel_member_password"].includes(body.action)){
       const handled=await handleFinalOperationsAction(db,body,principal,now,idempotencyKey);
       if(!handled)return Response.json({error:"등록된 HotelStory 운영 핸들러가 작업을 처리하지 못했습니다."},{status:500});
     } else if(registration.domain==="users"){
@@ -647,7 +651,7 @@ export async function handlePmsPost(request: Request) {
     return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body}));
   } catch (error) {
     const message=error instanceof Error ? error.message : "처리 중 오류가 발생했습니다.";
-    if(error instanceof StaffAccessError||error instanceof StaffAuthError||error instanceof FinalOperationsError)return Response.json({error:error.message},{status:error.status});
+    if(error instanceof StaffAccessError||error instanceof StaffAuthError||error instanceof FinalOperationsError||error instanceof RoomAssignmentError)return Response.json({error:error.message},{status:error.status});
     if(error instanceof PmsExtendedError)return Response.json({error:error.message},{status:error.status});
     if (/idempotency_keys_pkey|idempotency_keys\.key|voucher_delivery_idempotency_uq/iu.test(message)) return Response.json(pmsMutationReceipt({action:body.action,domain:registration.domain,idempotencyKey,body,replayed:true}), {headers:{"X-Idempotent-Replay":"true"}});
     const mapped=mapPmsError(message);

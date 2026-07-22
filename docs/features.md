@@ -28,13 +28,16 @@
 - 예약 바우처 dialog에서 국문/영문, 금액 표시/숨김, 제목·수신자를 선택하고 PDF·Excel·인쇄·메일 전송
 - `/frontdesk/checkin`과 `/frontdesk/checkout` 전용 URL에서 기준일·고객·예약·전화·객실·채널·객실타입·판매상품 필터와 예약 상세 딥링크
 - `/frontdesk/occupancy`에서 객실 행×18일 날짜 열 점유 timeline, 상품·채널·객실타입 선택과 예약 cell 상세 이동
+- `/frontdesk?view=board&from=YYYY-MM-DD&days=7|14|30`에서 실제 객실×숙박일 배정 보드, sticky 객실/날짜 축, 미배정 tray, 내부 가로 스크롤과 공유 가능한 딥링크
+- 보드의 빈 셀은 날짜·객실타입·실물 객실을 새 예약에 미리 채우고, 예약 막대는 상세 Drawer·전체 숙박일 재배정·선택일 이후 룸 무브·배정 해제로 연결
+- 드래그가 어려운 운영자를 위해 모든 배정에 `객실 선택` 키보드 동선을 제공하고, 타입 불일치·DIRTY 객실은 확인 후 감사 로그에 override 사유를 남김
 - `/frontdesk/imports`에서 Excel용 CSV 양식 다운로드, 2,000행 dry-run, 행 오류, 원자 반영, 같은 파일 replay와 안전 rollback 이력
 - PDF는 한글 글꼴을 문서에 subset 임베딩하고, 금액 숨김은 HTML·PDF·XLSX 모두 동일한 서버 정책을 사용
 - 메일은 예약 시점 문서 snapshot을 durable worker에 넣고 delivery ID 멱등 키로 중복 발송을 방지하며 PAN·관리자/호텔 내부 메모를 포함하지 않음
 - 예약 일정·객실 타입·인원·요금·ETA 수정
-- 미배정 예약의 객실 배정
+- 미배정 예약의 전 숙박일 물리 객실 배정; `reservation_type_nights`의 타입 재고 차감은 그대로 유지
 - 체크인, 체크아웃, 노쇼, 예약 취소
-- 재실 고객 룸 무브와 사유 기록
+- 선택일을 포함한 이후 숙박일만 이동하는 룸 무브와 사유 기록; 대표 `room_id`는 호텔 영업일의 실제 객실을 가리킴
 - 캐셔 세션이 열린 경우 비용 전기와 결제
 - `Cmd/Ctrl + K`로 검색창 즉시 포커스
 - 새 예약은 HotelStory형 `목록으로 찾기 / 달력으로 찾기`에서 상품·일정·인원을 고른 뒤, 실시간 객실·요금, 고객·배정, 검토·확정의 4단계로 진행
@@ -285,6 +288,8 @@ stateDiagram-v2
 ```
 
 예약 변경, 객실 배정과 룸 무브는 `expectedVersion`을 사용합니다. 다른 운영자가 먼저 변경한 경우 `409 Conflict`를 반환하고 최신 화면으로 다시 확인하도록 안내합니다.
+
+물리 객실 배정은 타입 재고와 별도 원장입니다. `reservation_type_nights`는 판매 가능한 객실 타입 수량을 보호하고, `reservation_nights`는 `(property_id, room_id, stay_date)` 고유 제약으로 같은 실물 객실·같은 밤의 이중 배정을 막습니다. 배정·이동·해제는 예약 version mutation, 물리 객실 박, `room_moves`, 감사 로그, Outbox, idempotency 영수증을 하나의 PostgreSQL transaction에서 처리합니다. `IN_HOUSE` 예약의 배정 해제와 `OUT_OF_SERVICE` 객실 배정은 차단하며, 마지막 한 객실을 동시에 배정하는 요청은 정확히 한 건만 성공합니다.
 
 예약 상세 저장도 같은 version contract를 사용합니다. `reservation_mutations`의 예약·기대 버전 unique key가 사전 조회 뒤 발생하는 경쟁까지 차단하므로, 투숙자와 예약자·메모·시간 옵션·확인 상태·감사 로그가 하나의 원자 batch로 반영됩니다. 예약 당시 상품의 구조화된 취소 조건은 `rate_plan_snapshot.cancellationTerms`에 고정되며 이후 상품 master 변경으로 소급 변경되지 않습니다.
 

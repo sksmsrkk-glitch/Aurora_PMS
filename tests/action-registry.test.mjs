@@ -5,7 +5,7 @@ import { actionRegistry, registrationFor } from "../app/api/pms/action-registry.
 import { mapPmsError } from "../app/api/pms/error-map.ts";
 
 test("every registered action has one capability, domain, and Zod schema",()=>{
-  assert.equal(actionRegistry.size,82);
+  assert.equal(actionRegistry.size,85);
   for(const [action,registration] of actionRegistry){
     assert.equal(registration.action,action);
     assert.ok(registration.capability);
@@ -19,6 +19,17 @@ test("HotelStory banquet and member commands have closed required fields",()=>{
   assert.equal(registrationFor("upsert_banquet_reservation").schema.safeParse({action:"upsert_banquet_reservation",venueId:"v1",eventDate:"01/02/2031"}).success,false);
   assert.equal(registrationFor("reset_hotel_member_password").capability,"USER_ADMIN");
   assert.equal(registrationFor("set_banquet_reservation_status").capability,"GROUP_WRITE");
+});
+
+test("room-board commands require optimistic version and server-owned move dates",()=>{
+  const assign=registrationFor("assign_reservation_room"),move=registrationFor("move_reservation_room"),unassign=registrationFor("unassign_reservation_room");
+  assert.equal(assign.capability,"RESERVATION_WRITE");
+  assert.equal(move.capability,"RESERVATION_WRITE");
+  assert.equal(unassign.capability,"RESERVATION_WRITE");
+  assert.equal(assign.schema.safeParse({action:"assign_reservation_room",reservationId:"res-1",roomId:"room-1",expectedVersion:"1"}).success,true);
+  assert.equal(move.schema.safeParse({action:"move_reservation_room",reservationId:"res-1",roomId:"room-2",moveDate:"2031-03-02",reason:"ROOM_BOARD",expectedVersion:"2"}).success,true);
+  assert.equal(move.schema.safeParse({action:"move_reservation_room",reservationId:"res-1",roomId:"room-2",moveDate:"03/02/2031",expectedVersion:"2"}).success,false);
+  assert.equal(unassign.schema.safeParse({action:"unassign_reservation_room",reservationId:"res-1"}).success,false);
 });
 
 test("Zod rejects malformed commands before a domain handler runs",()=>{
@@ -82,7 +93,16 @@ test("website image transport allows base64 expansion but rejects oversized payl
 
 test("database errors map through a stable table instead of includes branches",()=>{
   assert.deepEqual(mapPmsError("duplicate key violates room_night_uq"),{
-    status:409,error:"선택한 객실은 해당 일정에 이미 예약되어 있습니다. 다른 객실을 선택하세요.",
+    status:409,error:"해당 객실은 그 날짜에 이미 배정되어 있습니다",
+  });
+  assert.deepEqual(mapPmsError('invalid input syntax for type integer: "RESERVATION_VERSION_CONFLICT_0"'),{
+    status:409,error:"다른 사용자가 먼저 변경했습니다. 화면을 새로고침하세요.",
+  });
+  assert.deepEqual(mapPmsError('invalid input syntax for type integer: "ROOM_ASSIGNMENT_BLOCKED_0"'),{
+    status:409,error:"판매 중지 객실은 배정할 수 없습니다.",
+  });
+  assert.deepEqual(mapPmsError('invalid input syntax for type integer: "ROOM_UNASSIGN_IN_HOUSE_0"'),{
+    status:409,error:"체크인된 예약은 배정 해제할 수 없습니다",
   });
   assert.equal(mapPmsError("unexpected driver fault"),null);
   assert.equal(mapPmsError("receipt must match the current paid settlement journal")?.status,409);

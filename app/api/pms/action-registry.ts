@@ -6,7 +6,7 @@ export type ActionDomain =
   | "integrations" | "accounting" | "website" | "operations" | "reports" | "users";
 
 const actionCapability = {
-  create_reservation:"RESERVATION_WRITE",edit_reservation:"RESERVATION_WRITE",update_reservation_detail:"RESERVATION_WRITE",link_reservation:"RESERVATION_WRITE",queue_reservation_voucher:"RESERVATION_WRITE",cancel_reservation:"RESERVATION_WRITE",assign_room:"RESERVATION_WRITE",
+  create_reservation:"RESERVATION_WRITE",edit_reservation:"RESERVATION_WRITE",update_reservation_detail:"RESERVATION_WRITE",link_reservation:"RESERVATION_WRITE",queue_reservation_voucher:"RESERVATION_WRITE",cancel_reservation:"RESERVATION_WRITE",assign_room:"RESERVATION_WRITE",assign_reservation_room:"RESERVATION_WRITE",move_reservation_room:"RESERVATION_WRITE",unassign_reservation_room:"RESERVATION_WRITE",
   mark_no_show:"STAY_WRITE",check_in:"STAY_WRITE",check_out:"STAY_WRITE",move_room:"STAY_WRITE",
   update_inventory_control:"INVENTORY_WRITE",bulk_update_inventory_controls:"INVENTORY_WRITE",upsert_rate_plan:"INVENTORY_WRITE",bulk_update_rate_blocks:"INVENTORY_WRITE",
   create_account_profile:"GROUP_WRITE",create_business_block:"GROUP_WRITE",update_block_inventory:"GROUP_WRITE",add_rooming_entry:"GROUP_WRITE",cutoff_block:"GROUP_WRITE",pickup_rooming_entry:"GROUP_PICKUP",
@@ -27,7 +27,7 @@ const actionCapability = {
 export type PmsAction = keyof typeof actionCapability;
 
 const domainActions: Record<ActionDomain, readonly PmsAction[]> = {
-  reservation:["create_reservation","edit_reservation","update_reservation_detail","link_reservation","queue_reservation_voucher","cancel_reservation","assign_room","mark_no_show","check_in","check_out","move_room"],
+  reservation:["create_reservation","edit_reservation","update_reservation_detail","link_reservation","queue_reservation_voucher","cancel_reservation","assign_room","assign_reservation_room","move_reservation_room","unassign_reservation_room","mark_no_show","check_in","check_out","move_room"],
   rooms:["create_room_type","update_room_type","create_room","update_room","bulk_create_rooms","housekeeping","upsert_property_season","delete_property_season","upsert_property_holiday","delete_property_holiday","upsert_amenity_catalog","delete_amenity_catalog","upsert_service_catalog","delete_service_catalog"],
   inventory:["update_inventory_control","bulk_update_inventory_controls","upsert_rate_plan","bulk_update_rate_blocks"],
   groups:["create_account_profile","create_business_block","update_block_inventory","add_rooming_entry","cutoff_block","pickup_rooming_entry","upsert_banquet_venue","upsert_banquet_reservation","set_banquet_reservation_status"],
@@ -52,6 +52,7 @@ const requiredFields: Partial<Record<PmsAction, readonly string[]>> = {
   link_reservation:["reservationId","linkedConfirmationNo","relationType"],
   queue_reservation_voucher:["reservationId","language","showAmount","recipientEmail","subject"],
   cancel_reservation:["reservationId","expectedVersion","reason"],assign_room:["reservationId","roomId","expectedVersion"],
+  assign_reservation_room:["reservationId","roomId","expectedVersion"],move_reservation_room:["reservationId","roomId","moveDate","reason","expectedVersion"],unassign_reservation_room:["reservationId","expectedVersion"],
   move_room:["reservationId","roomId","expectedVersion","reason"],mark_no_show:["reservationId"],check_in:["reservationId"],check_out:["reservationId"],
   create_room_type:["code","name","baseRate","capacity"],update_room_type:["roomTypeId","code","name","baseRate","capacity","expectedVersion"],
   create_room:["roomTypeId","number","floor"],update_room:["roomId","roomTypeId","number","floor","expectedVersion"],bulk_create_rooms:["roomTypeId","startNumber","count","floor"],

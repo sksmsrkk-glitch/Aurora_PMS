@@ -28,6 +28,7 @@ import { loadStaffUsers } from "./staff";
 import { scheduleDurableWorkerKick } from "../../worker-kick";
 import {
   loadFrontdesk,
+  loadRoomBoard,
   loadPmsSearch,
   loadReservationAvailability,
   loadReservationCalendar,
@@ -126,6 +127,16 @@ export async function GET(request: Request) {
     } catch (error) {
       if (error instanceof PmsReadError)
         return Response.json({ error: error.message }, { status: error.status });
+      throw error;
+    }
+  }
+  if (view === "room_board") {
+    if (!canViewWorkspace(principal.workspaceAccess, "frontdesk"))
+      return Response.json({ error: "객실 배정 보드 조회 권한이 없습니다." }, { status: 403 });
+    try {
+      return Response.json(await loadRoomBoard(db,url.searchParams,principal),{headers:{"Cache-Control":"private, no-store"}});
+    } catch(error) {
+      if(error instanceof PmsReadError)return Response.json({error:error.message},{status:error.status});
       throw error;
     }
   }
