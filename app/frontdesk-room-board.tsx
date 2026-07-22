@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { addIsoDays } from "../lib/format";
 import type { FrontdeskReservation } from "./frontdesk-workbench";
 import { usePmsActions } from "./pms-action-context";
+import { occupiedRoomDates } from "./room-board-coverage";
 
 type BoardRoom={id:string;number:string;floor:number;room_type_id:string;room_type_code:string;room_type_name:string;front_desk_status:string;housekeeping_status:string;version:number};
 type BoardSpan={id:string;roomId:string;startDate:string;endDate:string;dates:string[];reservation:FrontdeskReservation};
@@ -57,9 +58,9 @@ export default function FrontdeskRoomBoard({businessDate,canWrite,onOpen,onCreat
       <div className="room-board-scroll" role="region" aria-label={`${from}부터 ${days}일 객실 배정표`} tabIndex={0}>
         <div className="room-board-grid" style={{["--board-days" as string]:String(days)}}>
           <div className="room-board-header"><div className="room-board-room-head">객실 · 층 · 타입</div>{data.dates.map(date=><div className={date===businessDate?"today":""} key={date}><b>{dayLabel(date)}</b><small>{date}</small></div>)}</div>
-          {data.rooms.map(room=>{const spans=spansByRoom.get(room.id)||[];return <div className={`room-board-row ${room.housekeeping_status.toLowerCase()}`} key={room.id}>
+          {data.rooms.map(room=>{const spans=spansByRoom.get(room.id)||[],occupiedDates=occupiedRoomDates(spans);return <div className={`room-board-row ${room.housekeeping_status.toLowerCase()}`} key={room.id}>
             <div className="room-board-room"><b>{room.number}</b><span>{room.floor}층 · {room.room_type_code}</span><small><i/>{statusLabel[room.front_desk_status]||room.front_desk_status} · {statusLabel[room.housekeeping_status]||room.housekeeping_status}</small></div>
-            {data.dates.map((date,index)=><button type="button" className={`room-board-cell ${date===businessDate?"today":""}`} style={{gridColumn:index+2}} key={date} disabled={!canWrite||room.housekeeping_status==="OUT_OF_SERVICE"} aria-label={`${room.number}호 ${date} ${room.housekeeping_status==="OUT_OF_SERVICE"?"판매 중지":"빈 셀"}`} aria-dropeffect="move" onDragOver={event=>{if(canWrite&&room.housekeeping_status!=="OUT_OF_SERVICE")event.preventDefault();}} onDrop={event=>{event.preventDefault();beginDrop(room,date);}} onClick={()=>onCreate({arrivalDate:date,roomTypeId:room.room_type_id,roomId:room.id})}><span>＋</span></button>)}
+            {data.dates.map((date,index)=>{const occupied=occupiedDates.has(date);return <button type="button" className={`room-board-cell ${date===businessDate?"today":""}`} style={{gridColumn:index+2}} key={date} disabled={!canWrite||occupied||room.housekeeping_status==="OUT_OF_SERVICE"} aria-label={`${room.number}호 ${date} ${occupied?"배정됨":room.housekeeping_status==="OUT_OF_SERVICE"?"판매 중지":"빈 셀"}`} aria-dropeffect="move" onDragOver={event=>{if(canWrite&&!occupied&&room.housekeeping_status!=="OUT_OF_SERVICE")event.preventDefault();}} onDrop={event=>{event.preventDefault();if(!occupied)beginDrop(room,date);}} onClick={()=>onCreate({arrivalDate:date,roomTypeId:room.room_type_id,roomId:room.id})}><span>＋</span></button>})}
             {spans.map(span=>{const start=Math.max(0,data.dates.indexOf(span.startDate));const visible=span.dates.filter(date=>data.dates.includes(date));if(!visible.length)return null;return <div className="room-board-span-slot" style={{gridColumn:`${start+2} / span ${visible.length}`}} key={span.id}><BoardReservationCard span={{...span,dates:visible}} canWrite={canWrite} pending={span.reservation.id===pendingReservationId} onOpen={onOpen} onDrag={setDragged} onChoose={setRoomPicker} onUnassign={row=>void unassign(row)}/></div>;})}
           </div>})}
         </div>

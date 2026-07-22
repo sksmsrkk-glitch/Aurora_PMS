@@ -16,6 +16,8 @@ import {
 import { demoAuthenticationEnabled } from "../app/api/pms/auth-policy.ts";
 import { clientAddress } from "../app/api/request-policy.ts";
 import { assertSafeQaTarget } from "../scripts/qa-target.mjs";
+import { safeRouteError } from "../app/api/safe-route-error.ts";
+import { occupiedRoomDates } from "../app/room-board-coverage.ts";
 
 const root = new URL("../", import.meta.url);
 
@@ -58,6 +60,37 @@ test("mutation cache policy refreshes active room-board and detail projections",
     ["pms", "frontdesk"],
     ["pms", "reservation-detail"],
   ]);
+});
+
+test("unexpected route errors expose only a correlation id", () => {
+  const logged = [];
+  const result = safeRouteError(new Error("SELECT secret_column FROM internal_table"), {
+    context: "behavior-test",
+    logger: (entry) => logged.push(entry),
+  });
+  assert.equal(result.status, 500);
+  assert.equal(result.body.error.includes("secret_column"), false);
+  assert.match(result.body.errorId, /^[0-9a-f-]{36}$/u);
+  assert.equal(logged[0].message, "SELECT secret_column FROM internal_table");
+});
+
+test("known route conflicts use a stable public message", () => {
+  const result = safeRouteError(new Error("duplicate key value exposes table_name"), {
+    context: "behavior-test",
+    conflicts: [{ pattern: /duplicate/iu, error: "대상이 이미 존재합니다." }],
+    logger: () => assert.fail("known conflicts must not enter unexpected logging"),
+  });
+  assert.deepEqual(result, { status: 409, body: { error: "대상이 이미 존재합니다." } });
+});
+
+test("room-board covered dates disable every cell beneath an assignment span", () => {
+  const occupied = occupiedRoomDates([
+    { dates: ["2032-01-01", "2032-01-02"] },
+    { dates: ["2032-01-04"] },
+  ]);
+  assert.equal(occupied.has("2032-01-01"), true);
+  assert.equal(occupied.has("2032-01-03"), false);
+  assert.equal(occupied.has("2032-01-04"), true);
 });
 
 test("demo authentication is flag, environment, and constant-token bound", () => {

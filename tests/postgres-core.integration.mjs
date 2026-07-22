@@ -332,7 +332,7 @@ test("reservation List and Calendar share product and occupancy pricing", { skip
 test("sale products inherit rates, price occupancy, and preserve reservation snapshots", { skip }, async () => {
   const sql=client(2),suffix=crypto.randomUUID().slice(0,8);
   const organizationId=`org-product-${suffix}`,propertyId=`it-product-${suffix}`;
-  const roomTypeId=`it-product-room-${suffix}`,parentId=`it-parent-${suffix}`,childId=`it-child-${suffix}`;
+  const roomTypeId=`it-product-room-${suffix}`,parentId=`it-parent-${suffix}`,childId=`it-child-${suffix}`,grandchildId=`it-grandchild-${suffix}`;
   const guestId=`it-product-guest-${suffix}`,reservationId=`it-product-res-${suffix}`;
   try {
     await sql`INSERT INTO organizations(id,name,slug,status) VALUES (${organizationId},'Product Organization',${`product-${suffix}`},'ACTIVE')`;
@@ -345,18 +345,23 @@ test("sale products inherit rates, price occupancy, and preserve reservation sna
         created_at,updated_at,created_by,updated_by
       ) VALUES
         (${parentId},${propertyId},'PARENT','Parent BAR','KRW','ROOM_ONLY','NONE','[]'::jsonb,2,4,'FIXED',0,now(),now(),'integration-test','integration-test'),
-        (${childId},${propertyId},'FULLPKG','24-hour Full Package','KRW','FULL_PACKAGE','HOMESHOPPING',${sql.json(["breakfast","dinner","spa"])},2,4,'OFFSET',10000,now(),now(),'integration-test','integration-test')
+        (${childId},${propertyId},'FULLPKG','24-hour Full Package','KRW','FULL_PACKAGE','HOMESHOPPING',${sql.json(["breakfast","dinner","spa"])},2,4,'OFFSET',10000,now(),now(),'integration-test','integration-test'),
+        (${grandchildId},${propertyId},'GRANDCHILD','Nested Package','KRW','BREAKFAST','NONE','[]'::jsonb,2,4,'PERCENT',10,now(),now(),'integration-test','integration-test')
     `;
     await sql`UPDATE rate_plans SET parent_rate_plan_id=${parentId} WHERE id=${childId}`;
+    await sql`UPDATE rate_plans SET parent_rate_plan_id=${childId} WHERE id=${grandchildId}`;
     await sql`
       INSERT INTO rate_plan_room_types(property_id,rate_plan_id,room_type_id,base_rate,active,version,updated_at,updated_by)
       VALUES
         (${propertyId},${parentId},${roomTypeId},100000,true,1,now(),'integration-test'),
-        (${propertyId},${childId},${roomTypeId},1,true,1,now(),'integration-test')
+        (${propertyId},${childId},${roomTypeId},1,true,1,now(),'integration-test'),
+        (${propertyId},${grandchildId},${roomTypeId},1,true,1,now(),'integration-test')
     `;
     await sql`INSERT INTO rate_plan_occupancy(property_id,rate_plan_id,occupancy,extra_charge,updated_by) VALUES (${propertyId},${childId},3,30000,'integration-test')`;
     const [priced]=await sql`SELECT talos_effective_product_rate(${propertyId},${childId},${roomTypeId},'2031-09-02',3)::numeric rate`;
     assert.equal(Number(priced.rate),140000);
+    const [nested]=await sql`SELECT talos_effective_product_rate(${propertyId},${grandchildId},${roomTypeId},'2031-09-02',3)::numeric rate`;
+    assert.equal(Number(nested.rate),121000);
     const [invalidParty]=await sql`SELECT talos_effective_product_rate(${propertyId},${childId},${roomTypeId},'2031-09-02',5)::numeric rate`;
     assert.equal(invalidParty.rate,null);
     await sql`UPDATE rate_plan_room_types SET base_rate=200000 WHERE property_id=${propertyId} AND rate_plan_id=${parentId} AND room_type_id=${roomTypeId}`;
@@ -380,6 +385,10 @@ test("sale products inherit rates, price occupancy, and preserve reservation sna
     assert.equal(snapshotBefore.rate_plan_snapshot.name,"24-hour Full Package");
     assert.deepEqual(snapshotBefore.rate_plan_snapshot.inclusions,["breakfast","dinner","spa"]);
     assert.deepEqual(snapshotBefore.occupancy_detail,{adults:2,children:1});
+    await assert.rejects(
+      sql`UPDATE reservations SET rate_plan_snapshot='{}'::jsonb WHERE id=${reservationId}`,
+      /rate plan snapshot is immutable/iu,
+    );
     await sql`UPDATE rate_plans SET name='Changed Product Name' WHERE id=${childId}`;
     const [snapshotAfter]=await sql`SELECT rate_plan_snapshot FROM reservations WHERE id=${reservationId}`;
     assert.equal(snapshotAfter.rate_plan_snapshot.name,"24-hour Full Package");
@@ -667,6 +676,10 @@ test("HotelStory reports reconcile lead time, booking curve, YoY, and reversible
     const replay=await handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":receiptKey},body:JSON.stringify(receiptBody)}));assert.equal(replay.status,200);assert.equal(replay.headers.get("X-Idempotent-Replay"),"true");
     const [paid]=await sql`SELECT status,deposit_date,deposit_memo,payment_journal_id FROM channel_settlements WHERE id=${settlementId}`;assert.equal(paid.status,"PAID");assert.equal(isoDate(paid.deposit_date),businessDate);assert.equal(paid.deposit_memo,"HotelStory deposit reconciliation");assert.ok(paid.payment_journal_id);
     const receipts=await sql`SELECT * FROM channel_deposit_events WHERE property_id='prop-seoul' AND settlement_id=${settlementId} AND event_type='RECEIPT'`;assert.equal(receipts.length,1);assert.equal(Number(receipts[0].amount),180000);
+    await assert.rejects(
+      sql`INSERT INTO channel_deposit_events(id,property_id,settlement_id,event_type,amount,event_date,memo,accounting_journal_id,reverses_event_id,created_by) VALUES (${`bad-restore-${suffix}`},'prop-seoul',${settlementId},'RESTORE',180001,${businessDate},'Mismatched restore',${receipts[0].accounting_journal_id},${receipts[0].id},'integration-test')`,
+      /restore amount must match the original receipt/iu,
+    );
     const deposits=await runReport(scoped,new URLSearchParams({report:"channel_deposits",from:businessDate,to:isoDate((await sql`SELECT due_date FROM channel_settlements WHERE id=${settlementId}`)[0].due_date),status:"PAID",scope:"EXCLUDE_ONSITE",q:confirmationCurrent}),principal);assert.equal(deposits.rows.length,1);assert.equal(deposits.rows[0].deposit_memo,"HotelStory deposit reconciliation");assert.equal(Number(deposits.rows[0].hotel_net_amount),180000);
     const restore=await post({action:"restore_channel_settlement_payment",settlementId,restoreDate:String(businessDate),reason:"Bank deposit mismatch"},"restore");assert.equal(restore.status,200,await restore.text());
     const [restored]=await sql`SELECT status,paid_at,deposit_date,payment_journal_id FROM channel_settlements WHERE id=${settlementId}`;assert.equal(restored.status,"ACCRUED");assert.equal(restored.paid_at,null);assert.equal(restored.deposit_date,null);assert.equal(restored.payment_journal_id,null);

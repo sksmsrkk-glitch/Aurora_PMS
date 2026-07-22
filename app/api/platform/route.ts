@@ -9,6 +9,7 @@ import { rememberSelectedProperty } from "../../property-selection";
 import { authenticateSupabaseRequest } from "../../supabase-session";
 import { scheduleDurableWorkerKick } from "../../worker-kick";
 import { consumeRateLimit, rateLimitHeaders } from "../rate-limit";
+import { safeRouteError } from "../safe-route-error";
 import { principalFor, ready, runtimeBindings } from "../pms/auth";
 
 export const runtime = "nodejs";
@@ -478,14 +479,16 @@ export async function POST(request: Request) {
       return Response.json({ ok: true }, { headers: jsonHeaders() });
     }
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "작업을 완료하지 못했습니다.";
-    const conflict = /unique|duplicate|already/iu.test(message);
+    const failure = safeRouteError(error, {
+      context: "platform-command",
+      conflicts: [{
+        pattern: /unique|duplicate|already/iu,
+        error: "이미 사용 중인 코드·호텔명·도메인입니다.",
+      }],
+    });
     return Response.json(
-      {
-        error: conflict ? "이미 사용 중인 코드·호텔명·도메인입니다." : message,
-      },
-      { status: conflict ? 409 : 400, headers: jsonHeaders() },
+      failure.body,
+      { status: failure.status, headers: jsonHeaders() },
     );
   }
   return Response.json(

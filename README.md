@@ -226,6 +226,7 @@ flowchart LR
 | HotelStory 연회·당일 운영·예약 import·호텔/웹 회원 | `202607210025_hotelstory_final_operations.sql` |
 | 예약 import 일자별 요금 원장·안전한 롤백 | `202607220026_reservation_import_rate_ledger.sql` |
 | 카드 참조 PCI·채널 요금제·임포트 권한 무결성 | `202607220027_import_pci_rate_override_integrity.sql` |
+| 채널 반제 금액·다단계 요금·예약 snapshot 불변성 | `202607220028_finance_rate_snapshot_integrity.sql` |
 
 배포 순서:
 
