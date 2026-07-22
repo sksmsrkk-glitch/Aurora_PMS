@@ -224,6 +224,8 @@ flowchart LR
 | 채널 카탈로그·블럭요금·호텔 운영 카탈로그 | `202607210023_channel_rateblock_operational_catalogs.sql` |
 | HotelStory 리포트·채널 입금/복구 불변 원장 | `202607210024_hotelstory_reporting_deposits.sql` |
 | HotelStory 연회·당일 운영·예약 import·호텔/웹 회원 | `202607210025_hotelstory_final_operations.sql` |
+| 예약 import 일자별 요금 원장·안전한 롤백 | `202607220026_reservation_import_rate_ledger.sql` |
+| 카드 참조 PCI·채널 요금제·임포트 권한 무결성 | `202607220027_import_pci_rate_override_integrity.sql` |
 
 배포 순서:
 
@@ -236,6 +238,7 @@ npm run release:build
 ```
 
 항상 스테이징에서 migration·role 전환·smoke·E2E를 통과한 다음 운영에 같은 순서를 적용합니다.
+`release:build`는 migration 파일과 런타임 계약 버전의 정적 동기화만 확인하므로 DB 점검이나 네트워크 장애에 결합되지 않습니다. 실제 DB 역할·RLS·migration 적용 여부는 앞 단계의 `db:contract:verify`와 배포 후 `/api/health`가 fail-closed로 검증합니다.
 
 ## API 상세 개발 명세
 

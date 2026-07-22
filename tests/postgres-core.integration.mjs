@@ -506,6 +506,12 @@ test("reservation detail separates booker and guest with optimistic audit histor
     assert.deepEqual(concurrent.map(response=>response.status).sort((a,b)=>a-b),[200,409]);
     const rejected=await post({action:"update_reservation_detail",reservationId:source.id,expectedVersion:"3",bookerName:"Agency Booker",guestFirstName:"Actual",guestLastName:"Staying Guest",adults:"1",children:"1",paymentType:"PREPAID",reservationChecked:"true",earlyCheckin:"false",lateCheckout:"false",cardInfoRef:"4111111111111111"},`detail-pci-${suffix}`);
     assert.equal(rejected.status,400);
+    const separated=await post({action:"update_reservation_detail",reservationId:source.id,expectedVersion:"3",bookerName:"Agency Booker",guestFirstName:"Actual",guestLastName:"Staying Guest",adults:"1",children:"1",paymentType:"PREPAID",reservationChecked:"true",earlyCheckin:"false",lateCheckout:"false",cardInfoRef:"4111-1111 1111-1111"},`detail-pci-separated-${suffix}`);
+    assert.equal(separated.status,400);
+    await assert.rejects(
+      sql`UPDATE reservations SET card_info_ref='4111 1111 1111 1111' WHERE id=${source.id}`,
+      /reservation_card_reference_pci_check|check constraint/iu,
+    );
     const [unchanged]=await sql`SELECT version,card_info_ref FROM reservations WHERE id=${source.id}`;
     assert.equal(unchanged.version,3);assert.equal(unchanged.card_info_ref,"tok_test_****4242");
     const [contract]=await sql`SELECT (SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.reservation_links'::regclass) forced_rls,(SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='reservations' AND column_name='early_checkin_time') early_type`;
@@ -570,8 +576,15 @@ test("HotelStory channel settings and rate blocks are transactional, bounded, an
     const {key:bulkKey}=await expectOk(bulkBody,"bulk");
     const replay=await handlePmsPost(new Request("http://localhost/api/pms",{method:"POST",headers:{"content-type":"application/json","x-aurora-demo-token":token,"idempotency-key":bulkKey},body:JSON.stringify(bulkBody)}));
     assert.equal(replay.status,200);assert.equal(replay.headers.get("X-Idempotent-Replay"),"true");
-    const overrides=await sql`SELECT stay_date,allocation,sell_rate,net_rate,closed,min_stay,close_to_arrival,close_to_departure FROM channel_rate_overrides WHERE property_id='prop-seoul' AND mapping_id=${mappingId} ORDER BY stay_date`;
-    assert.equal(overrides.length,2);assert.deepEqual(overrides.map(row=>Number(row.allocation)),[2,2]);assert.deepEqual(overrides.map(row=>Number(row.sell_rate)),[245000,245000]);assert.ok(overrides.every(row=>row.net_rate===null&&!row.closed&&row.min_stay===2&&row.close_to_arrival&&!row.close_to_departure));
+    const overrides=await sql`SELECT id,stay_date,rate_plan_id,allocation,sell_rate,net_rate,closed,min_stay,close_to_arrival,close_to_departure FROM channel_rate_overrides WHERE property_id='prop-seoul' AND mapping_id=${mappingId} ORDER BY stay_date`;
+    assert.equal(overrides.length,2);assert.deepEqual(overrides.map(row=>Number(row.allocation)),[2,2]);assert.deepEqual(overrides.map(row=>Number(row.sell_rate)),[245000,245000]);assert.ok(overrides.every(row=>row.rate_plan_id===planId&&row.net_rate===null&&!row.closed&&row.min_stay===2&&row.close_to_arrival&&!row.close_to_departure));
+    await assert.rejects(
+      sql.begin(async transaction=>{
+        await transaction.unsafe("SET LOCAL session_replication_role='replica'");
+        await transaction`UPDATE channel_rate_overrides SET rate_plan_id=NULL WHERE id=${overrides[0].id}`;
+      }),
+      /not-null constraint|null value/iu,
+    );
     const ari=await sql`SELECT id,stay_date,available,revision,payload_json FROM ari_updates WHERE property_id='prop-seoul' AND mapping_id=${mappingId} ORDER BY stay_date`;ariIds=ari.map(row=>row.id);
     assert.equal(ari.length,2);assert.ok(ari.every(row=>row.available===2&&row.revision===1&&row.payload_json.rate===245000));
     const outbox=await sql`SELECT id,aggregate_id,topic FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=ANY(${ariIds}) ORDER BY aggregate_id`;outboxIds=outbox.map(row=>row.id);assert.equal(outbox.length,2);assert.ok(outbox.every(row=>row.topic==="channel.ari_delta"));

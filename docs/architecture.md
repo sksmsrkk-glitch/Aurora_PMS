@@ -277,3 +277,9 @@ sequenceDiagram
 `AURORA_WORKER_LEASE_SECONDS`는 독립 recovery sweep과 claim transaction 내부의 최종 reaper가 함께 사용하는 유일한 리스 임계값입니다. claim API가 값을 필수 인자로 받으므로 호출자가 다른 하드코딩 임계값을 사용할 수 없습니다. 경계 테스트는 300초 정책에서 299초 lease를 유지하고 301초 lease만 회수하는지 실제 PostgreSQL로 검증합니다.
 
 공개 커스텀 도메인은 Next.js 16의 공식 `proxy.ts` 진입점을 사용합니다. matcher는 `/`와 `/book`만 실행하고, 플랫폼 hostname은 PMS 경로를 유지하며 그 밖의 hostname만 `/hotel`과 `/hotel/book`으로 rewrite합니다. tenant 선택과 구독 검증은 여전히 목적지 서비스가 수행합니다.
+
+### ADR-026 · 정적 빌드와 런타임 DB 준비성 분리
+
+Vercel 빌드는 재현 가능한 애플리케이션 산출물 생성 단계이므로 운영 DB 연결 성공에 의존하지 않습니다. `db:contract:static`은 최신 forward migration 파일명과 `REQUIRED_SCHEMA_VERSION` 동기화만 확인합니다. 실제 migration history, `aurora_app` 역할, role membership, RLS policy 수는 스테이징 릴리스의 `db:contract:verify`와 모든 런타임 진입점의 `verifyPmsSchemaContract`가 검사합니다. 따라서 DB 점검 중에도 빌드할 수 있지만 준비되지 않은 DB로 업무 요청을 처리할 수는 없습니다.
+
+임포트 권한은 파일 kind를 입력으로 받는 `importAccessFailure`가 단일 결정합니다. 예약은 프런트 업무 권한, 마스터 데이터는 사용자 관리 권한을 요구하고 둘 다 동일 identity/MFA 정책을 통과해야 합니다. 카드 참조와 채널 요금제 필수 연결은 API 검사 외에 forward migration의 CHECK·FK·NOT NULL로 최종 강제합니다.

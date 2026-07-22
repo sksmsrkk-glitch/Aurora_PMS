@@ -8,8 +8,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "release:build": "npm run db:contract:verify && next build",
-    "release:staging": "node scripts/assert-staging-db-target.mjs && node scripts/preflight-saas-migration.mjs && node scripts/migrate-supabase.mjs && node scripts/run-staging-db-integration.mjs && npm run release:build",
+    "release:build": "npm run db:contract:static && next build",
+    "release:staging": "node scripts/assert-staging-db-target.mjs && node scripts/preflight-saas-migration.mjs && node scripts/migrate-supabase.mjs && node scripts/run-staging-db-integration.mjs && npm run db:contract:verify && npm run release:build",
     "start": "next start",
     "test": "npm run build && npm run test:unit",
     "test:unit": "node --import tsx --test tests/*.test.mjs",
@@ -33,7 +33,8 @@
     "ops:platform-operator": "node scripts/manage-platform-operator.mjs",
     "ops:tenant:provision": "node --import tsx scripts/provision-tenant.mjs",
     "db:test:bootstrap": "node scripts/bootstrap-test-postgres.mjs",
-    "db:contract:verify": "node --import tsx scripts/verify-runtime-contract.mjs"
+    "db:contract:verify": "node --import tsx scripts/verify-runtime-contract.mjs",
+    "db:contract:static": "node --import tsx scripts/verify-static-schema-contract.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/noto-sans-kr": "^0.4.3",
