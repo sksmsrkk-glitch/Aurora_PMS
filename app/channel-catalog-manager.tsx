@@ -2,6 +2,7 @@
 
 /** HotelStory-style available/configured channel catalog and product cutoffs. */
 import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
+import { channelCatalogMatchesSearch } from "../lib/pms-search";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
 
@@ -19,7 +20,7 @@ export default function ChannelCatalogManager({canWrite}:{canWrite:boolean}){
   const load=useCallback(async()=>{try{setError("");const next=await fetchData();setData(next);setOrder(next.catalog.filter(item=>item.setting_id).sort((a,b)=>Number(a.setting_sort_order)-Number(b.setting_sort_order)).map(item=>String(item.setting_id)));}catch(reason){setError(reason instanceof Error?reason.message:"채널 카탈로그를 불러오지 못했습니다.");}},[]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{void load()},[load]);
-  const keyword=query.trim().toLocaleLowerCase("ko-KR"),available=useMemo(()=>data?.catalog.filter(item=>!item.setting_id&&(!keyword||`${item.display_name} ${item.provider_code} ${item.description}`.toLocaleLowerCase("ko-KR").includes(keyword)))||[],[data,keyword]),configured=useMemo(()=>{const byId=new Map((data?.catalog||[]).filter(item=>item.setting_id).map(item=>[String(item.setting_id),item]));return order.map(id=>byId.get(id)).filter((item):item is Catalog=>Boolean(item)).filter(item=>!keyword||`${item.display_name} ${item.provider_code} ${item.supplier_name}`.toLocaleLowerCase("ko-KR").includes(keyword));},[data,keyword,order]);
+  const available=useMemo(()=>data?.catalog.filter(item=>!item.setting_id&&channelCatalogMatchesSearch(item,query))||[],[data,query]),configured=useMemo(()=>{const byId=new Map((data?.catalog||[]).filter(item=>item.setting_id).map(item=>[String(item.setting_id),item]));return order.map(id=>byId.get(id)).filter((item):item is Catalog=>Boolean(item)).filter(item=>channelCatalogMatchesSearch(item,query));},[data,query,order]);
   const move=(id:string,direction:-1|1)=>setOrder(current=>{const index=current.indexOf(id),target=index+direction;if(index<0||target<0||target>=current.length)return current;const next=[...current];[next[index],next[target]]=[next[target],next[index]];return next;});
   const drop=(event:DragEvent)=>{event.preventDefault();const id=event.dataTransfer.getData("text/channel-catalog"),item=data?.catalog.find(row=>row.id===id&&!row.setting_id);if(item)setEditor(item);};
   return <section className="panel channel-catalog-workspace">

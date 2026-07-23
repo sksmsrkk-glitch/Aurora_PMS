@@ -2,6 +2,7 @@
 
 /** Hotel staff directory with explicit page-level read/write authorization. */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { staffUserMatchesSearch } from "../lib/pms-search";
 import { usePmsActions } from "./pms-action-context";
 import {
   PMS_ROLES,
@@ -47,7 +48,7 @@ export default function StaffAccessManager({canAdmin}:{canAdmin:boolean}){
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{void load();},[load]);
 
-  const filtered=useMemo(()=>{const needle=query.trim().toLocaleLowerCase("ko-KR");return users.filter((user)=>!needle||`${user.display_name} ${user.email} ${ROLE_LABELS[user.role]}`.toLocaleLowerCase("ko-KR").includes(needle));},[query,users]);
+  const filtered=useMemo(()=>users.filter((user)=>staffUserMatchesSearch(user,ROLE_LABELS[user.role],query)),[query,users]);
   const activeCount=users.filter((user)=>user.active).length,fullAdminCount=users.filter((user)=>user.active&&user.workspace_permissions.users==="WRITE").length;
 
   function applyRole(nextRole:Role){const template=ROLE_ACCESS_TEMPLATES[nextRole];setDraft((current)=>current&&({...current,role:nextRole,permissions:structuredClone(template.permissions),canExport:template.canExport}));}

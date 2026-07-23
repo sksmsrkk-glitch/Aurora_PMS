@@ -4,6 +4,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { safeStringArray } from "../lib/format";
+import { websiteRoomMatchesSearch } from "../lib/pms-search";
 import { cssUrl } from "./css-url";
 import {
   normalizeWebsiteNavigation,
@@ -104,8 +105,7 @@ export default function HomepageManager({canAdmin}:{canAdmin:boolean}) {
   useEffect(()=>{void load();},[load]);
 
   const visibleRooms=useMemo(()=>{
-    const keyword=roomQuery.trim().toLocaleLowerCase("ko-KR");
-    return data?.rooms.filter(room=>!keyword||`${room.code} ${room.name} ${room.marketing_name||""} ${room.published?"홈페이지 노출":"비노출"}`.toLocaleLowerCase("ko-KR").includes(keyword))||[];
+    return data?.rooms.filter(room=>websiteRoomMatchesSearch(room,roomQuery))||[];
   },[data,roomQuery]);
   const selectedRoom=useMemo(()=>visibleRooms.find(room=>room.id===selectedRoomId)||visibleRooms[0]||null,[visibleRooms,selectedRoomId]);
   const hotelMedia=useMemo(()=>data?.media.filter(item=>item.scope==="HOTEL"&&item.active)||[],[data]);
