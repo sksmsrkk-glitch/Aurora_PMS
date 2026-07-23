@@ -86,7 +86,10 @@ sequenceDiagram
 | `app/(pms)/*/page.tsx` | 14개 실제 업무 URL; 새로고침·북마크·딥링크·라우트 단위 진입 지원 |
 | `app/(pms)/_components/pms-shell.tsx` | 공통 shell, 예약 Drawer와 업무 Modal, 상태 기반 CTA |
 | `app/pms-navigation.ts` | 역할 우선순위와 페이지 권한을 결합한 그룹 메뉴·모바일 핵심 업무 |
-| `app/global-pms-search.tsx` | 250ms debounce, 키보드 이동, 권한별 도메인 결과를 제공하는 통합 검색 |
+| `app/global-pms-search.tsx` | 250ms debounce, 키보드 이동, 교정 안내, 호텔·사용자별 최근/빈번 엔터티와 도메인 keyset 이어보기를 제공하는 통합 검색 |
+| `lib/korean-keyboard.ts` | 일반 영문 이름을 훼손하지 않는 보수적 두벌식 한/영 오입력 변환 |
+| `lib/search-cursor.ts` | 검색어 원문을 노출하지 않는 query fingerprint·anchor·rank·ID keyset cursor 계약 |
+| `lib/search-history.ts` | 4시간 TTL·크기 제한·안전한 내부 path 검증을 적용한 browser-session 선택 이력 |
 | `app/frontdesk-workbench.tsx` | 서버 업무 큐·복합 필터·저장 보기·20건 페이지네이션 |
 | `app/reservation-wizard.tsx` | 실시간 가용성부터 원자 예약 확정까지의 4단계 직원 예약 흐름 |
 | `app/reservation-detail-panel.tsx` | 예약자/투숙자, 운영 옵션, 일자별 요금·취소정책, 연계·복사와 4종 인라인 로그 |
@@ -110,7 +113,8 @@ sequenceDiagram
 | `app/api/pms/action-registry.ts` | 모든 action의 도메인·필요 capability·Zod 입력 스키마 |
 | `app/api/pms/command-gateway.ts` | command 실행, strict idempotency receipt, 감사·Outbox 기록 |
 | `app/api/pms/read-model.ts` | core/full projection과 압축·짧은 읽기 cache |
-| `app/api/pms/frontdesk-read.ts` | 권한 인식 통합 검색, 프런트 페이지, 예약 가용성·달력·단건 상세·인라인 로그 projection |
+| `app/api/pms/frontdesk-read.ts` | tenant 검색 문서/토큰 기반 랭킹·교정·keyset cursor, 프런트 페이지, 예약 가용성·달력·단건 상세·인라인 로그 projection |
+| `app/api/pms/search-quality.ts` | 검색 원문·hash·사용자·entity를 받지 않는 일 단위 품질 bucket 집계 |
 | `app/api/pms/room-assignment-service.ts` | 물리 객실 전체 배정·선택일 이후 이동·배정 해제의 낙관적 잠금·멱등 transaction |
 | `app/api/pms/voucher-service.ts` | tenant-scoped 예약·숙박객·상품·일자 요금의 바우처 전용 bounded projection |
 | `app/api/pms/voucher-document.ts` | 국문/영문 HTML·PDF·XLSX 렌더링과 금액 표시 정책; PDF에 Noto Sans KR subset 임베딩 |
@@ -176,7 +180,7 @@ Talos PMS는 초기 운영 복잡도를 줄이기 위해 단일 API route를 사
 | Core Snapshot | `GET /api/pms?view=core` | 오늘 도착·현재 재실·오늘 체크아웃과 객실·14일 재고만 제공; 과거 전체 예약은 제외 |
 | 프런트 페이지 | `GET /api/pms?view=frontdesk` | 업무 큐·복합 필터·정렬·최대 50행 server pagination |
 | 룸 배정 보드 | `GET /api/pms?view=room_board&from=...&to=...` | 최대 31일 객실·물리 숙박 박·미배정 예약을 한 batch로 읽고 연속 박을 span으로 projection; 지원 principal의 PII 마스킹 유지 |
-| 통합 검색 | `GET /api/pms?view=search` | 현재 직원이 열 수 있는 예약·객실·AR 도메인만 각각 8/6/6건 반환; AR 잔액은 청구서의 저장 값이 아니라 원장 debit-credit 합계로 계산 |
+| 통합 검색 | `GET /api/pms?view=search` | 현재 직원이 열 수 있는 예약·객실·AR만 정확/접두/부분/초성/trigram/최근성 순으로 각각 8/6/6건 반환; `kind+cursor`로 안정된 keyset 이어보기; AR 잔액은 원장 debit-credit 합계 |
 | 예약 가용성 | `GET /api/pms?view=reservation_availability` | 최대 30박의 타입 재고·블록 hold·Rate Plan·MLOS·CTA·CTD·일자 요금 계산 |
 | 예약 달력 | `GET /api/pms?view=reservation_calendar` | 한 상품·한 달의 일자별 타입 가격과 잔여/전체 재고를 고정 배치로 계산 |
 | 예약 상세 | `GET /api/pms?view=reservation_detail` | 단일 예약의 예약자/투숙자, 상품 snapshot, 일자 요금, 연계예약과 200건 이하 분류 로그 |

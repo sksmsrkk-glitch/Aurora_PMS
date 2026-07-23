@@ -12,7 +12,24 @@ import {
   sqlCompactPattern,
   sqlLikePattern,
 } from "../lib/search.ts";
+import {
+  englishKeysToHangul,
+  hangulToEnglishKeys,
+  keyboardSearchAlternates,
+} from "../lib/korean-keyboard.ts";
+import { classifySearchQuality } from "../app/api/pms/search-quality.ts";
 import { resolveFocusedRow } from "../lib/focus-result.ts";
+import {
+  parseSearchHistory,
+  SEARCH_HISTORY_TTL_MS,
+  updateSearchHistory,
+} from "../lib/search-history.ts";
+import {
+  decodeSearchCursor,
+  encodeSearchCursor,
+  searchQueryFingerprint,
+} from "../lib/search-cursor.ts";
+import { mergeSearchPage } from "../lib/search-pagination.ts";
 
 test("search normalization handles Korean spacing, width and phone punctuation", () => {
   assert.equal(normalizeSearchText("  ＡＢＣ   김민지  "), "abc 김민지");
@@ -32,6 +49,154 @@ test("SQL LIKE search treats wildcard input as literal text", () => {
   assert.equal(escapeSqlLike("50%_off\\today"), "50\\%\\_off\\\\today");
   assert.equal(sqlLikePattern("  50%_OFF  "), "%50\\%\\_off%");
   assert.equal(sqlCompactPattern("%%"), "");
+});
+
+test("Korean two-set keyboard correction is conservative and reversible", () => {
+  assert.equal(englishKeysToHangul("rlaalswl"), "김민지");
+  assert.equal(englishKeysToHangul("dkssud"), "안녕");
+  assert.equal(hangulToEnglishKeys("김민지"), "rlaalswl");
+  assert.deepEqual(keyboardSearchAlternates("rlaalswl"), ["김민지"]);
+  assert.deepEqual(keyboardSearchAlternates("김민지"), ["rlaalswl"]);
+  assert.deepEqual(
+    keyboardSearchAlternates("Sofia"),
+    [],
+    "ordinary English names must keep their original meaning",
+  );
+});
+
+test("search quality telemetry exposes only coarse non-PII dimensions", () => {
+  const dimensions = classifySearchQuality({
+    query: "김민지 010",
+    total: 0,
+    truncated: false,
+    correctionApplied: true,
+    latencyMs: 900,
+  });
+  assert.deepEqual(dimensions, {
+    queryLengthBucket: 8,
+    queryScript: "MIXED",
+    correctionUsed: true,
+    resultBucket: "ZERO",
+    latencyBucket: "SLOW",
+    zeroResult: true,
+  });
+  assert.equal("query" in dimensions, false);
+  assert.equal("queryHash" in dimensions, false);
+  assert.equal("userId" in dimensions, false);
+});
+
+test("recent search history is bounded, frequency-ranked, and expires", () => {
+  const now = Date.parse("2026-07-23T01:00:00Z");
+  const sofia = {
+    id: "reservation-sofia",
+    kind: "RESERVATION",
+    title: "Sofia Martinez",
+    subtitle: "SEL-260716-01",
+    meta: "미배정",
+    path: "/frontdesk?focus=reservation-sofia",
+  };
+  const room = {
+    id: "room-101",
+    kind: "ROOM",
+    title: "101호 · 디럭스",
+    subtitle: "DLX · VACANT",
+    meta: "INSPECTED",
+    path: "/rooms?focus=room-101",
+  };
+  let history = updateSearchHistory([], sofia, now - 20);
+  history = updateSearchHistory(history, room, now - 10);
+  history = updateSearchHistory(history, sofia, now);
+  assert.equal(history[0].id, sofia.id);
+  assert.equal(history[0].selectionCount, 2);
+  assert.equal(parseSearchHistory(JSON.stringify(history), now).length, 2);
+  assert.deepEqual(
+    parseSearchHistory(
+      JSON.stringify([
+        {
+          ...history[0],
+          lastSelectedAt: now - SEARCH_HISTORY_TTL_MS - 1,
+        },
+      ]),
+      now,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    parseSearchHistory(
+      JSON.stringify([{ ...history[0], path: "https://attacker.invalid" }]),
+      now,
+    ),
+    [],
+  );
+  assert.equal(JSON.stringify(history).includes('"query"'), false);
+});
+
+test("search cursor is opaque, query-bound, and rejects malformed input", () => {
+  const queryFingerprint = searchQueryFingerprint("김민지");
+  const encoded = encodeSearchCursor({
+    v: 1,
+    kind: "reservations",
+    anchor: "2026-07-23T01:00:00.000Z",
+    rank: 800,
+    sortAt: "2026-07-22T09:00:00.000Z",
+    id: "reservation-001",
+    queryFingerprint,
+  });
+  assert.equal(encoded.includes("김민지"), false);
+  assert.equal(
+    decodeSearchCursor(encoded, "reservations", queryFingerprint)?.id,
+    "reservation-001",
+  );
+  assert.equal(
+    decodeSearchCursor(
+      encoded,
+      "rooms",
+      queryFingerprint,
+    ),
+    null,
+  );
+  assert.equal(
+    decodeSearchCursor(
+      encoded,
+      "reservations",
+      searchQueryFingerprint("다른 검색어"),
+    ),
+    null,
+  );
+  assert.equal(decodeSearchCursor("../invalid", "reservations", queryFingerprint), null);
+});
+
+test("search keyset pages merge without duplicate options and close at EOF", () => {
+  const first = [
+    {
+      id: "reservations",
+      label: "예약·고객",
+      nextCursor: "page-2",
+      items: [
+        { id: "r1", kind: "RESERVATION" },
+        { id: "r2", kind: "RESERVATION" },
+      ],
+    },
+    {
+      id: "rooms",
+      label: "객실",
+      items: [{ id: "room-101", kind: "ROOM" }],
+    },
+  ];
+  const merged = mergeSearchPage(first, {
+    id: "reservations",
+    label: "예약·고객",
+    items: [
+      { id: "r2", kind: "RESERVATION" },
+      { id: "r3", kind: "RESERVATION" },
+    ],
+  });
+  assert.deepEqual(
+    merged[0].items.map((item) => item.id),
+    ["r1", "r2", "r3"],
+  );
+  assert.equal(merged[0].nextCursor, undefined);
+  assert.deepEqual(merged[1], first[1]);
 });
 
 test("deep-link focus ignores stale placeholder pages and selects the exact row", () => {

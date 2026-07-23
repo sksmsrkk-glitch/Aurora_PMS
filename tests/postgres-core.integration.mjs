@@ -10,6 +10,7 @@ import { handlePmsPost } from "../app/api/pms/command-gateway.ts";
 import { runReport } from "../app/api/pms/reporting.ts";
 import { loadChannelCatalog, loadOperationalCatalogs, loadRateBlockMatrix } from "../app/api/pms/hotelstory-catalog-service.ts";
 import { handleFinalOperationsAction, loadBanquetCalendar, loadHotelMembers, loadStayOperations } from "../app/api/pms/final-operations-service.ts";
+import { recordSearchQuality } from "../app/api/pms/search-quality.ts";
 import { closePmsDatabase, getPmsDatabase, scopePmsDatabase } from "../db/pms-database.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL || "";
@@ -267,6 +268,13 @@ test("global PMS search executes every permitted domain query on the production 
       piiMode: "FULL",
     });
     assert.ok(naturalKoreanName.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
+    const wrongKeyboardLayout = await loadPmsSearch(db, new URLSearchParams({ q: "rlaalswl" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.equal(wrongKeyboardLayout.correctionApplied, true);
+    assert.equal(wrongKeyboardLayout.interpretedQuery, "김민지");
+    assert.ok(wrongKeyboardLayout.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
     const digitsOnlyPhone = await loadPmsSearch(db, new URLSearchParams({ q: "01020118800" }), {
       workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
       piiMode: "FULL",
@@ -282,6 +290,370 @@ test("global PMS search executes every permitted domain query on the production 
     await closePmsDatabase();
     if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previousDatabaseUrl;
+  }
+});
+
+test("tenant search documents provide fuzzy lookup, trigger sync, GIN indexes, and forced RLS", { skip }, async () => {
+  const sql = client(2);
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const originalEmail = "g2@example.com";
+  const uniqueEmail = `search-sync-${crypto.randomUUID().slice(0, 8)}@example.com`;
+  let originalR4UpdatedAt = null;
+  try {
+    const [catalog] = await sql`
+      SELECT
+        to_regclass('public.pms_search_documents')::text search_documents,
+        to_regclass('public.pms_search_terms')::text search_terms,
+        (SELECT COUNT(*)::int
+           FROM pg_indexes
+          WHERE schemaname='public'
+            AND tablename='pms_search_documents'
+            AND indexdef ILIKE '%gin%gin_trgm_ops%') trigram_indexes,
+        (SELECT COUNT(*)::int
+           FROM pg_indexes
+          WHERE schemaname='public'
+            AND tablename='pms_search_terms'
+            AND indexdef ILIKE '%gin%gin_trgm_ops%') term_trigram_indexes,
+        (SELECT relrowsecurity AND relforcerowsecurity
+           FROM pg_class
+          WHERE oid='public.pms_search_documents'::regclass) forced_rls,
+        (SELECT COUNT(*)::int
+           FROM pg_policies
+          WHERE schemaname='public'
+            AND tablename='pms_search_documents'
+            AND policyname='aurora_property_isolation') tenant_policies
+    `;
+    assert.equal(catalog.search_documents, "pms_search_documents");
+    assert.equal(catalog.search_terms, "pms_search_terms");
+    assert.equal(catalog.trigram_indexes, 3);
+    assert.equal(catalog.term_trigram_indexes, 1);
+    assert.equal(catalog.forced_rls, true);
+    assert.equal(catalog.tenant_policies, 1);
+    const [trigramContract] = await sql`
+      SELECT
+        pg_get_indexdef(
+          'public.pms_search_terms_tenant_term_trgm_idx'::regclass
+        ) index_definition,
+        EXISTS(
+          SELECT 1
+            FROM pg_amop
+           WHERE amopfamily=(
+             SELECT opcfamily
+               FROM pg_opclass
+              WHERE opcname='gin_trgm_ops'
+                AND opcnamespace='extensions'::regnamespace
+           )
+             AND amopopr='extensions.%(text,text)'::regoperator
+        ) similarity_operator_ready
+    `;
+    assert.match(
+      trigramContract.index_definition,
+      /USING gin \(property_id, term extensions\.gin_trgm_ops\)/iu,
+      "fuzzy term lookup must expose a tenant-composite trigram GIN contract",
+    );
+    assert.equal(trigramContract.similarity_operator_ready, true);
+
+    process.env.DATABASE_URL = databaseUrl;
+    const db = scopePmsDatabase(
+      getPmsDatabase({ DATABASE_URL: databaseUrl }),
+      "prop-seoul",
+    );
+    const principal = {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    };
+    const fuzzy = await loadPmsSearch(
+      db,
+      new URLSearchParams({ q: "Sofai" }),
+      principal,
+    );
+    assert.ok(
+      fuzzy.groups.some(
+        (group) =>
+          group.id === "reservations" &&
+          group.items.some((item) => item.title.includes("Sofia")),
+      ),
+      "transposed guest-name typo should resolve through pg_trgm",
+    );
+
+    const [r4State] = await sql`
+      SELECT updated_at
+        FROM reservations
+       WHERE property_id='prop-seoul' AND id='r4'
+    `;
+    originalR4UpdatedAt = r4State.updated_at;
+    await sql`
+      UPDATE guests
+         SET first_name='Sofiana'
+       WHERE property_id='prop-seoul' AND id='g4'
+    `;
+    const exactBeforePrefix = await loadPmsSearch(
+      db,
+      new URLSearchParams({ q: "Sofia" }),
+      principal,
+    );
+    assert.equal(
+      exactBeforePrefix.groups
+        .find((group) => group.id === "reservations")
+        ?.items[0]?.id,
+      "r2",
+      "exact token matches must rank ahead of a newer prefix match",
+    );
+
+    await sql`
+      UPDATE guests
+         SET first_name='Sofia'
+       WHERE property_id='prop-seoul' AND id='g4'
+    `;
+    await sql`
+      UPDATE reservations
+         SET updated_at=clock_timestamp()
+       WHERE property_id='prop-seoul' AND id='r4'
+    `;
+    const recentTieBreak = await loadPmsSearch(
+      db,
+      new URLSearchParams({ q: "Sofia" }),
+      principal,
+    );
+    assert.equal(
+      recentTieBreak.groups
+        .find((group) => group.id === "reservations")
+        ?.items[0]?.id,
+      "r4",
+      "equally exact matches must use stable recent-activity ordering",
+    );
+
+    await sql`
+      UPDATE guests
+         SET email=${uniqueEmail}
+       WHERE property_id='prop-seoul' AND id='g2'
+    `;
+    const synchronized = await loadPmsSearch(
+      db,
+      new URLSearchParams({ q: uniqueEmail }),
+      principal,
+    );
+    assert.ok(
+      synchronized.groups.some(
+        (group) =>
+          group.id === "reservations" &&
+          group.items.some((item) => item.title.includes("Sofia")),
+      ),
+      "guest updates must refresh every linked reservation document",
+    );
+
+    const [documents] = await sql`
+      SELECT
+        COUNT(*) FILTER(WHERE entity_kind='RESERVATION')::int reservations,
+        COUNT(*) FILTER(WHERE entity_kind='ROOM')::int rooms,
+        COUNT(*) FILTER(WHERE entity_kind='AR')::int ar,
+        (SELECT COUNT(*)::int FROM reservations WHERE property_id='prop-seoul') source_reservations,
+        (SELECT COUNT(*)::int FROM rooms WHERE property_id='prop-seoul' AND active) source_rooms,
+        (SELECT COUNT(*)::int FROM ar_invoices WHERE property_id='prop-seoul') source_ar
+      FROM pms_search_documents
+      WHERE property_id='prop-seoul'
+    `;
+    // A few older integration cleanups intentionally use replication-role
+    // bypass to remove fixtures. Production app roles cannot do that, so this
+    // contract verifies that every live source row has an indexed document.
+    assert.ok(documents.reservations >= documents.source_reservations);
+    assert.ok(documents.rooms >= documents.source_rooms);
+    assert.ok(documents.ar >= documents.source_ar);
+  } finally {
+    await sql`
+      UPDATE guests
+         SET first_name='David'
+       WHERE property_id='prop-seoul' AND id='g4'
+    `;
+    if (originalR4UpdatedAt) {
+      await sql`
+        UPDATE reservations
+           SET updated_at=${originalR4UpdatedAt}
+         WHERE property_id='prop-seoul' AND id='r4'
+      `;
+    }
+    await sql`
+      UPDATE guests
+         SET email=${originalEmail}
+       WHERE property_id='prop-seoul' AND id='g2'
+    `;
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    await sql.end({ timeout: 2 });
+  }
+});
+
+test("search keyset cursor returns every matching entity exactly once", { skip }, async () => {
+  const sql = client(2);
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 10);
+  const token = `Cursor${suffix}`;
+  const fixtures = Array.from({ length: 17 }, (_, index) => ({
+    guestId: `it-cursor-guest-${suffix}-${index}`,
+    reservationId: `it-cursor-res-${suffix}-${index}`,
+    confirmation: `CUR-${suffix.toUpperCase()}-${String(index).padStart(2, "0")}`,
+    updatedAt: new Date(
+      Date.parse("2026-07-23T01:00:00.000Z") - index * 60_000,
+    ).toISOString(),
+  }));
+  try {
+    for (const [index, fixture] of fixtures.entries()) {
+      await sql`
+        INSERT INTO guests(
+          id,property_id,first_name,last_name,email,created_at
+        ) VALUES (
+          ${fixture.guestId},'prop-seoul',
+          ${`Page${String(index).padStart(2, "0")}`},${token},
+          ${`cursor-${suffix}-${index}@example.com`},${fixture.updatedAt}
+        )
+      `;
+      await sql`
+        INSERT INTO reservations(
+          id,confirmation_no,property_id,guest_id,room_type_id,
+          arrival_date,departure_date,status,adults,children,source,
+          rate_plan,nightly_rate,created_at,updated_at
+        ) VALUES (
+          ${fixture.reservationId},${fixture.confirmation},'prop-seoul',
+          ${fixture.guestId},'rt-dlx','2026-08-01','2026-08-02',
+          'DUE_IN',1,0,'DIRECT','BAR',100000,
+          ${fixture.updatedAt},${fixture.updatedAt}
+        )
+      `;
+    }
+    process.env.DATABASE_URL = databaseUrl;
+    const db = scopePmsDatabase(
+      getPmsDatabase({ DATABASE_URL: databaseUrl }),
+      "prop-seoul",
+    );
+    const principal = {
+      workspaceAccess: { frontdesk: "READ", rooms: "NONE", finance: "NONE" },
+      piiMode: "FULL",
+    };
+    const collected = [];
+    let cursor = "";
+    let firstCursor = "";
+    for (let page = 0; page < 10; page += 1) {
+      const params = new URLSearchParams({
+        q: token,
+        kind: "reservations",
+        limit: "5",
+      });
+      if (cursor) params.set("cursor", cursor);
+      const result = await loadPmsSearch(db, params, principal);
+      const group = result.groups.find(
+        (candidate) => candidate.id === "reservations",
+      );
+      collected.push(...(group?.items.map((item) => item.id) ?? []));
+      cursor = group?.nextCursor ?? "";
+      if (!firstCursor) firstCursor = cursor;
+      if (!cursor) break;
+    }
+    assert.equal(collected.length, fixtures.length);
+    assert.equal(new Set(collected).size, fixtures.length);
+    assert.deepEqual(
+      collected,
+      fixtures.map((fixture) => fixture.reservationId),
+      "rank, activity time, and ID keyset ordering must remain stable",
+    );
+    await assert.rejects(
+      loadPmsSearch(
+        db,
+        new URLSearchParams({
+          q: `${token}tampered`,
+          kind: "reservations",
+          cursor: firstCursor,
+        }),
+        principal,
+      ),
+      /검색 커서/iu,
+    );
+  } finally {
+    await closePmsDatabase();
+    await sql`
+      DELETE FROM reservations
+       WHERE id IN ${sql(fixtures.map((fixture) => fixture.reservationId))}
+    `;
+    await sql`
+      DELETE FROM guests
+       WHERE id IN ${sql(fixtures.map((fixture) => fixture.guestId))}
+    `;
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    await sql.end({ timeout: 2 });
+  }
+});
+
+test("search quality aggregation stores no query, hash, user, or entity identifiers", { skip }, async () => {
+  const sql = client(2);
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  try {
+    const forbiddenColumns = await sql`
+      SELECT column_name
+        FROM information_schema.columns
+       WHERE table_schema='public'
+         AND table_name='pms_search_quality_daily'
+         AND column_name IN (
+           'query','query_text','query_hash','user_id','actor','entity_id'
+         )
+    `;
+    assert.equal(forbiddenColumns.length, 0);
+    const [security] = await sql`
+      SELECT
+        relrowsecurity AND relforcerowsecurity forced_rls,
+        (SELECT COUNT(*)::int
+           FROM pg_policies
+          WHERE schemaname='public'
+            AND tablename='pms_search_quality_daily'
+            AND policyname='aurora_property_isolation') tenant_policies
+      FROM pg_class
+      WHERE oid='public.pms_search_quality_daily'::regclass
+    `;
+    assert.equal(security.forced_rls, true);
+    assert.equal(security.tenant_policies, 1);
+
+    const [before] = await sql`
+      SELECT COALESCE(SUM(searches),0)::int searches
+        FROM pms_search_quality_daily
+       WHERE property_id='prop-seoul'
+         AND query_length_bucket=64
+         AND query_script='HANGUL'
+         AND correction_used
+         AND result_bucket='ZERO'
+         AND latency_bucket='SLOW'
+    `;
+    process.env.DATABASE_URL = databaseUrl;
+    const db = scopePmsDatabase(
+      getPmsDatabase({ DATABASE_URL: databaseUrl }),
+      "prop-seoul",
+    );
+    const input = {
+      query: "가".repeat(33),
+      total: 0,
+      truncated: false,
+      correctionApplied: true,
+      latencyMs: 900,
+    };
+    await recordSearchQuality(db, input);
+    await recordSearchQuality(db, input);
+    const [after] = await sql`
+      SELECT COALESCE(SUM(searches),0)::int searches,
+             COALESCE(SUM(zero_results),0)::int zero_results
+        FROM pms_search_quality_daily
+       WHERE property_id='prop-seoul'
+         AND query_length_bucket=64
+         AND query_script='HANGUL'
+         AND correction_used
+         AND result_bucket='ZERO'
+         AND latency_bucket='SLOW'
+    `;
+    assert.equal(after.searches, before.searches + 2);
+    assert.ok(after.zero_results >= 2);
+  } finally {
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    await sql.end({ timeout: 2 });
   }
 });
 

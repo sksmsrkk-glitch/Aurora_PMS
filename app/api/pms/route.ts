@@ -1,4 +1,5 @@
 /** Thin Next.js PMS transport: read projection selection plus command delegation. */
+import { after } from "next/server";
 import { getPmsDatabase, scopePmsDatabase } from "../../../db/pms-database";
 import { ReportRequestError } from "./reporting";
 import {
@@ -38,6 +39,7 @@ import {
 import { loadReservationVoucher } from "./voucher-service";
 import { loadChannelCatalog, loadOperationalCatalogs, loadRateBlockMatrix, HotelStoryCatalogError } from "./hotelstory-catalog-service";
 import { loadBanquetCalendar, loadHotelMembers, loadStayOperations } from "./final-operations-service";
+import { recordSearchQuality } from "./search-quality";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -102,7 +104,30 @@ export async function GET(request: Request) {
         { status: 403 },
       );
     try {
-      return Response.json(await loadPmsSearch(db, url.searchParams, principal), {
+      const startedAt = performance.now();
+      const searchResult = await loadPmsSearch(db, url.searchParams, principal);
+      const latencyMs = performance.now() - startedAt;
+      after(async () => {
+        try {
+          await recordSearchQuality(db, {
+            query: searchResult.q,
+            total: searchResult.total,
+            truncated: Boolean(searchResult.truncated),
+            correctionApplied: Boolean(searchResult.correctionApplied),
+            latencyMs,
+          });
+        } catch (error) {
+          // Analytics must never change the operator's search outcome, and the
+          // log intentionally excludes the raw query and result payload.
+          console.error("PMS search quality aggregation failed", {
+            code:
+              error instanceof Error
+                ? error.name
+                : "SEARCH_QUALITY_UNKNOWN_ERROR",
+          });
+        }
+      });
+      return Response.json(searchResult, {
         headers: { "Cache-Control": "private, no-store" },
       });
     } catch (error) {

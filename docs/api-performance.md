@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | `core` | 없음 | 초기 shell용 property, principal, 핵심 metrics·controls, 오늘 도착·현재 재실·오늘 체크아웃, rooms·14일 inventory |
 | 기본 | 없음 | `property`, `principal`, `metrics`, `controls`, `reservations`, `rooms`, `inventory`, `groups`, `finance`, `integrations` |
-| `search` | `q` (2~120자) | 현재 페이지 권한이 있는 예약 8건, 객실 6건, AR 6건의 navigation target |
+| `search` | `q` (2~120자), 선택 `kind=reservations|rooms|finance`, `cursor`, `limit`(1~20) | 권한이 있는 예약 8건, 객실 6건, AR 6건의 navigation target과 도메인별 다음 cursor; cursor 요청은 선택 도메인만 keyset 조회 |
 | `frontdesk` | `queue`, `q`, `dateField`, `from`, `to`, `status`, `source`, `roomTypeId`, `assignment`, `balance`, `sort`, `page`, `pageSize` | 업무 큐 집계, 필터 결과 최대 50건, 객실 타입·채널 option, 페이지 정보 |
 | `reservation_availability` | `arrival`, `departure`(최대 30박), `adults`, `children` | 타입별 물리재고·예약·블록 hold, 활성 Rate Plan, MLOS·CTA·CTD, 일자 요금 |
 | `inventory` | `from`, `to` (`YYYY-MM-DD`, 서버 최대 730일, UI 요청 14/30일) | dates, room types, physical/reserved/held/available, inventory controls, mappings, contracts, channel rate overrides |
@@ -213,11 +213,17 @@
 | 재고 캘린더 UI 읽기·DOM 창 | 요청당 14일 또는 30일, 객실 타입 페이지당 10개 |
 | 재고 벌크 변경 | 한 번에 최대 5,000 타입·일자 셀 |
 | 프런트 목록 | 기본 20행, 서버 최대 50행 |
-| 통합 검색 | debounce 250ms, 도메인별 8/6/6건 |
+| 통합 검색 | debounce 250ms, 최초 도메인별 8/6/6건, 이어보기 최대 20건, offset 없는 keyset cursor |
 | 체크인·연회·회원 즉시 검색 | debounce 300ms, 이전 요청 AbortSignal 취소 |
 | 회계·리포트 조회 | 한 요청 최대 367일 |
 
 실제 운영 규모는 Supabase compute, connection/pooling 정책, 리포트 기간과 동시 사용자 수에 따라 capacity test로 결정해야 합니다. 객실 수 자체보다 날짜별 예약 객실박과 리포트 조회량이 주요 용량 지표입니다.
+
+### 통합 검색 성능 계약
+
+- 검색 원본은 매 요청마다 여러 업무 테이블을 `OR` 스캔하지 않습니다. trigger-maintained `pms_search_documents`/`pms_search_terms`와 `property_id + entity_kind + trigram` 복합 GIN을 사용합니다.
+- cursor의 고정 `anchor`가 페이지 사이 최근성 점수를 보존하고 `(rank DESC, sort_at DESC, id ASC)` keyset이 동시 변경 시 offset 밀림을 제거합니다.
+- `npm run benchmark:search`는 loopback `TEST_DATABASE_URL`만 허용하고 실제 trigger로 합성 객실을 생성·측정·정리합니다. 2026-07-23 로컬 PostgreSQL 17, 10,000실, query당 20회에서 exact p95 `174.95ms`, 오타 p95 `185.67ms`, broad p95 `214.39ms`였으며 환경별 SLA는 staging capacity test로 다시 확정합니다.
 
 ## Talos Flow UI
 
