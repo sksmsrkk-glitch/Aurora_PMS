@@ -34,6 +34,7 @@ import {
   loadReservationAvailability,
   loadReservationCalendar,
   loadReservationDetail,
+  pmsReadFailureResponse,
   PmsReadError,
 } from "./frontdesk-read";
 import { loadReservationVoucher } from "./voucher-service";
@@ -131,10 +132,11 @@ export async function GET(request: Request) {
         headers: { "Cache-Control": "private, no-store" },
       });
     } catch (error) {
-      console.error("PMS global search failed", error);
-      return Response.json(
-        { error: "통합 검색을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요." },
-        { status: 500, headers: { "Cache-Control": "private, no-store" } },
+      if (!(error instanceof PmsReadError))
+        console.error("PMS global search failed", error);
+      return pmsReadFailureResponse(
+        error,
+        "통합 검색을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.",
       );
     }
   }

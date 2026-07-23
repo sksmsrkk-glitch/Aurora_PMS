@@ -59,6 +59,25 @@ export class PmsReadError extends Error {
   }
 }
 
+/**
+ * Converts expected read-contract failures into client responses while keeping
+ * unexpected infrastructure failures opaque. This prevents invalid filters or
+ * cursors from being reported as server outages by every read route.
+ */
+export function pmsReadFailureResponse(
+  error: unknown,
+  fallbackMessage: string,
+) {
+  const expected = error instanceof PmsReadError;
+  return Response.json(
+    { error: expected ? error.message : fallbackMessage },
+    {
+      status: expected ? error.status : 500,
+      headers: { "Cache-Control": "private, no-store" },
+    },
+  );
+}
+
 function enumValue<T extends readonly string[]>(
   values: T,
   candidate: string | null,
