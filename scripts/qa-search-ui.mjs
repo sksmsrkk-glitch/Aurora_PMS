@@ -9,6 +9,7 @@ import http from "node:http";
 import { resolve } from "node:path";
 import { chromium, expect } from "@playwright/test";
 import postgres from "postgres";
+import { REQUIRED_SCHEMA_VERSION } from "../db/schema-contract.ts";
 
 const databaseUrl =
   process.env.SEARCH_E2E_DATABASE_URL ||
@@ -183,11 +184,7 @@ async function waitForReady() {
       });
       if (response.ok) {
         const body = await response.json();
-        if (
-          body.schemaVersion ===
-          "202607230035_search_term_candidate_performance"
-        )
-          return;
+        if (body.schemaVersion === REQUIRED_SCHEMA_VERSION) return;
       }
     } catch {
       // The process is still starting.

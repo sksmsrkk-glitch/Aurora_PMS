@@ -20,7 +20,7 @@
     "qa:website": "node scripts/qa-website-cms.mjs",
     "qa:staff": "node scripts/qa-staff-access.mjs",
     "qa:public": "node scripts/qa-public-site.mjs",
-    "qa:search-ui": "node scripts/qa-search-ui.mjs",
+    "qa:search-ui": "node --import tsx scripts/qa-search-ui.mjs",
     "benchmark": "node tests/api-benchmark.mjs",
     "benchmark:search": "node --import tsx scripts/benchmark-search.mjs",
     "benchmark:search:ci": "node --import tsx scripts/benchmark-search.mjs",
