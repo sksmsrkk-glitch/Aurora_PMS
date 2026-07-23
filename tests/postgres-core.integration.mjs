@@ -268,6 +268,11 @@ test("global PMS search executes every permitted domain query on the production 
       piiMode: "FULL",
     });
     assert.ok(naturalKoreanName.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
+    const romanizedKoreanName = await loadPmsSearch(db, new URLSearchParams({ q: "Kim Minji" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.ok(romanizedKoreanName.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
     const wrongKeyboardLayout = await loadPmsSearch(db, new URLSearchParams({ q: "rlaalswl" }), {
       workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
       piiMode: "FULL",
@@ -280,6 +285,15 @@ test("global PMS search executes every permitted domain query on the production 
       piiMode: "FULL",
     });
     assert.ok(digitsOnlyPhone.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
+    const exactRoom = await loadPmsSearch(db, new URLSearchParams({ q: "101" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.equal(
+      exactRoom.groups[0]?.id,
+      "rooms",
+      "an exact room number must outrank incidental numeric matches in guest documents",
+    );
     const literalWildcards = await loadPmsSearch(db, new URLSearchParams({ q: "%%" }), {
       workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
       piiMode: "FULL",
@@ -290,6 +304,67 @@ test("global PMS search executes every permitted domain query on the production 
     await closePmsDatabase();
     if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previousDatabaseUrl;
+  }
+});
+
+test("search quality report is tenant-scoped, privacy-safe, and thresholded", { skip }, async () => {
+  const sql = client(2);
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  try {
+    process.env.DATABASE_URL = databaseUrl;
+    const db = scopePmsDatabase(
+      getPmsDatabase({ DATABASE_URL: databaseUrl }),
+      "prop-seoul",
+    );
+    await sql`
+      DELETE FROM pms_search_quality_daily
+       WHERE property_id='prop-seoul' AND event_date='2026-07-22'
+    `;
+    await sql`
+      INSERT INTO pms_search_quality_daily(
+        property_id,event_date,query_length_bucket,query_script,
+        correction_used,result_bucket,latency_bucket,searches,zero_results
+      ) VALUES
+        ('prop-seoul','2026-07-22',4,'HANGUL',false,'ZERO','SLOW',5,5),
+        ('prop-seoul','2026-07-22',8,'LATIN',false,'FEW','SLOW',0+5,0),
+        ('prop-seoul','2026-07-22',8,'LATIN',true,'ONE','FAST',10,0)
+    `;
+    const report = await runReport(
+      db,
+      new URLSearchParams({
+        report: "search_quality",
+        from: "2026-07-22",
+        to: "2026-07-22",
+      }),
+      {
+        email: "quality@example.com",
+        role: "PROPERTY_ADMIN",
+        capabilities: ["READ"],
+      },
+    );
+    assert.equal(report.rows.length, 1);
+    assert.equal(report.rows[0].health, "CRITICAL");
+    assert.equal(report.rows[0].searches, 20);
+    assert.equal(report.rows[0].slow_rate, 50);
+    assert.equal(
+      JSON.stringify(report).includes("quality@example.com"),
+      false,
+      "quality report must not include an operator identity",
+    );
+    assert.equal(
+      report.columns.some((column) => column.key === "query"),
+      false,
+      "quality report must never expose a raw query column",
+    );
+  } finally {
+    await sql`
+      DELETE FROM pms_search_quality_daily
+       WHERE property_id='prop-seoul' AND event_date='2026-07-22'
+    `;
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    await sql.end({ timeout: 2 });
   }
 });
 
@@ -352,6 +427,13 @@ test("tenant search documents provide fuzzy lookup, trigger sync, GIN indexes, a
       "fuzzy term lookup must expose a tenant-composite trigram GIN contract",
     );
     assert.equal(trigramContract.similarity_operator_ready, true);
+    const [romanization] = await sql`
+      SELECT
+        talos_search_romanize('김민지') romanized,
+        talos_search_person_aliases('민지','김') aliases
+    `;
+    assert.equal(romanization.romanized, "gimminji");
+    assert.match(romanization.aliases, /kimminji/u);
 
     process.env.DATABASE_URL = databaseUrl;
     const db = scopePmsDatabase(

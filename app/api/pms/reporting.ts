@@ -1,6 +1,10 @@
 /** Server-side report catalog, filters, masking and export projections. */
 import type { PmsDatabase } from "../../../db/pms-database";
 import { sqlLikePattern } from "../../../lib/search";
+import {
+  classifySearchHealth,
+  type SearchQualityDailyFact,
+} from "../../../lib/search-quality-health";
 
 export type ReportPrincipal = { email:string; role:string; capabilities:string[] };
 
@@ -20,6 +24,7 @@ export const reportCatalog = [
   { key:"channels", label:"채널 · 인터페이스", group:"연동", description:"OTA 인바운드 처리와 아웃바운드 전달 시도의 성공·실패 이력을 조회합니다." },
   { key:"audit", label:"감사 로그", group:"감사", description:"사용자별 변경 작업과 대상 엔터티의 추적 기록을 조회합니다." },
   { key:"room_inventory", label:"객실 마스터", group:"객실", description:"객실 타입과 실제 객실의 판매·운영 상태를 조회합니다." },
+  { key:"search_quality", label:"검색 품질 · 경보", group:"운영", description:"검색어 원문 없이 일별 무결과율·지연율·교정률과 품질 경보를 조회합니다." },
 ] as const;
 
 type ReportKey = typeof reportCatalog[number]["key"];
@@ -134,6 +139,31 @@ async function roomInventoryReport(db:PmsDatabase,p:Params){
   return {columns:[{key:"room_type",label:"타입"},{key:"room_type_name",label:"타입명"},{key:"base_rate",label:"기준 요금",type:"currency"},{key:"capacity",label:"기준 인원",type:"number"},{key:"number",label:"객실"},{key:"floor",label:"층",type:"number"},{key:"front_desk_status",label:"프런트 상태"},{key:"housekeeping_status",label:"청소 상태"},{key:"features",label:"특성"},{key:"version",label:"버전",type:"number"}] as Column[],rows,total,summary:[{label:"객실 타입",value:types,format:"number"},{label:"객실",value:total,format:"number"}] as SummaryItem[]};
 }
 
+async function searchQualityReport(db:PmsDatabase,p:Params){
+  // At most 367 aggregate rows are loaded, then the shared TypeScript policy
+  // assigns health levels. Keeping thresholds out of SQL prevents the dashboard,
+  // export, tests, and future alert worker from drifting apart.
+  const raw=(await db.prepare(`SELECT event_date::text event_date,
+    SUM(searches)::int searches,
+    SUM(zero_results)::int zero_results,
+    SUM(searches) FILTER (WHERE latency_bucket='SLOW')::int slow_searches,
+    SUM(searches) FILTER (WHERE correction_used)::int correction_searches
+    FROM pms_search_quality_daily
+    WHERE property_id=pms_current_property_id() AND event_date BETWEEN ? AND ?
+    GROUP BY event_date ORDER BY event_date DESC`).bind(p.from,p.to).all<SearchQualityDailyFact>()).results;
+  const keyword=p.q.toLocaleLowerCase("ko-KR");
+  const filtered=raw.map(classifySearchHealth).filter(row=>
+    (!p.status||row.health===p.status)&&
+    (!keyword||`${row.event_date} ${row.health} ${row.recommendation}`.toLocaleLowerCase("ko-KR").includes(keyword))
+  );
+  const total=filtered.length,rows=filtered.slice((p.page-1)*p.pageSize,p.page*p.pageSize);
+  const searches=filtered.reduce((sum,row)=>sum+row.searches,0);
+  const zero=filtered.reduce((sum,row)=>sum+row.zero_results,0);
+  const slow=filtered.reduce((sum,row)=>sum+row.slow_searches,0);
+  const critical=filtered.filter(row=>row.health==="CRITICAL").length;
+  return {columns:[{key:"event_date",label:"영업일",type:"date"},{key:"health",label:"품질 상태"},{key:"searches",label:"검색",type:"number"},{key:"zero_results",label:"무결과",type:"number"},{key:"zero_rate",label:"무결과율",type:"percent"},{key:"slow_searches",label:"느린 검색",type:"number"},{key:"slow_rate",label:"느린 검색률",type:"percent"},{key:"correction_searches",label:"키보드 교정",type:"number"},{key:"correction_rate",label:"교정률",type:"percent"},{key:"recommendation",label:"권장 조치"}] as Column[],rows,total,summary:[{label:"검색",value:searches,format:"number"},{label:"무결과율",value:searches?round(zero*100/searches):0,format:"percent"},{label:"느린 검색률",value:searches?round(slow*100/searches):0,format:"percent"},{label:"위험 일수",value:critical,format:"number"}] as SummaryItem[]};
+}
+
 async function accountingJournalReport(db:PmsDatabase,p:Params){
   const where=["e.property_id=pms_current_property_id()","e.business_date BETWEEN ? AND ?"],binds:unknown[]=[p.from,p.to];
   if(p.q){where.push(sqlLike(["e.entry_no","e.description","e.vendor","e.created_by","a.code","a.name","l.department","l.memo"]));binds.push(...searchBinds(p.q,8));}
@@ -203,7 +233,7 @@ export async function runReport(db:PmsDatabase,input:URLSearchParams,principal:R
   // This dispatcher adds shared metadata and capability flags but never recomputes
   // financial totals from the paginated subset.
   const businessDate=await propertyDate(db);const params=parseParams(input,businessDate,overrides);let result;
-  switch(params.report){case"booking_curve":result=await bookingCurveReport(db,params);break;case"occupancy":result=await occupancyReport(db,params);break;case"financials":result=await financialReport(db,params);break;case"accounting_journal":result=await accountingJournalReport(db,params);break;case"channel_settlements":result=await channelSettlementsReport(db,params);break;case"channel_deposits":result=await channelDepositsReport(db,params);break;case"ar":result=await arReport(db,params);break;case"deferred_settlements":result=await deferredSettlementsReport(db,params);break;case"yoy":result=await yoyReport(db,params);break;case"housekeeping":result=await housekeepingReport(db,params);break;case"groups":result=await groupsReport(db,params);break;case"channels":result=await channelsReport(db,params);break;case"audit":result=await auditReport(db,params);break;case"room_inventory":result=await roomInventoryReport(db,params);break;default:result=await reservationsReport(db,params,principal);}
+  switch(params.report){case"booking_curve":result=await bookingCurveReport(db,params);break;case"occupancy":result=await occupancyReport(db,params);break;case"financials":result=await financialReport(db,params);break;case"accounting_journal":result=await accountingJournalReport(db,params);break;case"channel_settlements":result=await channelSettlementsReport(db,params);break;case"channel_deposits":result=await channelDepositsReport(db,params);break;case"ar":result=await arReport(db,params);break;case"deferred_settlements":result=await deferredSettlementsReport(db,params);break;case"yoy":result=await yoyReport(db,params);break;case"housekeeping":result=await housekeepingReport(db,params);break;case"groups":result=await groupsReport(db,params);break;case"channels":result=await channelsReport(db,params);break;case"audit":result=await auditReport(db,params);break;case"room_inventory":result=await roomInventoryReport(db,params);break;case"search_quality":result=await searchQualityReport(db,params);break;default:result=await reservationsReport(db,params,principal);}
   const definition=reportCatalog.find(item=>item.key===params.report)!;const totalPages=Math.max(1,Math.ceil(result.total/params.pageSize));
   return {catalog:reportCatalog,report:definition,title:definition.label,description:definition.description,generatedAt:new Date().toISOString(),filters:{q:params.q,from:params.from,to:params.to,status:params.status,source:params.source,roomTypeId:params.roomTypeId,scope:params.scope},columns:result.columns,rows:result.rows,summary:result.summary,pagination:{page:params.page,pageSize:params.pageSize,total:result.total,totalPages},export:{allowed:principal.capabilities.includes("REPORT_EXPORT"),maxRows:25000,masked:!principal.capabilities.includes("REPORT_EXPORT")}};
 }

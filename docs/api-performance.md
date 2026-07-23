@@ -221,9 +221,11 @@
 
 ### 통합 검색 성능 계약
 
-- 검색 원본은 매 요청마다 여러 업무 테이블을 `OR` 스캔하지 않습니다. trigger-maintained `pms_search_documents`/`pms_search_terms`와 `property_id + entity_kind + trigram` 복합 GIN을 사용합니다.
+- 검색 원본은 매 요청마다 여러 업무 테이블을 `OR` 스캔하지 않습니다. trigger-maintained `pms_search_documents`/`pms_search_terms`, exact BTREE와 trigram GIN 후보 경로를 사용합니다. exact token이 있으면 fuzzy 경로를 실행하지 않고, Latin·숫자 입력은 동일한 compact/초성 GIN을 중복 실행하지 않습니다.
 - cursor의 고정 `anchor`가 페이지 사이 최근성 점수를 보존하고 `(rank DESC, sort_at DESC, id ASC)` keyset이 동시 변경 시 offset 밀림을 제거합니다.
-- `npm run benchmark:search`는 loopback `TEST_DATABASE_URL`만 허용하고 실제 trigger로 합성 객실을 생성·측정·정리합니다. 2026-07-23 로컬 PostgreSQL 17, 10,000실, query당 20회에서 exact p95 `174.95ms`, 오타 p95 `185.67ms`, broad p95 `214.39ms`였으며 환경별 SLA는 staging capacity test로 다시 확정합니다.
+- `npm run benchmark:search`는 loopback `TEST_DATABASE_URL`만 허용하고 합성 호텔을 측정 후 잔여 행 0건으로 정리합니다. PR의 2,000실 시험은 실제 행 trigger 유지 비용까지, 주간 100,000실 시험은 같은 운영 table/index/정규화 shape의 read capacity를 검증합니다.
+- 2026-07-23 로컬 PostgreSQL 17, 100,000실, query당 20회, 동시 사용자 8명에서 exact p95 `76.59ms`, 오타 p95 `965.03ms`, broad p95 `1,242.37ms`, 동시 p95 `2,135.61ms`, `6.51 ops/s`였습니다. 순차 p95 `1,500ms`, 동시 p95 `5,000ms` 예산을 자동 강제합니다.
+- fixture 방식과 전체 결함·수정 기록은 [검색 무결성 문서](search-integrity.md)를 참조합니다. 실제 고객 SLA는 운영과 같은 compute·pool·region의 스테이징 시험으로 별도 확정합니다.
 
 ## Talos Flow UI
 

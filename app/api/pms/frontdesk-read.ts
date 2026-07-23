@@ -9,6 +9,7 @@ import {
   decodeSearchCursor,
   encodeSearchCursor,
   SEARCH_CURSOR_KINDS,
+  searchPropertyFingerprint,
   searchQueryFingerprint,
   type SearchCursor,
   type SearchCursorKind,
@@ -426,28 +427,103 @@ const SEARCH_INPUT_SQL = `SELECT
   ?::text phone_digits,
   ?::text phone_pattern`;
 
-const SEARCH_TERM_RANK_SQL = `SELECT
-  COALESCE(MAX(extensions.similarity(term.term,input.query_text)),0) fuzzy_score,
-  COALESCE(BOOL_OR(term.term=input.query_text),false) exact_term,
-  COALESCE(BOOL_OR(term.term LIKE input.prefix_pattern ESCAPE '\\'),false) prefix_term
-FROM pms_search_terms term
-WHERE term.property_id=search.property_id
-  AND term.entity_kind=search.entity_kind
-  AND term.entity_id=search.entity_id`;
-
-const SEARCH_MATCH_SQL = `(search.search_text LIKE input.contains_pattern ESCAPE '\\'
-  OR search.compact_text LIKE input.compact_pattern ESCAPE '\\'
-  OR search.initial_text LIKE input.initial_pattern ESCAPE '\\'
-  OR search.search_text OPERATOR(extensions.%) input.query_text
-  OR search.compact_text OPERATOR(extensions.%) input.compact_query
-  OR EXISTS(
-    SELECT 1
-      FROM pms_search_terms matched_term
-     WHERE matched_term.property_id=search.property_id
-       AND matched_term.entity_kind=search.entity_kind
-       AND matched_term.entity_id=search.entity_id
-       AND matched_term.term OPERATOR(extensions.%) input.query_text
-  ))`;
+function searchTermCandidates(entityKind: "RESERVATION" | "ROOM" | "AR") {
+  // Equality gets a dedicated BTREE plan and suppresses the substantially more
+  // expensive trigram branch. This matters for a common word shared by 100k
+  // rooms: an OR across BTREE and GIN predicates otherwise forces unnecessary
+  // similarity work for every matching row.
+  return `WITH exact_match AS MATERIALIZED (
+    SELECT term.entity_id
+      FROM input
+      JOIN pms_search_terms term
+        ON term.property_id=pms_current_property_id()
+       AND term.entity_kind='${entityKind}'
+       AND term.term=input.query_text
+    UNION
+    SELECT term.entity_id
+      FROM input
+      JOIN pms_search_terms term
+        ON term.property_id=pms_current_property_id()
+       AND term.entity_kind='${entityKind}'
+       AND input.compact_query<>''
+       AND term.term=input.compact_query
+  ), fuzzy_match AS MATERIALIZED (
+    SELECT
+      raw.entity_id,
+      MAX(raw.fuzzy_score) fuzzy_score,
+      BOOL_OR(raw.prefix_term) prefix_term
+    FROM (
+      SELECT
+        term.entity_id,
+        extensions.similarity(term.term,input.query_text) fuzzy_score,
+        term.term LIKE input.prefix_pattern ESCAPE '\\' prefix_term
+      FROM input
+      JOIN pms_search_terms term
+        ON term.property_id=pms_current_property_id()
+       AND term.entity_kind='${entityKind}'
+       AND term.term LIKE input.contains_pattern ESCAPE '\\'
+      UNION ALL
+      SELECT
+        term.entity_id,
+        extensions.similarity(term.term,input.compact_query) fuzzy_score,
+        term.term LIKE input.compact_query||'%' prefix_term
+      FROM input
+      JOIN pms_search_terms term
+        ON term.property_id=pms_current_property_id()
+       AND term.entity_kind='${entityKind}'
+       AND input.compact_query<>''
+       AND term.term LIKE input.compact_pattern ESCAPE '\\'
+      UNION ALL
+      SELECT
+        term.entity_id,
+        extensions.similarity(term.term,input.initial_query) fuzzy_score,
+        false prefix_term
+      FROM input
+      JOIN pms_search_terms term
+        ON term.property_id=pms_current_property_id()
+       AND term.entity_kind='${entityKind}'
+       AND input.initial_query<>''
+       AND term.term LIKE input.initial_pattern ESCAPE '\\'
+      UNION ALL
+      SELECT
+        term.entity_id,
+        extensions.similarity(term.term,input.query_text) fuzzy_score,
+        term.term LIKE input.prefix_pattern ESCAPE '\\' prefix_term
+      FROM input
+      JOIN pms_search_terms term
+        ON term.property_id=pms_current_property_id()
+       AND term.entity_kind='${entityKind}'
+       AND input.compact_query=''
+       AND term.term OPERATOR(extensions.%) input.query_text
+      UNION ALL
+      SELECT
+        term.entity_id,
+        extensions.similarity(term.term,input.compact_query) fuzzy_score,
+        term.term LIKE input.compact_query||'%' prefix_term
+      FROM input
+      JOIN pms_search_terms term
+        ON term.property_id=pms_current_property_id()
+       AND term.entity_kind='${entityKind}'
+       AND input.compact_query<>''
+       AND term.term OPERATOR(extensions.%) input.compact_query
+    ) raw
+    WHERE NOT EXISTS (SELECT 1 FROM exact_match)
+    GROUP BY raw.entity_id
+  )
+  SELECT
+    candidate.entity_id,
+    MAX(candidate.fuzzy_score) fuzzy_score,
+    BOOL_OR(candidate.exact_term) exact_term,
+    BOOL_OR(candidate.prefix_term) prefix_term
+  FROM (
+    SELECT entity_id,1::real fuzzy_score,true exact_term,true prefix_term
+      FROM exact_match
+    UNION ALL
+    SELECT entity_id,fuzzy_score,false exact_term,prefix_term
+      FROM fuzzy_match
+  ) candidate
+  GROUP BY candidate.entity_id`;
+}
 
 const SEARCH_RANK_SQL = `(CASE
   WHEN term_rank.exact_term
@@ -527,17 +603,19 @@ function nextSearchCursor(
   kind: SearchCursorKind,
   anchor: string,
   queryFingerprint: string,
+  propertyFingerprint: string,
 ) {
   if (rows.length <= limit) return undefined;
   const last = rows[limit - 1];
   return encodeSearchCursor({
-    v: 1,
+    v: 2,
     kind,
     anchor,
     rank: Number(last.search_rank),
     sortAt: searchSortTimestamp(last.search_sort_at),
     id: String(last.id),
     queryFingerprint,
+    propertyFingerprint,
   });
 }
 
@@ -555,8 +633,15 @@ export async function loadPmsSearch(
   const compactPattern = sqlCompactPattern(q);
   const normalizedQuery = normalizeSearchText(q);
   const queryFingerprint = searchQueryFingerprint(normalizedQuery);
+  const propertyFingerprint = searchPropertyFingerprint(principal.propertyId);
   const compactQuery = normalizeSearchCompact(q);
-  const initialQuery = normalizeSearchCompact(koreanInitialSearchText(q));
+  // Korean initial matching is meaningful only when the user actually typed
+  // Hangul or consonant jamo. For Latin, numeric, email and phone queries the
+  // derived value equals compactQuery and used to execute the same GIN scan
+  // twice, which nearly doubled typo latency on a 100k-room property.
+  const initialQuery = /[가-힣ㄱ-ㅎ]/u.test(q)
+    ? normalizeSearchCompact(koreanInitialSearchText(q))
+    : "";
   const initialPattern = sqlCompactPattern(initialQuery);
   const prefixPattern = `${escapeSqlLike(normalizedQuery)}%`;
   const kindParam = params.get("kind");
@@ -570,7 +655,12 @@ export async function loadPmsSearch(
     throw new PmsReadError("검색 커서에는 결과 유형이 필요합니다.");
   const cursor =
     encodedCursor && requestedKind
-      ? decodeSearchCursor(encodedCursor, requestedKind, queryFingerprint)
+      ? decodeSearchCursor(
+          encodedCursor,
+          requestedKind,
+          queryFingerprint,
+          propertyFingerprint,
+        )
       : null;
   if (encodedCursor && !cursor)
     throw new PmsReadError("만료되었거나 올바르지 않은 검색 커서입니다.");
@@ -623,10 +713,9 @@ export async function loadPmsSearch(
       JOIN room_types rt ON rt.id=r.room_type_id AND rt.property_id=r.property_id
       LEFT JOIN rooms rm ON rm.id=r.room_id AND rm.property_id=r.property_id
       LEFT JOIN (SELECT reservation_id,MIN(external_reservation_id) external_reservation_id FROM channel_reservation_links WHERE property_id=pms_current_property_id() GROUP BY reservation_id) er ON er.reservation_id=r.id
-      LEFT JOIN LATERAL (${SEARCH_TERM_RANK_SQL}) term_rank ON true
+      JOIN (${searchTermCandidates("RESERVATION")}) term_rank
+        ON term_rank.entity_id=search.entity_id
       WHERE r.property_id=pms_current_property_id() AND ?
-        AND (${SEARCH_MATCH_SQL}
-          OR (input.phone_digits<>'' AND REGEXP_REPLACE(COALESCE(g.phone,''),'\\D','','g') LIKE input.phone_pattern ESCAPE '\\'))
       )
       SELECT * FROM ranked WHERE ${SEARCH_AFTER_SQL}
       ORDER BY search_rank DESC,search_sort_at DESC,id
@@ -653,9 +742,9 @@ export async function loadPmsSearch(
        AND search.entity_kind='ROOM'
        AND search.entity_id=rm.id
       JOIN room_types rt ON rt.id=rm.room_type_id AND rt.property_id=rm.property_id
-      LEFT JOIN LATERAL (${SEARCH_TERM_RANK_SQL}) term_rank ON true
+      JOIN (${searchTermCandidates("ROOM")}) term_rank
+        ON term_rank.entity_id=search.entity_id
       WHERE rm.property_id=pms_current_property_id() AND ? AND rm.active
-        AND ${SEARCH_MATCH_SQL}
       )
       SELECT * FROM ranked WHERE ${SEARCH_AFTER_SQL}
       ORDER BY search_rank DESC,search_sort_at DESC,id
@@ -687,9 +776,9 @@ export async function loadPmsSearch(
           FROM ar_ledger_entries l
          WHERE l.invoice_id=i.id AND l.property_id=i.property_id
       ) ledger ON true
-      LEFT JOIN LATERAL (${SEARCH_TERM_RANK_SQL}) term_rank ON true
+      JOIN (${searchTermCandidates("AR")}) term_rank
+        ON term_rank.entity_id=search.entity_id
       WHERE i.property_id=pms_current_property_id() AND ?
-        AND ${SEARCH_MATCH_SQL}
       )
       SELECT * FROM ranked WHERE ${SEARCH_AFTER_SQL}
       ORDER BY search_rank DESC,search_sort_at DESC,id
@@ -745,6 +834,15 @@ export async function loadPmsSearch(
       id: "reservations",
       label: "예약·고객",
       items: reservationItems,
+      score:
+        Number(reservationRows[0]?.search_rank || 0) +
+        (reservationRows.some(
+          (row) =>
+            normalizeSearchCompact(String(row.confirmation_no || "")) ===
+            compactQuery,
+        )
+          ? 5_000
+          : 0),
       nextCursor: reservationResult
         ? nextSearchCursor(
             reservationResult.rows,
@@ -752,6 +850,7 @@ export async function loadPmsSearch(
             "reservations",
             anchor,
             queryFingerprint,
+            propertyFingerprint,
           )
         : undefined,
     },
@@ -759,6 +858,14 @@ export async function loadPmsSearch(
       id: "rooms",
       label: "객실",
       items: roomItems,
+      score:
+        Number(roomRows[0]?.search_rank || 0) +
+        (roomRows.some(
+          (row) =>
+            normalizeSearchCompact(String(row.number || "")) === compactQuery,
+        )
+          ? 5_000
+          : 0),
       nextCursor: roomResult
         ? nextSearchCursor(
             roomResult.rows,
@@ -766,6 +873,7 @@ export async function loadPmsSearch(
             "rooms",
             anchor,
             queryFingerprint,
+            propertyFingerprint,
           )
         : undefined,
     },
@@ -773,6 +881,15 @@ export async function loadPmsSearch(
       id: "finance",
       label: "정산·미수금",
       items: financeItems,
+      score:
+        Number(financeRows[0]?.search_rank || 0) +
+        (financeRows.some(
+          (row) =>
+            normalizeSearchCompact(String(row.invoice_no || "")) ===
+            compactQuery,
+        )
+          ? 5_000
+          : 0),
       nextCursor: financeResult
         ? nextSearchCursor(
             financeResult.rows,
@@ -780,12 +897,18 @@ export async function loadPmsSearch(
             "finance",
             anchor,
             queryFingerprint,
+            propertyFingerprint,
           )
         : undefined,
     },
   ].filter(
     (group) => group.items.length > 0 || requestedKind === group.id,
-  );
+  ).sort((left,right)=>right.score-left.score).map((group)=>({
+    id:group.id,
+    label:group.label,
+    items:group.items,
+    nextCursor:group.nextCursor,
+  }));
   const total=groups.reduce((sum, group) => sum + group.items.length, 0);
   if (total === 0 && allowKeyboardCorrection && !requestedKind && !cursor) {
     for (const alternate of keyboardSearchAlternates(q)) {

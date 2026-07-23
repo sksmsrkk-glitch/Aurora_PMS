@@ -14,7 +14,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607220029_quality_integrity_closure` |
+| 스키마 계약 | `202607230035_search_term_candidate_performance` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
@@ -34,7 +34,7 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 - 호텔·홈페이지 회원 코드·ID·연락처·회사·등급·관리유형·활성 관리, scrypt 비밀번호 해시와 지원 PII 마스킹
 - 폴리오 창·라우팅·분할·반대전표·수납·환불·AR 이관·후불 수납
 - 그룹 블록·rooming list·pickup·cutoff, 채널 연결·계약·ARI·inbound·outbox
-- 복식부기 journal, 채널 수수료/입금가 정산, P/L, 15종 리포트와 CSV/XLSX; 리드타임·4개 시간대 예약곡선·월별 BOOK/REV YoY·후불 정산·입금/복구 원장
+- 복식부기 journal, 채널 수수료/입금가 정산, P/L, 16종 리포트와 CSV/XLSX; 리드타임·4개 시간대 예약곡선·월별 BOOK/REV YoY·후불 정산·입금/복구 원장·검색 품질 경보
 - PMS 비주얼 에디터 기반 히어로·메뉴·호텔 소개·이미지·객실 소개·공개 여부와 직접 예약 엔진
 - 호텔별 canonical/Open Graph, Hotel JSON-LD, sitemap, robots
 - 호텔별 다중 직원 ID, 14개 페이지별 없음/조회/입력 권한, 별도 개인정보 export 권한과 계정 생명주기
@@ -49,16 +49,16 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 단계 | 구현 결과 | 완료 판정 |
 | --- | --- | --- |
 | 1. 업무 정보구조 | 직원 역할별로 `오늘 운영`, `판매·매출`, `정산·회계`, `호텔 설정` 메뉴를 재정렬하고 허용된 페이지만 표시 | 역할 템플릿의 14개 페이지 권한과 실제 메뉴가 행동 테스트에서 일치 |
-| 2. 검색·프런트 | 모든 화면에서 `Cmd/Ctrl+K` 통합 검색, 오타·초성·한/영 키보드 교정, 최근/빈번 엔터티, 도메인별 keyset 이어보기, 오늘 업무 큐, 서버 필터·정렬·20건 페이지네이션, 저장 보기와 7/14/30일 물리 객실 배정 보드를 제공 | 검색 문서·토큰은 tenant RLS와 trigger로 원본과 동기화되고 검색 도메인이 페이지 권한을 넘지 않으며, 17건 keyset 행동 테스트는 중복·누락 0건, 10,000실 로컬 benchmark는 broad search p95 214.39ms; 보드는 최대 31일 한 batch·내부 스크롤·sticky 축으로 제한되며 병렬 마지막 객실 배정은 1건만 성공 |
+| 2. 검색·프런트 | 모든 화면에서 `Cmd/Ctrl+K` 통합 검색, 로마자·오타·초성·한/영 키보드 교정, 최근/빈번 엔터티, 도메인별 서명 keyset 이어보기, 오늘 업무 큐, 서버 필터·정렬·20건 페이지네이션, 저장 보기와 7/14/30일 물리 객실 배정 보드를 제공 | 검색 문서·토큰은 tenant RLS와 trigger로 원본과 동기화되고 검색 도메인이 페이지 권한을 넘지 않으며, 17건 keyset 행동 테스트는 중복·누락 0건, 100,000실·8동시 benchmark는 exact/typo/broad 순차 p95 76.59/965.03/1,242.37ms와 동시 p95 2,135.61ms; 보드는 최대 31일 한 batch·내부 스크롤·sticky 축으로 제한되며 병렬 마지막 객실 배정은 1건만 성공 |
 | 3. 예약 생성 | HotelStory형 목록/달력 전환 → 상품·일정·인원 → 실시간 가용 객실·요금 → 고객·배정 → 최종 검토; 목록의 객실종류·조식·기준/최대인원·총액 비교와 월 달력의 상품별 가격·잔여/전체 객실 | 목록·달력이 하나의 고정 배치 projection을 공유하고, DB가 정원·30박·재고·MLOS·CTA·CTD·판매/숙박기간·인원요금을 재검증한 뒤 매일의 상품 snapshot과 예약을 원자 확정 |
 | 3-1. 예약 상세 | 좌측 예약/상품/일자요금/취소규정, 우측 예약자와 실제 투숙자/요청/응답/메모/확인/시간/Card Info, 하단 연동·수정·요금·블럭 로그 | 예약자≠투숙자 저장, 기대 버전 경쟁 차단, PCI 원문 거부, 취소정책 snapshot 불변, 감사·Outbox·멱등 영수증 원자 반영 |
 | 4. 요금·재고 | 호텔 전체 재고 캘린더의 730일 선택·14/30일 창과 별도로, 채널 블럭요금은 객실×상품×채널×최대 31일 sticky 매트릭스로 제공 | 5,000셀 상한, 실제 객실 초과 할당 trigger, 활성 채널 gate, 같은 transaction의 ARI·Outbox·멱등 영수증으로 검증 |
-| 5. 리포트 | 15종 업무 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 채널 미입금/현장결제 제외, 입금·복구, 25/50/100행, export 확인 | 리드타임과 4개 예약 시간대가 property timezone 원자료와 일치하고, 입금·복구는 불변 사건·반대전표·멱등·경쟁 차단을 거치며 CSV/XLSX도 같은 서버 집계를 사용 |
+| 5. 리포트 | 16종 업무 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 채널 미입금/현장결제 제외, 검색 품질 경보, 입금·복구, 25/50/100행, export 확인 | 리드타임과 4개 예약 시간대가 property timezone 원자료와 일치하고, 검색 품질은 원문·사용자 없이 최소 표본/지연/무결과를 판정하며, 입금·복구는 불변 사건·반대전표·멱등·경쟁 차단을 거치고 CSV/XLSX도 같은 서버 집계를 사용 |
 | 6. 모바일·가독성·성능 | 역할별 4개 핵심 하단 내비게이션, 카드형 예약 큐, 전체폭 하단 시트, 12/14px·44px 하한, reduced motion | 390px에서 수평 root overflow 없이 핵심 업무와 팝업을 조작하고 core는 오늘 업무 예약만 전달 |
 
 운영 배포 화면의 최종 검증도 이 계약에 포함한다. 통합 검색은 예약·객실뿐 아니라 AR 잔액을 원장 합계로 조회하며, NFKC·정확/접두/부분/유사도·최근성 랭킹, 한국어 성명 순서·초성·숫자형 전화번호·한/영 키보드 오입력·SQL 와일드카드 리터럴을 공통 처리한다. 객실/AR `focus` 딥링크는 실제 카드 포커스로 연결하고, 도메인별 query-bound cursor는 원문 검색어를 노출하지 않으면서 결과를 중복 없이 이어 읽는다. 최근/빈번 엔터티는 4시간 browser session·호텔·로그인 사용자별로만 보존하고 로그아웃 때 제거하며, 서버 품질 지표는 검색어·hash·사용자·entity 없이 길이/문자군/결과/지연 bucket만 일 단위 집계한다. 프런트·리포트 조건은 URL에 보존되고, 체크인·연회·회원 즉시검색은 debounce와 이전 요청 취소를 사용한다. 장애 시에는 무반응 대신 오류 안내를 표시한다. 모든 로컬 목록 검색도 `lib/pms-search.ts`의 도메인 검색 문서와 `lib/search.ts`의 단일 엔진을 사용해 전각문자, 구두점·공백, 한국어 이름 역순과 초성 검색을 동일하게 처리한다. 대시보드의 `오늘 도착`은 전체 도착 건수와 처리 완료·도착 대기를 함께 표시해 도착 플로우의 미처리 건수와 의미가 섞이지 않도록 한다.
 
-핵심 구현은 `app/pms-navigation.ts`, `app/global-pms-search.tsx`, `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx`, `app/inventory-window.ts`, `lib/search.ts`, `lib/pms-search.ts`, `lib/korean-keyboard.ts`, `lib/search-cursor.ts`, `lib/search-history.ts`에 분리했습니다. `tests/operations-workbench.test.mjs`가 역할 메뉴, 프런트 입력 경계, 장기 캘린더의 bounded read를 검증하고 `tests/pms-search-engine.test.mjs`가 9개 로컬 검색 도메인의 실제 필터 함수를, `tests/search-behavior.test.mjs`와 PostgreSQL integration이 교정·cursor·RLS·trigger·비식별 telemetry를 행동으로 검증합니다.
+핵심 구현은 `app/pms-navigation.ts`, `app/global-pms-search.tsx`, `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx`, `app/inventory-window.ts`, `lib/search.ts`, `lib/pms-search.ts`, `lib/korean-keyboard.ts`, `lib/search-cursor.ts`, `lib/search-history.ts`에 분리했습니다. `tests/operations-workbench.test.mjs`가 역할 메뉴, 프런트 입력 경계, 장기 캘린더의 bounded read를 검증하고 `tests/pms-search-engine.test.mjs`가 9개 로컬 검색 도메인의 실제 필터 함수를, `tests/search-behavior.test.mjs`와 PostgreSQL integration이 교정·cursor·RLS·trigger·비식별 telemetry를 행동으로 검증합니다. 발견 결함·수정·재발 방지와 100,000실 결과는 [검색 무결성 검증 기록](docs/search-integrity.md)에 유지합니다.
 
 `완료`는 저장소와 자동 QA 범위를 뜻합니다. 실제 영업 전에는 결제대행, 법정 회계, 개인정보 보유 정책, OTA 인증, 백업 복구 목표를 호텔별로 확정해야 합니다.
 
@@ -81,6 +81,7 @@ DIRECT_URL=postgresql://...
 SUPABASE_URL=https://PROJECT.supabase.co
 SUPABASE_SECRET_KEY=...
 PMS_SESSION_SECRET=32자_이상_무작위_값
+SEARCH_CURSOR_SECRET=32자_이상_무작위_값
 PMS_RATE_LIMIT_SECRET=32자_이상_무작위_값
 AURORA_PUBLIC_PROPERTY_ID=prop-seoul
 AURORA_PUBLIC_SITE_URL=https://your-production-domain.example
@@ -229,6 +230,9 @@ flowchart LR
 | 카드 참조 PCI·채널 요금제·임포트 권한 무결성 | `202607220027_import_pci_rate_override_integrity.sql` |
 | 채널 반제 금액·다단계 요금·예약 snapshot 불변성 | `202607220028_finance_rate_snapshot_integrity.sql` |
 | 요금 부모 체인 종료·과거 수리 provenance 감사 | `202607220029_quality_integrity_closure.sql` |
+| tenant 검색 문서·비식별 품질·keyset·인덱스 | `202607230030` ~ `202607230033` |
+| 한국어 이름 로마자 별칭·전체 재색인 | `202607230034_korean_romanized_search_aliases.sql` |
+| token-first 후보·exact BTREE 검색 성능 | `202607230035_search_term_candidate_performance.sql` |
 
 배포 순서:
 
@@ -259,7 +263,7 @@ npm run release:build
 - `?view=banquet&month=YYYY-MM`: 월간 연회 예약과 연회장 master; 검색·장소·상태 필터
 - `?view=hotel_members`: 호텔·웹 회원 500건 이하 서버 검색; 이름·전화·ID·회사·코드·가입일·활성·등급·관리유형 필터
 - `?view=inventory|accounting|website`: 기간 또는 도메인 전용 projection
-- `?view=report&report=...`: 최대 367일·25/50/100행의 15종 서버 리포트. 공통 `q/from/to/status/source/roomTypeId`와 채널 입금의 `scope=EXCLUDE_ONSITE`를 지원하고 lead time·예약곡선·YoY·후불·입금 집계를 반환합니다.
+- `?view=report&report=...`: 최대 367일·25/50/100행의 16종 서버 리포트. 공통 `q/from/to/status/source/roomTypeId`와 채널 입금의 `scope=EXCLUDE_ONSITE`를 지원하고 lead time·예약곡선·YoY·후불·입금·비식별 검색 품질 집계를 반환합니다.
 - 기본 view: 그룹, 재무, 채널을 포함한 전체 read model
 - 응답은 `private, no-store`, gzip representation cache를 사용합니다.
 
@@ -333,14 +337,14 @@ CSS는 cascade 순서를 보존한 다음 모듈로 나뉩니다.
 - 날짜는 `YYYY-MM-DD` business date, 시각은 timezone 의미에 맞는 native PostgreSQL type을 사용합니다.
 - 사용자 코드와 무관한 포맷 변경을 한 커밋에 섞지 않습니다.
 
-CI는 PR과 main push에서 lint → build → unit → migration bootstrap → PostgreSQL integration → runtime contract 순으로 실패를 차단합니다.
+CI는 PR과 main push에서 dependency audit → lint → build → unit → migration bootstrap/upgrade → runtime contract/smoke → PostgreSQL integration → 2,000실 검색 → 인증 desktop/mobile UI 순으로 실패를 차단합니다. 별도 주간 workflow가 100,000실·8동시 검색 용량을 검증합니다.
 
 ## 장애 대응 Runbook
 
 ### 배포가 schema contract에서 중단됨
 
 1. 앱을 우회 배포하지 않습니다.
-2. 대상 DB의 `pms_schema_migrations`에서 `202607200019_worker_enqueue_revival_guards`를 확인합니다.
+2. 대상 DB의 `pms_schema_migrations`에서 `202607230035_search_term_candidate_performance`를 확인합니다.
 3. `aurora_app`가 `NOLOGIN`, `NOBYPASSRLS`인지와 연결 사용자의 membership을 확인합니다.
 4. migration을 적용하고 `npm run db:contract:verify`를 재실행합니다.
 

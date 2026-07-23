@@ -48,6 +48,8 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Dependency vulnerability gate
+        run: npm run security:audit
       - name: Lint
         run: npm run lint
       - name: Production build
@@ -74,3 +76,17 @@ jobs:
         run: npm run db:supabase:smoke
       - name: PostgreSQL integration and concurrency tests
         run: npm run test:integration
+      - name: Search capacity smoke test
+        env:
+          SEARCH_BENCHMARK_ROWS: "2000"
+          SEARCH_BENCHMARK_SAMPLES: "5"
+          SEARCH_BENCHMARK_CONCURRENCY: "4"
+          SEARCH_BENCHMARK_SEQUENTIAL_P95_MS: "1500"
+          SEARCH_BENCHMARK_CONCURRENT_P95_MS: "5000"
+        run: npm run benchmark:search:ci
+      - name: Install Chromium for authenticated UI QA
+        run: npx playwright install --with-deps chromium
+      - name: Authenticated desktop and mobile search UI QA
+        env:
+          SEARCH_E2E_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/aurora_ci
+        run: npm run qa:search-ui
