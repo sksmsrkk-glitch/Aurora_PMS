@@ -288,6 +288,8 @@ PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONF
 | 격리 홈페이지 CMS E2E | homepage 200, 게시 객실 3, 검색 offer 3, 잘못된 날짜 400, 설정 version 증가, WEB OFF 제외·복원, media lifecycle 통과 |
 | 반응형 브라우저 QA | 1440px desktop·390px mobile, 가로 scroll 0, 홈페이지 검색 날짜 자동 보정, 공개 객실 3개, CMS 3개 탭·visual editor 3개 control group·hero picker·메뉴 3행·preview device 전환, 재고 WEB 노출 selector, 콘솔 오류 0 |
 | PMS 헤드리스 UI 전수 QA | 13개 업무 화면 가로 overflow 0, 10개 업무 검색 영역 필터·초기화 정상, 17개 dialog/drawer 포커스·Escape·action bar 정상, 객실 타입 modal 860px→416px, 모바일 modal 최대 92dvh |
+| 검색엔진 PostgreSQL 행동 QA | trigram 오타·정확/접두/최근성 랭킹, 한/영 교정, trigger 동기화, FORCE RLS, 비식별 품질 집계, 17건/5행 keyset 완주 중복·누락 0, 복합 GIN catalog/operator 계약 |
+| 검색 대용량 benchmark | `TEST_DATABASE_URL` loopback 강제, 10,000실 trigger seed, exact/오타/broad 각 20회, p95 174.95/185.67/214.39ms, 종료 잔재 0 |
 | 리포트 브라우저 QA | 11/11 서버 리포트 오류 0, 키워드 0건·초기화 복원, CSV `Talos_room_inventory_2026-07-16.csv`, XLSX `Talos_객실_마스터_2026-07-16.xlsx` 실제 다운로드 |
 | Core benchmark | Vercel `icn1`, 200 requests, concurrency 10, 실패 0, 252.04 req/s, p50 36.13ms, p95 53.20ms, p99 96.01ms |
 | Security | health 200, CSP/HSTS/DENY/nosniff, cross-origin write 403, production dependency vulnerability 0 |

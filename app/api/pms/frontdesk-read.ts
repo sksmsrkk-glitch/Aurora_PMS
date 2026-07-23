@@ -4,7 +4,20 @@ import type { PmsDatabase } from "../../../db/pms-database";
 import type { Principal } from "./auth";
 import { canViewWorkspace } from "../../access-control";
 import { addIsoDays } from "../../../lib/format";
+import { keyboardSearchAlternates } from "../../../lib/korean-keyboard";
 import {
+  decodeSearchCursor,
+  encodeSearchCursor,
+  SEARCH_CURSOR_KINDS,
+  searchQueryFingerprint,
+  type SearchCursor,
+  type SearchCursorKind,
+} from "../../../lib/search-cursor";
+import {
+  escapeSqlLike,
+  koreanInitialSearchText,
+  normalizeSearchCompact,
+  normalizeSearchText,
   phoneDigits,
   sqlCompactPattern,
   sqlLikePattern,
@@ -401,51 +414,313 @@ function contactHint(row: Record<string, unknown>, principal: Principal) {
   return "";
 }
 
+const SEARCH_INPUT_SQL = `SELECT
+  ?::text query_text,
+  ?::text compact_query,
+  ?::text initial_query,
+  ?::text contains_pattern,
+  ?::text compact_pattern,
+  ?::text initial_pattern,
+  ?::text prefix_pattern,
+  ?::timestamptz anchor_at,
+  ?::text phone_digits,
+  ?::text phone_pattern`;
+
+const SEARCH_TERM_RANK_SQL = `SELECT
+  COALESCE(MAX(extensions.similarity(term.term,input.query_text)),0) fuzzy_score,
+  COALESCE(BOOL_OR(term.term=input.query_text),false) exact_term,
+  COALESCE(BOOL_OR(term.term LIKE input.prefix_pattern ESCAPE '\\'),false) prefix_term
+FROM pms_search_terms term
+WHERE term.property_id=search.property_id
+  AND term.entity_kind=search.entity_kind
+  AND term.entity_id=search.entity_id`;
+
+const SEARCH_MATCH_SQL = `(search.search_text LIKE input.contains_pattern ESCAPE '\\'
+  OR search.compact_text LIKE input.compact_pattern ESCAPE '\\'
+  OR search.initial_text LIKE input.initial_pattern ESCAPE '\\'
+  OR search.search_text OPERATOR(extensions.%) input.query_text
+  OR search.compact_text OPERATOR(extensions.%) input.compact_query
+  OR EXISTS(
+    SELECT 1
+      FROM pms_search_terms matched_term
+     WHERE matched_term.property_id=search.property_id
+       AND matched_term.entity_kind=search.entity_kind
+       AND matched_term.entity_id=search.entity_id
+       AND matched_term.term OPERATOR(extensions.%) input.query_text
+  ))`;
+
+const SEARCH_RANK_SQL = `(CASE
+  WHEN term_rank.exact_term
+    OR search.search_text=input.query_text
+    OR search.compact_text=input.compact_query THEN 1000
+  WHEN term_rank.prefix_term
+    OR search.search_text LIKE input.prefix_pattern ESCAPE '\\'
+    OR search.compact_text LIKE input.compact_query||'%' THEN 800
+  WHEN search.search_text LIKE input.contains_pattern ESCAPE '\\'
+    OR search.compact_text LIKE input.compact_pattern ESCAPE '\\' THEN 600
+  WHEN search.initial_text LIKE input.initial_pattern ESCAPE '\\' THEN 560
+  ELSE 300 + 200*GREATEST(
+    term_rank.fuzzy_score,
+    extensions.similarity(search.search_text,input.query_text),
+    extensions.similarity(search.compact_text,input.compact_query)
+  )
+END + CASE
+  WHEN search.sort_at>=input.anchor_at-interval '1 day' THEN 40
+  WHEN search.sort_at>=input.anchor_at-interval '7 days' THEN 25
+  WHEN search.sort_at>=input.anchor_at-interval '30 days' THEN 10
+  ELSE 0
+END)`;
+
+type PmsSearchItem = {
+  id: string;
+  kind: "RESERVATION" | "ROOM" | "AR";
+  title: string;
+  subtitle: string;
+  meta: string;
+  path: string;
+};
+
+type PmsSearchResponse = {
+  q: string;
+  groups: Array<{
+    id: string;
+    label: string;
+    items: PmsSearchItem[];
+    nextCursor?: string;
+  }>;
+  total: number;
+  anchor?: string;
+  interpretedQuery?: string;
+  correctionApplied: boolean;
+  truncated?: boolean;
+};
+
+const SEARCH_AFTER_SQL = `(?::double precision IS NULL
+  OR search_rank < ?::double precision
+  OR (search_rank = ?::double precision AND search_sort_at < ?::timestamptz)
+  OR (search_rank = ?::double precision AND search_sort_at = ?::timestamptz AND id > ?::text))`;
+
+function searchAfterBinds(cursor: SearchCursor | null) {
+  return cursor
+    ? [
+        cursor.rank,
+        cursor.rank,
+        cursor.rank,
+        cursor.sortAt,
+        cursor.rank,
+        cursor.sortAt,
+        cursor.id,
+      ]
+    : [null, null, null, null, null, null, null];
+}
+
+function searchSortTimestamp(value: unknown) {
+  const timestamp = value instanceof Date ? value : new Date(String(value));
+  if (!Number.isFinite(timestamp.valueOf()))
+    throw new PmsReadError("검색 커서 정렬 시각이 올바르지 않습니다.", 500);
+  return timestamp.toISOString();
+}
+
+function nextSearchCursor(
+  rows: Array<Record<string, unknown>>,
+  limit: number,
+  kind: SearchCursorKind,
+  anchor: string,
+  queryFingerprint: string,
+) {
+  if (rows.length <= limit) return undefined;
+  const last = rows[limit - 1];
+  return encodeSearchCursor({
+    v: 1,
+    kind,
+    anchor,
+    rank: Number(last.search_rank),
+    sortAt: searchSortTimestamp(last.search_sort_at),
+    id: String(last.id),
+    queryFingerprint,
+  });
+}
+
 /** Cross-domain search returns navigation targets, never mutable domain objects. */
 export async function loadPmsSearch(
   db: PmsDatabase,
   params: URLSearchParams,
   principal: Principal,
-) {
+  allowKeyboardCorrection = true,
+): Promise<PmsSearchResponse> {
   const q = (params.get("q") || "").trim().slice(0, 120);
-  if (q.length < 2) return { q, groups: [], total: 0 };
+  if (q.length < 2)
+    return { q, groups: [], total: 0, correctionApplied: false };
   const pattern = sqlLikePattern(q);
   const compactPattern = sqlCompactPattern(q);
+  const normalizedQuery = normalizeSearchText(q);
+  const queryFingerprint = searchQueryFingerprint(normalizedQuery);
+  const compactQuery = normalizeSearchCompact(q);
+  const initialQuery = normalizeSearchCompact(koreanInitialSearchText(q));
+  const initialPattern = sqlCompactPattern(initialQuery);
+  const prefixPattern = `${escapeSqlLike(normalizedQuery)}%`;
+  const kindParam = params.get("kind");
+  const requestedKind = kindParam
+    ? SEARCH_CURSOR_KINDS.find((kind) => kind === kindParam)
+    : undefined;
+  if (kindParam && !requestedKind)
+    throw new PmsReadError("지원하지 않는 검색 결과 유형입니다.");
+  const encodedCursor = params.get("cursor");
+  if (encodedCursor && !requestedKind)
+    throw new PmsReadError("검색 커서에는 결과 유형이 필요합니다.");
+  const cursor =
+    encodedCursor && requestedKind
+      ? decodeSearchCursor(encodedCursor, requestedKind, queryFingerprint)
+      : null;
+  if (encodedCursor && !cursor)
+    throw new PmsReadError("만료되었거나 올바르지 않은 검색 커서입니다.");
+  const anchor = cursor?.anchor ?? new Date().toISOString();
+  const requestedLimit = Math.max(
+    1,
+    Math.min(20, Number(params.get("limit")) || 8),
+  );
   const digits = phoneDigits(q);
   const digitPattern = sqlPhonePattern(q);
+  const inputBinds = [
+    normalizedQuery,
+    compactQuery,
+    initialQuery,
+    pattern,
+    compactPattern,
+    initialPattern,
+    prefixPattern,
+    anchor,
+    digits,
+    digitPattern,
+  ];
   // Domain-level read flags are bound into every query so opening the global
   // search never broadens a narrow staff member's workspace permissions.
   const maySearchReservations = canViewWorkspace(principal.workspaceAccess, "frontdesk");
   const maySearchRooms = canViewWorkspace(principal.workspaceAccess, "rooms");
   const maySearchFinance = canViewWorkspace(principal.workspaceAccess, "finance");
-  const [reservations, rooms, finance] = await db.batch([
-    db.prepare(`SELECT r.id,r.confirmation_no,r.status,r.arrival_date,r.departure_date,r.source,
+  const requests: Array<{
+    kind: SearchCursorKind;
+    limit: number;
+    statement: ReturnType<PmsDatabase["prepare"]>;
+  }> = [];
+  if (!requestedKind || requestedKind === "reservations") {
+    const limit = requestedKind ? requestedLimit : 8;
+    requests.push({
+      kind: "reservations",
+      limit,
+      statement: db.prepare(`WITH input AS (${SEARCH_INPUT_SQL}), ranked AS (
+      SELECT r.id,r.confirmation_no,r.status,r.arrival_date,r.departure_date,r.source,
       g.first_name,g.last_name,g.email,g.phone,rm.number room_number,
-      rt.name room_type_name,er.external_reservation_id
-      FROM reservations r
+      rt.name room_type_name,er.external_reservation_id,
+      ${SEARCH_RANK_SQL} search_rank,search.sort_at search_sort_at
+      FROM input
+      JOIN reservations r ON true
+      JOIN pms_search_documents search
+        ON search.property_id=r.property_id
+       AND search.entity_kind='RESERVATION'
+       AND search.entity_id=r.id
       JOIN guests g ON g.id=r.guest_id AND g.property_id=r.property_id
       JOIN room_types rt ON rt.id=r.room_type_id AND rt.property_id=r.property_id
       LEFT JOIN rooms rm ON rm.id=r.room_id AND rm.property_id=r.property_id
       LEFT JOIN (SELECT reservation_id,MIN(external_reservation_id) external_reservation_id FROM channel_reservation_links WHERE property_id=pms_current_property_id() GROUP BY reservation_id) er ON er.reservation_id=r.id
+      LEFT JOIN LATERAL (${SEARCH_TERM_RANK_SQL}) term_rank ON true
       WHERE r.property_id=pms_current_property_id() AND ?
-        AND (LOWER(CONCAT_WS(' ',r.confirmation_no,g.first_name,g.last_name,COALESCE(g.phone,''),COALESCE(g.email,''),COALESCE(rm.number,''),COALESCE(er.external_reservation_id,''))) LIKE ? ESCAPE '\\'
-          OR LOWER(COALESCE(g.last_name,'')||COALESCE(g.first_name,'')) LIKE ? ESCAPE '\\'
-          OR (?<>'' AND REGEXP_REPLACE(COALESCE(g.phone,''),'\\D','','g') LIKE ? ESCAPE '\\'))
-      ORDER BY r.updated_at DESC LIMIT 8`).bind(maySearchReservations, pattern, compactPattern, digits, digitPattern),
-    db.prepare(`SELECT rm.id,rm.number,rm.front_desk_status,rm.housekeeping_status,rt.code,rt.name
-      FROM rooms rm JOIN room_types rt ON rt.id=rm.room_type_id AND rt.property_id=rm.property_id
+        AND (${SEARCH_MATCH_SQL}
+          OR (input.phone_digits<>'' AND REGEXP_REPLACE(COALESCE(g.phone,''),'\\D','','g') LIKE input.phone_pattern ESCAPE '\\'))
+      )
+      SELECT * FROM ranked WHERE ${SEARCH_AFTER_SQL}
+      ORDER BY search_rank DESC,search_sort_at DESC,id
+      LIMIT ?`).bind(
+        ...inputBinds,
+        maySearchReservations,
+        ...searchAfterBinds(cursor),
+        limit + 1,
+      ),
+    });
+  }
+  if (!requestedKind || requestedKind === "rooms") {
+    const limit = requestedKind ? requestedLimit : 6;
+    requests.push({
+      kind: "rooms",
+      limit,
+      statement: db.prepare(`WITH input AS (${SEARCH_INPUT_SQL}), ranked AS (
+      SELECT rm.id,rm.number,rm.front_desk_status,rm.housekeeping_status,rt.code,rt.name,
+        ${SEARCH_RANK_SQL} search_rank,search.sort_at search_sort_at
+      FROM input
+      JOIN rooms rm ON true
+      JOIN pms_search_documents search
+        ON search.property_id=rm.property_id
+       AND search.entity_kind='ROOM'
+       AND search.entity_id=rm.id
+      JOIN room_types rt ON rt.id=rm.room_type_id AND rt.property_id=rm.property_id
+      LEFT JOIN LATERAL (${SEARCH_TERM_RANK_SQL}) term_rank ON true
       WHERE rm.property_id=pms_current_property_id() AND ? AND rm.active
-        AND LOWER(CONCAT_WS(' ',rm.number,rt.code,rt.name,rm.floor)) LIKE ? ESCAPE '\\'
-      ORDER BY rm.number LIMIT 6`).bind(maySearchRooms, pattern),
-    db.prepare(`SELECT i.id,i.invoice_no,i.status,
-        COALESCE(SUM(l.debit-l.credit),0) balance,a.name account_name
-      FROM ar_invoices i JOIN ar_accounts a ON a.id=i.ar_account_id AND a.property_id=i.property_id
-      LEFT JOIN ar_ledger_entries l ON l.invoice_id=i.id AND l.property_id=i.property_id
+        AND ${SEARCH_MATCH_SQL}
+      )
+      SELECT * FROM ranked WHERE ${SEARCH_AFTER_SQL}
+      ORDER BY search_rank DESC,search_sort_at DESC,id
+      LIMIT ?`).bind(
+        ...inputBinds,
+        maySearchRooms,
+        ...searchAfterBinds(cursor),
+        limit + 1,
+      ),
+    });
+  }
+  if (!requestedKind || requestedKind === "finance") {
+    const limit = requestedKind ? requestedLimit : 6;
+    requests.push({
+      kind: "finance",
+      limit,
+      statement: db.prepare(`WITH input AS (${SEARCH_INPUT_SQL}), ranked AS (
+      SELECT i.id,i.invoice_no,i.status,ledger.balance,a.name account_name,
+        ${SEARCH_RANK_SQL} search_rank,search.sort_at search_sort_at
+      FROM input
+      JOIN ar_invoices i ON true
+      JOIN pms_search_documents search
+        ON search.property_id=i.property_id
+       AND search.entity_kind='AR'
+       AND search.entity_id=i.id
+      JOIN ar_accounts a ON a.id=i.ar_account_id AND a.property_id=i.property_id
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(l.debit-l.credit),0) balance
+          FROM ar_ledger_entries l
+         WHERE l.invoice_id=i.id AND l.property_id=i.property_id
+      ) ledger ON true
+      LEFT JOIN LATERAL (${SEARCH_TERM_RANK_SQL}) term_rank ON true
       WHERE i.property_id=pms_current_property_id() AND ?
-        AND LOWER(CONCAT_WS(' ',i.invoice_no,a.account_no,a.name)) LIKE ? ESCAPE '\\'
-      GROUP BY i.id,a.id ORDER BY i.issued_date DESC LIMIT 6`).bind(maySearchFinance, pattern),
-  ]);
-  const reservationItems = reservations.results.map((row) => ({
+        AND ${SEARCH_MATCH_SQL}
+      )
+      SELECT * FROM ranked WHERE ${SEARCH_AFTER_SQL}
+      ORDER BY search_rank DESC,search_sort_at DESC,id
+      LIMIT ?`).bind(
+        ...inputBinds,
+        maySearchFinance,
+        ...searchAfterBinds(cursor),
+        limit + 1,
+      ),
+    });
+  }
+  const queryResults = await db.batch(
+    requests.map((request) => request.statement),
+  );
+  const results = new Map(
+    requests.map((request, index) => [
+      request.kind,
+      {
+        rows: queryResults[index].results,
+        limit: request.limit,
+      },
+    ]),
+  );
+  const reservationResult = results.get("reservations");
+  const roomResult = results.get("rooms");
+  const financeResult = results.get("finance");
+  const reservationRows =
+    reservationResult?.rows.slice(0, reservationResult.limit) ?? [];
+  const roomRows = roomResult?.rows.slice(0, roomResult.limit) ?? [];
+  const financeRows = financeResult?.rows.slice(0, financeResult.limit) ?? [];
+  const reservationItems: PmsSearchItem[] = reservationRows.map((row) => ({
     id: String(row.id),
     kind: "RESERVATION",
     title: principal.piiMode === "MASKED"
@@ -455,23 +730,91 @@ export async function loadPmsSearch(
     meta: [row.room_number || "미배정", row.source, contactHint(row, principal)].filter(Boolean).join(" · "),
     path: `/frontdesk?focus=${encodeURIComponent(String(row.id))}`,
   }));
-  const roomItems = rooms.results.map((row) => ({
+  const roomItems: PmsSearchItem[] = roomRows.map((row) => ({
     id: String(row.id), kind: "ROOM", title: `${row.number}호 · ${row.name}`,
     subtitle: `${row.code} · ${row.front_desk_status}`, meta: String(row.housekeeping_status),
     path: `/rooms?focus=${encodeURIComponent(String(row.id))}`,
   }));
-  const financeItems = finance.results.map((row) => ({
+  const financeItems: PmsSearchItem[] = financeRows.map((row) => ({
     id: String(row.id), kind: "AR", title: String(row.invoice_no),
     subtitle: String(row.account_name), meta: `${row.status} · ${Number(row.balance).toLocaleString("ko-KR")}원`,
     path: `/finance?focus=${encodeURIComponent(String(row.id))}`,
   }));
   const groups = [
-    { id: "reservations", label: "예약·고객", items: reservationItems },
-    { id: "rooms", label: "객실", items: roomItems },
-    { id: "finance", label: "정산·미수금", items: financeItems },
-  ].filter((group) => group.items.length > 0);
+    {
+      id: "reservations",
+      label: "예약·고객",
+      items: reservationItems,
+      nextCursor: reservationResult
+        ? nextSearchCursor(
+            reservationResult.rows,
+            reservationResult.limit,
+            "reservations",
+            anchor,
+            queryFingerprint,
+          )
+        : undefined,
+    },
+    {
+      id: "rooms",
+      label: "객실",
+      items: roomItems,
+      nextCursor: roomResult
+        ? nextSearchCursor(
+            roomResult.rows,
+            roomResult.limit,
+            "rooms",
+            anchor,
+            queryFingerprint,
+          )
+        : undefined,
+    },
+    {
+      id: "finance",
+      label: "정산·미수금",
+      items: financeItems,
+      nextCursor: financeResult
+        ? nextSearchCursor(
+            financeResult.rows,
+            financeResult.limit,
+            "finance",
+            anchor,
+            queryFingerprint,
+          )
+        : undefined,
+    },
+  ].filter(
+    (group) => group.items.length > 0 || requestedKind === group.id,
+  );
   const total=groups.reduce((sum, group) => sum + group.items.length, 0);
-  return { q, groups, total, truncated: reservationItems.length===8||roomItems.length===6||financeItems.length===6 };
+  if (total === 0 && allowKeyboardCorrection && !requestedKind && !cursor) {
+    for (const alternate of keyboardSearchAlternates(q)) {
+      const correctedParams = new URLSearchParams(params);
+      correctedParams.set("q", alternate);
+      const corrected = await loadPmsSearch(
+        db,
+        correctedParams,
+        principal,
+        false,
+      );
+      if (corrected.total > 0) {
+        return {
+          ...corrected,
+          q,
+          interpretedQuery: alternate,
+          correctionApplied: true,
+        };
+      }
+    }
+  }
+  return {
+    q,
+    groups,
+    total,
+    anchor,
+    correctionApplied: false,
+    truncated: groups.some((group) => Boolean(group.nextCursor)),
+  };
 }
 
 function stayDates(arrival: string, departure: string) {
