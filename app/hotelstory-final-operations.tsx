@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, type FormEvent } from "react";
 import { usePmsActions } from "./pms-action-context";
 import { formatMoney } from "../lib/format";
+import { occupancyRoomsForSearch } from "../lib/pms-search";
 import { useDebouncedValue } from "./use-debounced-value";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
@@ -173,6 +174,15 @@ export function StayOperationsCenter({
     staleTime: 20_000,
   });
   const data = query.data;
+  const occupancyRooms = useMemo(() => {
+    if (mode !== "occupancy" || !data) return [];
+    return occupancyRoomsForSearch(data.rooms, data.reservations, {
+      query: debouncedQ,
+      source,
+      ratePlan,
+      roomTypeId,
+    });
+  }, [data, debouncedQ, mode, ratePlan, roomTypeId, source]);
   async function transition(
     action: "check_in" | "check_out",
     reservationId: string,
@@ -371,6 +381,16 @@ export function StayOperationsCenter({
       )}
       {mode === "occupancy" && (
         <div className="hs-timeline-wrap">
+          {!query.isLoading && occupancyRooms.length === 0 && (
+            <div className="hs-empty" role="status">
+              <b>
+                {data?.reservations.length
+                  ? "조건과 일치한 예약은 아직 객실이 배정되지 않았습니다."
+                  : "조건과 일치하는 점유 예약이 없습니다."}
+              </b>
+              <span>검색어 또는 객실·채널·판매 상품 필터를 변경해 보세요.</span>
+            </div>
+          )}
           <div
             className="hs-timeline"
             style={{
@@ -388,7 +408,7 @@ export function StayOperationsCenter({
                 </small>
               </div>
             ))}
-            {data?.rooms.map((room) => (
+            {occupancyRooms.map((room) => (
               <div
                 className="timeline-row"
                 style={{ display: "contents" }}
@@ -400,8 +420,8 @@ export function StayOperationsCenter({
                     {room.room_type_code} · {room.housekeeping_status}
                   </small>
                 </div>
-                {data.dates.map((day) => {
-                  const reservation = (data.reservations || []).find(
+                {(data?.dates ?? []).map((day) => {
+                  const reservation = (data?.reservations ?? []).find(
                     (item) =>
                       item.room_id === room.id &&
                       item.arrival_date <= day &&
@@ -668,6 +688,12 @@ export function BanquetManager() {
           })}
         </div>
       </div>
+      {!query.isLoading && query.data?.reservations.length === 0 && (
+        <div className="hs-empty" role="status">
+          <b>조건과 일치하는 연회 예약이 없습니다.</b>
+          <span>행사명·담당자·전화 또는 조회 월을 변경해 보세요.</span>
+        </div>
+      )}
       {venueEditor && (
         <div className="modal-backdrop">
           <form className="hs-modal" onSubmit={submitVenue}>
@@ -1123,6 +1149,16 @@ export function HotelMemberManager() {
                 </td>
               </tr>
             ))}
+            {!query.isLoading && query.data?.members.length === 0 && (
+              <tr>
+                <td colSpan={6}>
+                  <div className="hs-empty" role="status">
+                    <b>조건과 일치하는 회원이 없습니다.</b>
+                    <span>이름·전화·ID·회사 또는 상태 필터를 변경해 보세요.</span>
+                  </div>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

@@ -4,6 +4,7 @@
 
 import { useMemo, useState } from "react";
 import { addIsoDays, formatMoney } from "../lib/format";
+import { reservationOfferMatchesSearch } from "../lib/pms-search";
 import { usePmsActions } from "./pms-action-context";
 
 type Room = { id: string; number: string; room_type_id: string; front_desk_status: string; housekeeping_status: string; active: boolean };
@@ -38,10 +39,9 @@ export function reservationDisplayedTotal(
 
 /** Keeps high-cardinality hotel masters out of the reservation dialog DOM. */
 export function reservationOfferWindow(offers: Offer[], query: string, page: number) {
-  const keyword = query.trim().toLocaleLowerCase("ko-KR");
-  const filteredOffers = keyword
-    ? offers.filter((entry) => `${entry.code} ${entry.name} ${entry.plans.map((rate) => `${rate.code} ${rate.name}`).join(" ")}`.toLocaleLowerCase("ko-KR").includes(keyword))
-    : offers;
+  const filteredOffers = offers.filter((entry) =>
+    reservationOfferMatchesSearch(entry, query),
+  );
   const pageCount = Math.max(1, Math.ceil(filteredOffers.length / offersPerPage));
   const safePage = Math.min(Math.max(0, page), pageCount - 1);
   return { filteredOffers, pageCount, safePage, visibleOffers: filteredOffers.slice(safePage * offersPerPage, (safePage + 1) * offersPerPage) };

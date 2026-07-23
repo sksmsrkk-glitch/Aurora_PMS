@@ -3,9 +3,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   escapeSqlLike,
+  koreanInitialSearchText,
   matchesSearch,
   normalizeSearchCompact,
   normalizeSearchText,
+  personDisplaySearchText,
   personSearchText,
   sqlCompactPattern,
   sqlLikePattern,
@@ -16,10 +18,14 @@ test("search normalization handles Korean spacing, width and phone punctuation",
   assert.equal(normalizeSearchText("  ＡＢＣ   김민지  "), "abc 김민지");
   assert.equal(normalizeSearchCompact("010-2011 8800"), "01020118800");
   assert.equal(personSearchText("민지", "김"), "민지 김 김민지");
+  assert.equal(personDisplaySearchText("민지 김"), "민지 김 민지김 김민지");
+  assert.equal(koreanInitialSearchText("디럭스 킹"), "ㄷㄹㅅ ㅋ");
   assert.equal(
     matchesSearch(["민지", "김", "010-2011-8800"], "01020118800"),
     true,
   );
+  assert.equal(matchesSearch(["디럭스 킹"], "ㄷㄹㅅ"), true);
+  assert.equal(matchesSearch(["프리미어 트윈 103"], "103 ㅍㄹㅁㅇ"), true);
 });
 
 test("SQL LIKE search treats wildcard input as literal text", () => {

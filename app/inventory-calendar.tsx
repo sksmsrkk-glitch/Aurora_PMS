@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { addIsoDays, formatMoney } from "../lib/format";
+import { inventoryRoomTypeMatchesSearch } from "../lib/pms-search";
 import { ListSearch } from "./list-search";
 import { usePmsActions } from "./pms-action-context";
 import { boundedCalendarWindow, inclusiveDays, matchingDayCount } from "./inventory-window";
@@ -172,8 +173,9 @@ export default function RevenueInventoryCalendar({
   // Filtering only changes rendered room-type rows; date columns and server totals
   // remain untouched, so a keyword can never alter the inventory calculation.
   const filteredTypes = useMemo(() => {
-    const keyword = typeQuery.trim().toLocaleLowerCase("ko-KR");
-    return data?.types.filter((type) => !keyword || `${type.code} ${type.name}`.toLocaleLowerCase("ko-KR").includes(keyword)) || [];
+    return data?.types.filter((type) =>
+      inventoryRoomTypeMatchesSearch(type, typeQuery),
+    ) || [];
   }, [data, typeQuery]);
   const typePageSize = 10;
   const typePages = Math.max(1, Math.ceil(filteredTypes.length / typePageSize));

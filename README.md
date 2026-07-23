@@ -56,9 +56,9 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 5. 리포트 | 15종 업무 카탈로그, 즐겨찾기·최근 사용·저장 필터, 날짜 프리셋, 객실 타입 검색, 채널 미입금/현장결제 제외, 입금·복구, 25/50/100행, export 확인 | 리드타임과 4개 예약 시간대가 property timezone 원자료와 일치하고, 입금·복구는 불변 사건·반대전표·멱등·경쟁 차단을 거치며 CSV/XLSX도 같은 서버 집계를 사용 |
 | 6. 모바일·가독성·성능 | 역할별 4개 핵심 하단 내비게이션, 카드형 예약 큐, 전체폭 하단 시트, 12/14px·44px 하한, reduced motion | 390px에서 수평 root overflow 없이 핵심 업무와 팝업을 조작하고 core는 오늘 업무 예약만 전달 |
 
-운영 배포 화면의 최종 검증도 이 계약에 포함한다. 통합 검색은 예약·객실뿐 아니라 AR 잔액을 원장 합계로 조회하며, 한국어 성명 순서·숫자형 전화번호·SQL 와일드카드 리터럴을 공통 처리하고 객실/AR `focus` 딥링크를 실제 카드 포커스로 연결한다. 프런트·리포트 조건은 URL에 보존되고, 체크인·연회·회원 즉시검색은 debounce와 이전 요청 취소를 사용한다. 장애 시에는 무반응 대신 오류 안내를 표시한다. 대시보드의 `오늘 도착`은 전체 도착 건수와 처리 완료·도착 대기를 함께 표시해 도착 플로우의 미처리 건수와 의미가 섞이지 않도록 한다.
+운영 배포 화면의 최종 검증도 이 계약에 포함한다. 통합 검색은 예약·객실뿐 아니라 AR 잔액을 원장 합계로 조회하며, 한국어 성명 순서·숫자형 전화번호·SQL 와일드카드 리터럴을 공통 처리하고 객실/AR `focus` 딥링크를 실제 카드 포커스로 연결한다. 프런트·리포트 조건은 URL에 보존되고, 체크인·연회·회원 즉시검색은 debounce와 이전 요청 취소를 사용한다. 장애 시에는 무반응 대신 오류 안내를 표시한다. 모든 로컬 목록 검색도 `lib/pms-search.ts`의 도메인 검색 문서와 `lib/search.ts`의 단일 엔진을 사용해 전각문자, 구두점·공백, 한국어 이름 역순과 초성 검색을 동일하게 처리한다. 대시보드의 `오늘 도착`은 전체 도착 건수와 처리 완료·도착 대기를 함께 표시해 도착 플로우의 미처리 건수와 의미가 섞이지 않도록 한다.
 
-핵심 구현은 `app/pms-navigation.ts`, `app/global-pms-search.tsx`, `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx`, `app/inventory-window.ts`에 분리했습니다. `tests/operations-workbench.test.mjs`가 역할 메뉴, 프런트 입력 경계, 장기 캘린더의 bounded read를 행동으로 검증합니다.
+핵심 구현은 `app/pms-navigation.ts`, `app/global-pms-search.tsx`, `app/frontdesk-workbench.tsx`, `app/reservation-wizard.tsx`, `app/inventory-window.ts`, `lib/search.ts`, `lib/pms-search.ts`에 분리했습니다. `tests/operations-workbench.test.mjs`가 역할 메뉴, 프런트 입력 경계, 장기 캘린더의 bounded read를 검증하고 `tests/pms-search-engine.test.mjs`가 9개 로컬 검색 도메인의 실제 필터 함수를 행동으로 검증합니다.
 
 `완료`는 저장소와 자동 QA 범위를 뜻합니다. 실제 영업 전에는 결제대행, 법정 회계, 개인정보 보유 정책, OTA 인증, 백업 복구 목표를 호텔별로 확정해야 합니다.
 
