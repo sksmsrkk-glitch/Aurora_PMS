@@ -18,6 +18,7 @@ import {
   keyboardSearchAlternates,
 } from "../lib/korean-keyboard.ts";
 import { classifySearchQuality } from "../app/api/pms/search-quality.ts";
+import { classifySearchHealth } from "../lib/search-quality-health.ts";
 import { resolveFocusedRow } from "../lib/focus-result.ts";
 import {
   parseSearchHistory,
@@ -27,6 +28,7 @@ import {
 import {
   decodeSearchCursor,
   encodeSearchCursor,
+  searchPropertyFingerprint,
   searchQueryFingerprint,
 } from "../lib/search-cursor.ts";
 import { mergeSearchPage } from "../lib/search-pagination.ts";
@@ -85,6 +87,47 @@ test("search quality telemetry exposes only coarse non-PII dimensions", () => {
   assert.equal("userId" in dimensions, false);
 });
 
+test("search quality alerts require enough volume and use stable thresholds", () => {
+  const learning = classifySearchHealth({
+    event_date: "2026-07-23",
+    searches: 1,
+    zero_results: 1,
+    slow_searches: 1,
+    correction_searches: 0,
+  });
+  assert.equal(learning.health, "LEARNING");
+
+  const healthy = classifySearchHealth({
+    event_date: "2026-07-23",
+    searches: 20,
+    zero_results: 2,
+    slow_searches: 1,
+    correction_searches: 3,
+  });
+  assert.equal(healthy.health, "HEALTHY");
+  assert.equal(healthy.zero_rate, 10);
+  assert.equal(healthy.correction_rate, 15);
+
+  const watch = classifySearchHealth({
+    event_date: "2026-07-23",
+    searches: 10,
+    zero_results: 3,
+    slow_searches: 0,
+    correction_searches: 0,
+  });
+  assert.equal(watch.health, "WATCH");
+
+  const critical = classifySearchHealth({
+    event_date: "2026-07-23",
+    searches: 20,
+    zero_results: 1,
+    slow_searches: 5,
+    correction_searches: 0,
+  });
+  assert.equal(critical.health, "CRITICAL");
+  assert.match(critical.recommendation, /DB 지연/u);
+});
+
 test("recent search history is bounded, frequency-ranked, and expires", () => {
   const now = Date.parse("2026-07-23T01:00:00Z");
   const sofia = {
@@ -132,38 +175,123 @@ test("recent search history is bounded, frequency-ranked, and expires", () => {
 });
 
 test("search cursor is opaque, query-bound, and rejects malformed input", () => {
-  const queryFingerprint = searchQueryFingerprint("김민지");
-  const encoded = encodeSearchCursor({
-    v: 1,
-    kind: "reservations",
-    anchor: "2026-07-23T01:00:00.000Z",
-    rank: 800,
-    sortAt: "2026-07-22T09:00:00.000Z",
-    id: "reservation-001",
-    queryFingerprint,
-  });
-  assert.equal(encoded.includes("김민지"), false);
-  assert.equal(
-    decodeSearchCursor(encoded, "reservations", queryFingerprint)?.id,
-    "reservation-001",
-  );
-  assert.equal(
-    decodeSearchCursor(
-      encoded,
-      "rooms",
+  const previousSecret = process.env.SEARCH_CURSOR_SECRET;
+  try {
+    process.env.SEARCH_CURSOR_SECRET =
+      "unit-test-search-cursor-secret-with-32-characters";
+    const queryFingerprint = searchQueryFingerprint("김민지");
+    const propertyFingerprint = searchPropertyFingerprint("prop-seoul");
+    const encoded = encodeSearchCursor({
+      v: 2,
+      kind: "reservations",
+      anchor: "2026-07-23T01:00:00.000Z",
+      rank: 800,
+      sortAt: "2026-07-22T09:00:00.000Z",
+      id: "reservation-001",
       queryFingerprint,
-    ),
-    null,
-  );
-  assert.equal(
-    decodeSearchCursor(
-      encoded,
-      "reservations",
-      searchQueryFingerprint("다른 검색어"),
-    ),
-    null,
-  );
-  assert.equal(decodeSearchCursor("../invalid", "reservations", queryFingerprint), null);
+      propertyFingerprint,
+    });
+    assert.equal(encoded.includes("김민지"), false);
+    assert.equal(
+      decodeSearchCursor(
+        encoded,
+        "reservations",
+        queryFingerprint,
+        propertyFingerprint,
+      )?.id,
+      "reservation-001",
+    );
+    assert.equal(
+      decodeSearchCursor(
+        encoded,
+        "rooms",
+        queryFingerprint,
+        propertyFingerprint,
+      ),
+      null,
+    );
+    assert.equal(
+      decodeSearchCursor(
+        encoded,
+        "reservations",
+        searchQueryFingerprint("다른 검색어"),
+        propertyFingerprint,
+      ),
+      null,
+    );
+    assert.equal(
+      decodeSearchCursor(
+        encoded,
+        "reservations",
+        queryFingerprint,
+        searchPropertyFingerprint("prop-busan"),
+      ),
+      null,
+    );
+    const [payload, signature] = encoded.split(".");
+    const forgedPayload = Buffer.from(
+      JSON.stringify({
+        ...JSON.parse(Buffer.from(payload, "base64url").toString("utf8")),
+        id: "reservation-forged",
+      }),
+      "utf8",
+    ).toString("base64url");
+    assert.equal(
+      decodeSearchCursor(
+        `${forgedPayload}.${signature}`,
+        "reservations",
+        queryFingerprint,
+        propertyFingerprint,
+      ),
+      null,
+      "changing a valid payload without the server secret must fail",
+    );
+    assert.equal(
+      decodeSearchCursor(
+        "../invalid",
+        "reservations",
+        queryFingerprint,
+        propertyFingerprint,
+      ),
+      null,
+    );
+  } finally {
+    if (previousSecret === undefined) delete process.env.SEARCH_CURSOR_SECRET;
+    else process.env.SEARCH_CURSOR_SECRET = previousSecret;
+  }
+});
+
+test("search cursor fails closed without a production signing secret", () => {
+  const previousCursorSecret = process.env.SEARCH_CURSOR_SECRET;
+  const previousAuthSecret = process.env.AUTH_SECRET;
+  const previousNodeEnv = process.env.NODE_ENV;
+  try {
+    delete process.env.SEARCH_CURSOR_SECRET;
+    delete process.env.AUTH_SECRET;
+    process.env.NODE_ENV = "production";
+    assert.throws(
+      () =>
+        encodeSearchCursor({
+          v: 2,
+          kind: "rooms",
+          anchor: "2026-07-23T01:00:00.000Z",
+          rank: 800,
+          sortAt: "2026-07-22T09:00:00.000Z",
+          id: "room-101",
+          queryFingerprint: searchQueryFingerprint("101"),
+          propertyFingerprint: searchPropertyFingerprint("prop-seoul"),
+        }),
+      /at least 32 characters/u,
+    );
+  } finally {
+    if (previousCursorSecret === undefined)
+      delete process.env.SEARCH_CURSOR_SECRET;
+    else process.env.SEARCH_CURSOR_SECRET = previousCursorSecret;
+    if (previousAuthSecret === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = previousAuthSecret;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
 });
 
 test("search keyset pages merge without duplicate options and close at EOF", () => {

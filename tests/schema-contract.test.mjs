@@ -1,7 +1,7 @@
 /** Behavioral checks for the release/runtime schema contract. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import {
   PmsSchemaNotReadyError,
   REQUIRED_SCHEMA_VERSION,
@@ -25,6 +25,32 @@ test("runtime contract version matches the latest migration", async () => {
     .filter((name) => /^\d+_.+\.sql$/u.test(name))
     .sort();
   assert.equal(REQUIRED_SCHEMA_VERSION, migrations.at(-1).replace(/\.sql$/u, ""));
+});
+
+test("authenticated search QA follows the shared runtime schema contract", async () => {
+  const qaSource = await readFile(
+    new URL("../scripts/qa-search-ui.mjs", import.meta.url),
+    "utf8",
+  );
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.match(
+    qaSource,
+    /import\s*\{\s*REQUIRED_SCHEMA_VERSION\s*\}\s*from\s*["']\.\.\/db\/schema-contract\.ts["']/u,
+  );
+  assert.match(
+    qaSource,
+    /body\.schemaVersion\s*===\s*REQUIRED_SCHEMA_VERSION/u,
+  );
+  assert.doesNotMatch(
+    qaSource,
+    /body\.schemaVersion\s*===\s*["']\d{12,}_[^"']+["']/u,
+  );
+  assert.equal(
+    packageJson.scripts["qa:search-ui"],
+    "node --import tsx scripts/qa-search-ui.mjs",
+  );
 });
 
 test("runtime contract accepts the hardened migration and tenant role", async () => {

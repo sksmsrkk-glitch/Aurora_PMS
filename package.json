@@ -20,8 +20,10 @@
     "qa:website": "node scripts/qa-website-cms.mjs",
     "qa:staff": "node scripts/qa-staff-access.mjs",
     "qa:public": "node scripts/qa-public-site.mjs",
+    "qa:search-ui": "node --import tsx scripts/qa-search-ui.mjs",
     "benchmark": "node tests/api-benchmark.mjs",
     "benchmark:search": "node --import tsx scripts/benchmark-search.mjs",
+    "benchmark:search:ci": "node --import tsx scripts/benchmark-search.mjs",
     "docs:metrics": "node --import tsx scripts/generate-project-metrics.mjs",
     "docs:metrics:check": "npm run docs:metrics && git diff --exit-code -- docs/generated/project-metrics.md",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work",
@@ -35,7 +37,8 @@
     "ops:tenant:provision": "node --import tsx scripts/provision-tenant.mjs",
     "db:test:bootstrap": "node scripts/bootstrap-test-postgres.mjs",
     "db:contract:verify": "node --import tsx scripts/verify-runtime-contract.mjs",
-    "db:contract:static": "node --import tsx scripts/verify-static-schema-contract.mjs"
+    "db:contract:static": "node --import tsx scripts/verify-static-schema-contract.mjs",
+    "security:audit": "npm audit --audit-level=high"
   },
   "dependencies": {
     "@expo-google-fonts/noto-sans-kr": "^0.4.3",
@@ -44,7 +47,7 @@
     "@tanstack/react-virtual": "^3.14.7",
     "fflate": "^0.8.2",
     "jose": "6.2.3",
-    "next": "^16.2.10",
+    "next": "16.2.11",
     "pdf-lib": "^1.17.1",
     "postgres": "^3.4.9",
     "react": "19.2.6",
@@ -52,6 +55,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",

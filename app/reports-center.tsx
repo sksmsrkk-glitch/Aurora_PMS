@@ -145,6 +145,12 @@ const catalogFallback: CatalogItem[] = [
     group: "객실",
     description: "타입과 객실 현황",
   },
+  {
+    key: "search_quality",
+    label: "검색 품질 · 경보",
+    group: "운영",
+    description: "일별 무결과율·지연율·교정률",
+  },
 ];
 const statusOptions: Record<string, Array<[string, string]>> = {
   reservations: [
@@ -180,6 +186,12 @@ const statusOptions: Record<string, Array<[string, string]>> = {
     ["PAID", "입금·지급 완료"],
     ["HELD", "보류"],
     ["VOID", "무효"],
+  ],
+  search_quality: [
+    ["HEALTHY", "정상"],
+    ["WATCH", "관찰"],
+    ["CRITICAL", "위험"],
+    ["LEARNING", "표본 수집 중"],
   ],
   channel_deposits: [
     ["ACCRUED", "미입금"],
@@ -799,40 +811,44 @@ export default function ReportsCenter({
               ))}
             </select>
           </label>
-          <label>
-            <span>채널 / 사용자</span>
-            <input
-              value={filters.source}
-              onChange={(event) =>
-                setFilters({ ...filters, source: event.target.value })
-              }
-              placeholder="예: Booking.com"
-            />
-          </label>
-          <label>
-            <span>객실 타입 검색</span>
-            <input
-              value={roomTypeQuery}
-              onChange={(event) => setRoomTypeQuery(event.target.value)}
-              placeholder="코드·타입명"
-            />
-          </label>
-          <label>
-            <span>객실 타입</span>
-            <select
-              value={filters.roomTypeId}
-              onChange={(event) =>
-                setFilters({ ...filters, roomTypeId: event.target.value })
-              }
-            >
-              <option value="">전체 타입</option>
-              {visibleRoomTypes.map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.code} · {type.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {reportKey !== "search_quality" && (
+            <>
+              <label>
+                <span>채널 / 사용자</span>
+                <input
+                  value={filters.source}
+                  onChange={(event) =>
+                    setFilters({ ...filters, source: event.target.value })
+                  }
+                  placeholder="예: Booking.com"
+                />
+              </label>
+              <label>
+                <span>객실 타입 검색</span>
+                <input
+                  value={roomTypeQuery}
+                  onChange={(event) => setRoomTypeQuery(event.target.value)}
+                  placeholder="코드·타입명"
+                />
+              </label>
+              <label>
+                <span>객실 타입</span>
+                <select
+                  value={filters.roomTypeId}
+                  onChange={(event) =>
+                    setFilters({ ...filters, roomTypeId: event.target.value })
+                  }
+                >
+                  <option value="">전체 타입</option>
+                  {visibleRoomTypes.map((type) => (
+                    <option key={type.id} value={type.id}>
+                      {type.code} · {type.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
           <button className="secondary" type="button" onClick={resetFilters}>
             초기화
           </button>

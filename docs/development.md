@@ -212,10 +212,13 @@ Talos PMS의 유지보수 대상은 `app`, `db`, `scripts`, `tests` 아래의 Ty
 ### 빠른 검증
 
 ```bash
+npm run security:audit
 npm run lint
 npm test
 npm run test:integration
 npm run db:supabase:smoke
+npm run benchmark:search:ci
+npm run qa:search-ui
 ```
 
 `npm test`는 production build와 빠른 unit/behavior suite를 실행합니다. PostgreSQL integration suite는 `TEST_DATABASE_URL`이 있을 때 실행하며 CI에서는 `AURORA_REQUIRE_POSTGRES_TESTS=true`로 skip을 금지합니다.
@@ -229,20 +232,26 @@ npm run db:supabase:smoke
 | `application-behavior.test.mjs` | 13개 route round-trip, 작은 mutation receipt, production demo-auth 차단, proxy trust, staging QA hard gate, inert button 부재 |
 | `postgres-core.integration.mjs` | 실제 migration의 booking table, 위험 RPC 0개, RLS 교차 접근 거부, 동시 rate limit, append-only folio, 마지막 1실 20건 경합 |
 | `api-benchmark.mjs` | 동시성 30, 총 300 Snapshot, 실패 0, p95 250ms 미만 |
+| `benchmark-search.mjs` | 실제 trigger 2,000실과 운영 shape 100,000실의 exact/typo/broad·동시 p95 및 fixture 잔여 0건 |
+| `qa-search-ui.mjs` | loopback mock Auth의 production build에서 로그인·로마자·키보드 교정·exact Enter·품질 리포트·로그아웃·390px·console 오류 |
 
 ### GitHub Actions PR gate
 
 `.github/workflows/ci.yml`은 `pull_request`와 `main` push에서 다음 순서를 강제합니다.
 
-1. Node.js 24 locked dependency install (`npm ci`)
+1. Node.js 24 locked dependency install (`npm ci`)과 high 이상 dependency 취약점 차단
 2. ESLint
 3. Next.js production build와 TypeScript
-4. unit/behavior tests
+4. unit/behavior tests와 자동 문서 지표 drift 검사
 5. 격리 PostgreSQL 17 service에 Supabase 호환 role/storage bootstrap
 6. 빈 DB를 `202607170009`까지 구축·seed한 뒤 현재 migration으로 업그레이드해 fresh install과 populated upgrade 경로를 함께 검증
-7. `AURORA_REQUIRE_POSTGRES_TESTS=true` integration/concurrency tests
+7. runtime schema/role contract, smoke, `AURORA_REQUIRE_POSTGRES_TESTS=true` integration/concurrency
+8. 실제 trigger를 통과한 2,000실 search capacity smoke
+9. Chromium production build에서 인증된 desktop/mobile 검색 UI QA
 
 CI는 production 또는 staging Supabase secret을 사용하지 않습니다. 각 job의 임시 DB는 job 종료 시 폐기되므로 테스트 fixture가 운영 데이터에 남지 않습니다. GitHub 저장소 설정에서는 `Lint, build, behavior and PostgreSQL tests` check를 `main` 병합 필수 status check로 지정해야 합니다.
+
+`.github/workflows/search-capacity.yml`은 매주 또는 수동으로 새 PostgreSQL 17을 만들고 100,000실·8동시 검색을 실행합니다. 이 장기 시험은 PR 시간을 늘리지 않으면서 선형 scan 회귀를 잡습니다.
 
 ### 전체 더미데이터 Workflow QA
 
@@ -289,7 +298,7 @@ PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONF
 | 반응형 브라우저 QA | 1440px desktop·390px mobile, 가로 scroll 0, 홈페이지 검색 날짜 자동 보정, 공개 객실 3개, CMS 3개 탭·visual editor 3개 control group·hero picker·메뉴 3행·preview device 전환, 재고 WEB 노출 selector, 콘솔 오류 0 |
 | PMS 헤드리스 UI 전수 QA | 13개 업무 화면 가로 overflow 0, 10개 업무 검색 영역 필터·초기화 정상, 17개 dialog/drawer 포커스·Escape·action bar 정상, 객실 타입 modal 860px→416px, 모바일 modal 최대 92dvh |
 | 검색엔진 PostgreSQL 행동 QA | trigram 오타·정확/접두/최근성 랭킹, 한/영 교정, trigger 동기화, FORCE RLS, 비식별 품질 집계, 17건/5행 keyset 완주 중복·누락 0, 복합 GIN catalog/operator 계약 |
-| 검색 대용량 benchmark | `TEST_DATABASE_URL` loopback 강제, 10,000실 trigger seed, exact/오타/broad 각 20회, p95 174.95/185.67/214.39ms, 종료 잔재 0 |
+| 검색 대용량 benchmark | loopback 강제, 2,000실 trigger 유지 + 100,000실 운영 shape, exact/오타/broad p95 76.59/965.03/1,242.37ms, 8동시 p95 2,135.61ms, 종료 잔재 0 |
 | 리포트 브라우저 QA | 11/11 서버 리포트 오류 0, 키워드 0건·초기화 복원, CSV `Talos_room_inventory_2026-07-16.csv`, XLSX `Talos_객실_마스터_2026-07-16.xlsx` 실제 다운로드 |
 | Core benchmark | Vercel `icn1`, 200 requests, concurrency 10, 실패 0, 252.04 req/s, p50 36.13ms, p95 53.20ms, p99 96.01ms |
 | Security | health 200, CSP/HSTS/DENY/nosniff, cross-origin write 403, production dependency vulnerability 0 |
@@ -299,7 +308,7 @@ PMS_BASE_URL=https://<staging>.vercel.app PMS_QA_ENVIRONMENT=staging PMS_QA_CONF
 기존 25개 운영 요구사항은 실행 스크립트에서 관련 업무를 묶어 24개의 checkpoint로 보고하며, 인증·대량 경쟁·보안·직접 예약은 별도 E2E와 invariant test에서 검증합니다.
 
 1. 대시보드와 Snapshot 로딩
-2. 리포트 15종 조회와 필터, 채널 입금/복구
+2. 리포트 16종 조회와 필터, 채널 입금/복구·검색 품질 경보
 3. CSV/XLSX export
 4. 객실 타입 생성·수정·멱등 replay
 5. 단일/대량 객실 생성과 수정

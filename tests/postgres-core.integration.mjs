@@ -63,6 +63,80 @@ test("migrated schema contains booking tables and no arbitrary SQL RPC", { skip 
   }
 });
 
+test("sample hotel exposes only eight canonical types and 160 rooms on floors 3-8", { skip }, async () => {
+  const sql = client(1);
+  try {
+    const types = await sql`
+      SELECT rt.code,rt.name,COUNT(rm.id)::int rooms
+      FROM room_types rt
+      LEFT JOIN rooms rm
+        ON rm.property_id=rt.property_id
+       AND rm.room_type_id=rt.id
+       AND rm.active
+       AND rm.floor BETWEEN 3 AND 8
+       AND rm.number ~ '^[3-8][0-9]{2}$'
+      WHERE rt.property_id='prop-seoul'
+      GROUP BY rt.id,rt.code,rt.name
+      ORDER BY rt.code
+    `;
+    assert.deepEqual(
+      types.map(({ code, name, rooms }) => ({ code, name, rooms })),
+      [
+        { code: "FTWN", name: "Family Twin Room", rooms: 18 },
+        { code: "PDBL", name: "Premier Double Room", rooms: 22 },
+        { code: "PFTWN", name: "Premier Family Twin Room", rooms: 16 },
+        { code: "PTWN", name: "Premier Twin Room", rooms: 22 },
+        { code: "SDBL", name: "Standard Double Room", rooms: 28 },
+        { code: "STWN", name: "Standard Twin Room", rooms: 28 },
+        { code: "SUITE", name: "Suite Room", rooms: 12 },
+        { code: "TRPL", name: "Triple Room", rooms: 14 },
+      ],
+    );
+
+    const floors = await sql`
+      SELECT floor,COUNT(*)::int rooms,MIN(number) first_room,MAX(number) last_room
+      FROM rooms
+      WHERE property_id='prop-seoul'
+        AND active
+        AND floor BETWEEN 3 AND 8
+        AND number ~ '^[3-8][0-9]{2}$'
+      GROUP BY floor
+      ORDER BY floor
+    `;
+    assert.deepEqual(
+      floors.map(({ floor, rooms }) => ({ floor, rooms })),
+      [
+        { floor: 3, rooms: 27 },
+        { floor: 4, rooms: 27 },
+        { floor: 5, rooms: 26 },
+        { floor: 6, rooms: 26 },
+        { floor: 7, rooms: 26 },
+        { floor: 8, rooms: 28 },
+      ],
+    );
+    assert.equal(floors[0].first_room, "301");
+    assert.equal(floors.at(-1).last_room, "828");
+
+    const [integrity] = await sql`
+      SELECT
+        COUNT(*) FILTER (
+          WHERE rt.code LIKE 'Q%' OR rt.name ILIKE '%QA%'
+        )::int qa_types,
+        COUNT(*) FILTER (
+          WHERE r.room_type_id IS NOT NULL AND rt.id IS NULL
+        )::int orphan_reservations
+      FROM reservations r
+      LEFT JOIN room_types rt
+        ON rt.property_id=r.property_id AND rt.id=r.room_type_id
+      WHERE r.property_id='prop-seoul'
+    `;
+    assert.equal(integrity.qa_types, 0);
+    assert.equal(integrity.orphan_reservations, 0);
+  } finally {
+    await sql.end({ timeout: 2 });
+  }
+});
+
 test("operational dates and timestamps use native PostgreSQL types", { skip }, async () => {
   const sql = client(1);
   try {
@@ -268,6 +342,11 @@ test("global PMS search executes every permitted domain query on the production 
       piiMode: "FULL",
     });
     assert.ok(naturalKoreanName.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
+    const romanizedKoreanName = await loadPmsSearch(db, new URLSearchParams({ q: "Kim Minji" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.ok(romanizedKoreanName.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
     const wrongKeyboardLayout = await loadPmsSearch(db, new URLSearchParams({ q: "rlaalswl" }), {
       workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
       piiMode: "FULL",
@@ -280,6 +359,15 @@ test("global PMS search executes every permitted domain query on the production 
       piiMode: "FULL",
     });
     assert.ok(digitsOnlyPhone.groups.some((group) => group.id === "reservations" && group.items.some((item) => item.title.includes("민지"))));
+    const exactRoom = await loadPmsSearch(db, new URLSearchParams({ q: "301" }), {
+      workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
+      piiMode: "FULL",
+    });
+    assert.equal(
+      exactRoom.groups[0]?.id,
+      "rooms",
+      "an exact room number must outrank incidental numeric matches in guest documents",
+    );
     const literalWildcards = await loadPmsSearch(db, new URLSearchParams({ q: "%%" }), {
       workspaceAccess: { frontdesk: "READ", rooms: "READ", finance: "READ" },
       piiMode: "FULL",
@@ -290,6 +378,67 @@ test("global PMS search executes every permitted domain query on the production 
     await closePmsDatabase();
     if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previousDatabaseUrl;
+  }
+});
+
+test("search quality report is tenant-scoped, privacy-safe, and thresholded", { skip }, async () => {
+  const sql = client(2);
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  try {
+    process.env.DATABASE_URL = databaseUrl;
+    const db = scopePmsDatabase(
+      getPmsDatabase({ DATABASE_URL: databaseUrl }),
+      "prop-seoul",
+    );
+    await sql`
+      DELETE FROM pms_search_quality_daily
+       WHERE property_id='prop-seoul' AND event_date='2026-07-22'
+    `;
+    await sql`
+      INSERT INTO pms_search_quality_daily(
+        property_id,event_date,query_length_bucket,query_script,
+        correction_used,result_bucket,latency_bucket,searches,zero_results
+      ) VALUES
+        ('prop-seoul','2026-07-22',4,'HANGUL',false,'ZERO','SLOW',5,5),
+        ('prop-seoul','2026-07-22',8,'LATIN',false,'FEW','SLOW',0+5,0),
+        ('prop-seoul','2026-07-22',8,'LATIN',true,'ONE','FAST',10,0)
+    `;
+    const report = await runReport(
+      db,
+      new URLSearchParams({
+        report: "search_quality",
+        from: "2026-07-22",
+        to: "2026-07-22",
+      }),
+      {
+        email: "quality@example.com",
+        role: "PROPERTY_ADMIN",
+        capabilities: ["READ"],
+      },
+    );
+    assert.equal(report.rows.length, 1);
+    assert.equal(report.rows[0].health, "CRITICAL");
+    assert.equal(report.rows[0].searches, 20);
+    assert.equal(report.rows[0].slow_rate, 50);
+    assert.equal(
+      JSON.stringify(report).includes("quality@example.com"),
+      false,
+      "quality report must not include an operator identity",
+    );
+    assert.equal(
+      report.columns.some((column) => column.key === "query"),
+      false,
+      "quality report must never expose a raw query column",
+    );
+  } finally {
+    await sql`
+      DELETE FROM pms_search_quality_daily
+       WHERE property_id='prop-seoul' AND event_date='2026-07-22'
+    `;
+    await closePmsDatabase();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    await sql.end({ timeout: 2 });
   }
 });
 
@@ -352,6 +501,13 @@ test("tenant search documents provide fuzzy lookup, trigger sync, GIN indexes, a
       "fuzzy term lookup must expose a tenant-composite trigram GIN contract",
     );
     assert.equal(trigramContract.similarity_operator_ready, true);
+    const [romanization] = await sql`
+      SELECT
+        talos_search_romanize('김민지') romanized,
+        talos_search_person_aliases('민지','김') aliases
+    `;
+    assert.equal(romanization.romanized, "gimminji");
+    assert.match(romanization.aliases, /kimminji/u);
 
     process.env.DATABASE_URL = databaseUrl;
     const db = scopePmsDatabase(
@@ -723,7 +879,11 @@ test("reservation List and Calendar share product and occupancy pricing", { skip
     assert.equal(calendar.dates.length,30);
     assert.equal(calendar.selectedProduct?.id,planId);
     const day=calendar.rows.find(item=>item.roomTypeId==="rt-ste")?.cells.find(item=>item.date==="2031-11-10");
-    assert.deepEqual(day,{date:"2031-11-10",available:1,total:1,rate:280000,closed:false});
+    assert.equal(day?.date,"2031-11-10");
+    assert.equal(day?.available,day?.total);
+    assert.ok(Number(day?.total)>=12);
+    assert.equal(day?.rate,280000);
+    assert.equal(day?.closed,false);
   }finally{
     await closePmsDatabase();
     await sql`DELETE FROM rate_plan_occupancy WHERE property_id='prop-seoul' AND rate_plan_id=${planId}`;
@@ -1041,10 +1201,10 @@ test("HotelStory channel settings and rate blocks are transactional, bounded, an
     const outbox=await sql`SELECT id,aggregate_id,topic FROM outbox_events WHERE property_id='prop-seoul' AND aggregate_id=ANY(${ariIds}) ORDER BY aggregate_id`;outboxIds=outbox.map(row=>row.id);assert.equal(outbox.length,2);assert.ok(outbox.every(row=>row.topic==="channel.ari_delta"));
 
     const scoped=scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-seoul");
-    const matrix=await loadRateBlockMatrix(scoped,new URLSearchParams({from,to,connectionId}));assert.equal(matrix.rows.length,1);assert.equal(matrix.rows[0].cells.length,2);assert.equal(matrix.rows[0].cells[0].allocation,2);assert.equal(matrix.rows[0].cells[0].poolAvailable,3);
+    const matrix=await loadRateBlockMatrix(scoped,new URLSearchParams({from,to,connectionId}));assert.equal(matrix.rows.length,1);assert.equal(matrix.rows[0].cells.length,2);assert.equal(matrix.rows[0].cells[0].allocation,2);assert.ok(matrix.rows[0].cells[0].poolAvailable>=28);
     const hidden=await loadRateBlockMatrix(scopePmsDatabase(getPmsDatabase({DATABASE_URL:databaseUrl}),"prop-busan"),new URLSearchParams({from,to,connectionId}));assert.equal(hidden.rows.length,0);
 
-    const over=await post({...bulkBody,allocation:"4"},"over-allocation");assert.equal(over.response.status,409,await over.response.text());
+    const over=await post({...bulkBody,allocation:"1000"},"over-allocation");assert.equal(over.response.status,409,await over.response.text());
     assert.equal((await sql`SELECT COUNT(*)::int count FROM channel_rate_overrides WHERE property_id='prop-seoul' AND mapping_id=${mappingId}`)[0].count,2);
     const [{version}]=await sql`SELECT version FROM property_channel_settings WHERE id=${settingId}`;
     await expectOk({action:"set_property_channel_active",settingId,active:"false",expectedVersion:String(version)},"disable");

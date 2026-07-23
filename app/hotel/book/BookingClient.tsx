@@ -16,7 +16,14 @@ type Search = { arrival:string;departure:string;adults:string;children:string };
 const dateAfter = seoulDateAfter;
 const plusDays = addIsoDays;
 const money = formatMoney;
-function roomClass(code:string) { return code==="DLX"?"art-one":code==="TWN"?"art-two":"art-three"; }
+/** Keeps the eight canonical room types visually distinct without type-specific assets. */
+function roomClass(code:string) {
+  const artByCode:Record<string,string>={
+    STWN:"art-one",SDBL:"art-one",FTWN:"art-two",TRPL:"art-two",
+    PTWN:"art-three",PDBL:"art-three",PFTWN:"art-two",SUITE:"art-three",
+  };
+  return artByCode[code]||"art-one";
+}
 
 function initialSearch(params:ReturnType<typeof useSearchParams>):Search {
   const minimum=dateAfter(1),requestedArrival=params.get("arrival")||"";
