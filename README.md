@@ -14,12 +14,13 @@ Talos PMS는 예약, 객실, 장기 재고·요금, Rate Plan, 프런트, 하우
 | 저장소 | [sksmsrkk-glitch/Aurora_PMS](https://github.com/sksmsrkk-glitch/Aurora_PMS) |
 | 런타임 | Next.js 16, React 19, Vercel Functions `icn1` |
 | 데이터 | Supabase PostgreSQL 17, Supavisor, native date/time·boolean·JSONB |
-| 스키마 계약 | `202607230035_search_term_candidate_performance` |
+| 스키마 계약 | `202607230036_sample_hotel_room_catalog` |
 | 명령 계약 | action registry, capability 1:1, Zod 입력 검증, 멱등 mutation |
 | 자동 지표 | [migration·table·RLS·action·test·CSS 자동 집계](docs/generated/project-metrics.md) |
 
 현재 구현 범위:
 
+- 샘플 호텔 객실 마스터: Standard/Premier/Family/Triple/Suite 8개 타입, 3~8층 총 160실, QA 생성 타입·객실 제거와 기존 예약·요금 참조 보존
 - 예약 생성·편집·취소·노쇼·배정·체크인·룸 무브·체크아웃
 - 최대 730일 선택·벌크 범위를 유지하면서 14/30일 읽기 창만 렌더링하는 재고 캘린더, 5,000셀 원자적 벌크 저장, MLOS·CTA·CTD·stop-sell
 - HotelStory형 판매 상품 Rate Plan, 부모 상품 요금 상속, 식사·패키지·판매기간·기준/최대 인원·인원별 요금, 예약 시 상품 snapshot, 객실 타입 매핑, 일자별 직판 요금과 홈페이지 실시간 가격·재고

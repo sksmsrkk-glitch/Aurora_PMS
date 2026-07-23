@@ -3,15 +3,15 @@
 
 | 지표 | 현재 값 | 계산 원본 |
 | --- | ---: | --- |
-| Migration | 40 | `supabase/migrations/*.sql` |
-| 런타임 스키마 계약 | `202607230035_search_term_candidate_performance` | 정렬상 마지막 migration |
+| Migration | 41 | `supabase/migrations/*.sql` |
+| 런타임 스키마 계약 | `202607230036_sample_hotel_room_catalog` | 정렬상 마지막 migration |
 | Public table 선언 | 88 | 고유 `CREATE TABLE` |
 | Application trigger 선언 | 48 | 고유 `CREATE TRIGGER` |
 | Foreign key 선언 | 110 | 고유 named FK constraint |
 | Tenant RLS 대상 | 83 | runtime tenant table catalog; DB 계약이 동일 수의 정책 검증 |
 | 등록 PMS action | 85 | action registry key |
-| Unit/behavior test | 94 | `tests/*.test.mjs`의 test case |
-| PostgreSQL integration test | 39 | `tests/*.integration.mjs`의 test case |
+| Unit/behavior test | 96 | `tests/*.test.mjs`의 test case |
+| PostgreSQL integration test | 40 | `tests/*.integration.mjs`의 test case |
 | PMS CSS source | 236,817 bytes / 14 files | root PMS layout imports |
 | Public hotel CSS source | 21,106 bytes / 1 file | isolated `app/hotel/hotel.css` |
 | 상세 문서 | 10 files | `docs/*.md` (generated 제외) |

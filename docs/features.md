@@ -453,7 +453,9 @@ available = max(0, effective sell limit - confirmed type nights - deduct block h
 stay availability = minimum available across all stay nights
 ```
 
-서버는 최대 30박, 객실 기준 인원, 영업일 이전 날짜, 전체 stop-sell, 홈페이지 전용 `website_closed`, MLOS, 도착일 CTA, 출발일 CTD를 검증합니다. 요금은 날짜별 `price_override`가 있으면 이를, 없으면 객실 타입 기준가를 사용하며 브라우저가 보낸 금액은 신뢰하지 않습니다. 공개 판매 대상은 코드 하드코딩이 아니라 `room_type_website.published=1`인 활성 타입입니다. 초기 migration은 `DLX`, `TWN`, `STE`만 게시하고 나머지 QA/신규 타입은 관리자가 검토해 개별 게시하도록 합니다.
+서버는 최대 30박, 객실 기준 인원, 영업일 이전 날짜, 전체 stop-sell, 홈페이지 전용 `website_closed`, MLOS, 도착일 CTA, 출발일 CTD를 검증합니다. 요금은 날짜별 `price_override`가 있으면 이를, 없으면 객실 타입 기준가를 사용하며 브라우저가 보낸 금액은 신뢰하지 않습니다. 공개 판매 대상은 코드 하드코딩이 아니라 `room_type_website.published=1`인 활성 타입입니다. 샘플 호텔은 Standard Twin/Double, Family Twin, Triple, Premier Twin/Double/Family Twin, Suite의 8개 타입을 모두 게시하며 PMS에서 타입별 노출을 변경할 수 있습니다.
+
+샘플 호텔의 물리 객실은 8층 건물 중 3~8층에 총 160실로 구성됩니다. 층별 수량은 3층 27실, 4층 27실, 5층 26실, 6층 26실, 7층 26실, 8층 28실이며 타입별 수량은 Standard Twin 28실, Standard Double 28실, Family Twin 18실, Triple 14실, Premier Twin 22실, Premier Double 22실, Premier Family Twin 16실, Suite 12실입니다. migration `0036`은 과거 QA 타입을 제거하기 전에 예약·숙박일·요금 이력을 정식 타입으로 재연결하고 변경 전후 수량을 감사 로그로 남깁니다.
 
 ### 홈페이지 검색 안정성
 

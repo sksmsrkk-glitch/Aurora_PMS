@@ -125,6 +125,7 @@ Demo fallback은 Host/localhost 여부를 전혀 보지 않습니다. `NODE_ENV 
 | `202607210023_channel_rateblock_operational_catalogs.sql` | 채널·블럭요금·운영 카탈로그 | 7개 FORCE RLS tenant table, 채널 상품/마감, 4축 요금제약과 객실 초과 할당 trigger |
 | `202607210024_hotelstory_reporting_deposits.sql` | HotelStory 리포트 입금 원장 | 채널 입금 projection, append-only RECEIPT/RESTORE, 회계 FK, 동시 입금 row-lock guard와 FORCE RLS |
 | `202607210025_hotelstory_final_operations.sql` | HotelStory 최종 운영 묶음 | 연회장·연회예약·호텔/웹 회원, native date/time/jsonb/numeric, 시간 중복 advisory trigger, 3개 FORCE RLS policy |
+| `202607230036_sample_hotel_room_catalog.sql` | 샘플 호텔 객실 마스터 정규화 | QA 타입을 예약·요금 이력 보존 후 8개 표준 타입으로 전환하고 3~8층 160실·홈페이지·Rate Plan projection 및 감사 로그를 원자 재구축 |
 
 ### 핵심 PostgreSQL 함수와 트리거
 

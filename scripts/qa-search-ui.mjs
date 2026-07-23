@@ -296,14 +296,14 @@ async function runScenario(viewport, mobile) {
     await expect(correctedResult).toHaveCount(1);
     await expect(correctedResult).toBeVisible();
 
-    await search.fill("101");
+    await search.fill("301");
     const exactRoomResult = page
       .getByRole("option")
-      .filter({ hasText: "101호" });
+      .filter({ hasText: "301호" });
     await expect(exactRoomResult).toHaveCount(1);
     await expect(exactRoomResult).toBeVisible();
     await search.press("Enter");
-    await page.waitForURL(/\/rooms\?focus=room-101$/u);
+    await page.waitForURL(/\/rooms\?focus=room-301$/u);
 
     if (!mobile) {
       await page.goto(

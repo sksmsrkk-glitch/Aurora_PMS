@@ -7,7 +7,7 @@
 | 발견된 문제 | 근본 원인 | 수정 | 재발 방지 |
 | --- | --- | --- | --- |
 | 영문 `Kim Minji`로 `김민지`를 찾지 못함 | 검색 문서에 한글 이름과 두벌식 변환만 있고 로마자 별칭이 없음 | Revised Romanization 함수와 한국에서 흔한 성씨 별칭을 토큰에 추가하고 전체 문서를 재색인 | PostgreSQL 행동 테스트가 `Kim Minji`, `gimminji`, `kimminji`를 각각 검증 |
-| 객실번호 `101` 검색에서 예약이 객실보다 먼저 표시됨 | 도메인 그룹 정렬이 상위 행 점수만 비교해 exact identifier를 구분하지 않음 | 예약번호·객실번호·청구서 번호가 정확히 일치한 그룹에 식별자 우선 점수 부여 | API 행동 테스트와 인증 UI QA가 객실 그룹 선두 및 Enter 딥링크를 검증 |
+| 객실번호 `301` 검색에서 예약이 객실보다 먼저 표시됨 | 도메인 그룹 정렬이 상위 행 점수만 비교해 exact identifier를 구분하지 않음 | 예약번호·객실번호·청구서 번호가 정확히 일치한 그룹에 식별자 우선 점수 부여 | API 행동 테스트와 인증 UI QA가 객실 그룹 선두 및 Enter 딥링크를 검증 |
 | cursor payload 변조·다른 호텔 재사용을 암호학적으로 차단하지 못함 | 기존 cursor는 opaque 형식만 갖고 서버 서명이 없었음 | HMAC-SHA256 v2 cursor, query/property fingerprint, constant-time 검증, 운영 secret fail-closed 적용 | 변조, query/kind/property 교차 사용, 운영 secret 누락, 17행 keyset 중복·누락 0건 테스트 |
 | 검색 상태를 운영자가 정량적으로 알 수 없음 | 비식별 telemetry는 수집했지만 판정·리포트가 없음 | 10건 미만 LEARNING, WATCH/CRITICAL 임계값과 `search_quality` 리포트 추가 | tenant 범위와 원문 query/hash/user/entity 비노출 PostgreSQL 테스트 |
 | 100,000실 exact·broad 검색이 p95 목표를 초과 | 문서 우선 correlated term scan과 BTREE/GIN 조건을 한 OR 계획에 혼합 | term-first 후보, exact BTREE 경로와 fuzzy GIN 경로 분리, exact 존재 시 fuzzy 억제 | 주간 100,000실·8동시 용량 workflow가 p95 예산 초과 시 실패 |
